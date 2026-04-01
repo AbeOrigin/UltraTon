@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UltraTon - Secure Node.js HTTP Client</title>
+    <meta name="description" content="UltraTon is an enterprise-grade, highly secure, zero-dependency HTTP client for Node.js designed to mitigate SSRF, OOM attacks, and Slowloris.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;600;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <div class="bg-mesh"></div>
+    <div class="bg-particles" id="particles"></div>
+
+    <nav class="navbar">
+        <div class="logo">
+            <span class="logo-icon">🛡️</span>
+            UltraTon
+        </div>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#installation">Installation</a>
+            <a href="#investors" class="highlight-link">Why Invest?</a>
+            <a href="https://github.com/AbeOrigin/UltraTon" class="github-btn" target="_blank" rel="noopener noreferrer">
+                <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path></svg>
+                GitHub
+            </a>
+        </div>
+    </nav>
+
+    <main>
+        <header class="hero">
+            <div class="hero-badge">Enterprise Node.js Security</div>
+            <h1 class="glitch" data-text="Hardened Network Boundaries.">Hardened Network Boundaries.</h1>
+            <p class="hero-subtitle">A zero-dependency HTTP client explicitly engineered for high-risk Node.js environments. By enforcing secure defaults, protocol boundaries, and strict memory limits, UltraTon eliminates entire classes of application-layer vulnerabilities.</p>
+            
+            <div class="hero-actions">
+                <a href="#installation" class="btn btn-primary">Get Started</a>
+                <div class="terminal-snippet">
+                    <span class="prompt">$</span> npm install ultraton
+                    <button class="copy-btn" onclick="copyToClipboard('npm install ultraton')">
+                        <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <section id="features" class="features">
+            <div class="section-header">
+                <h2>The Defense Arsenal</h2>
+                <p>Engineered to neutralize the most devastating attack vectors.</p>
+            </div>
+            
+            <div class="grid">
+                <div class="card glass">
+                    <div class="card-icon secure-icon">📦</div>
+                    <h3>Zero Supply Chain Risk</h3>
+                    <p>Built strictly on top of <code>node:https</code>. Zero external NPM dependencies means zero rogue packages, compromised maintainers, or un-auditable code.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🛡️</div>
+                    <h3>Memory Shield</h3>
+                    <p>Native V8 buffer restrictions destroy malicious payload chunks instantly, preventing Out-Of-Memory (OOM) network attacks without Garbage Collection lag.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">⏱️</div>
+                    <h3>Tarpit & Slowloris Immunity</h3>
+                    <p>Absolute 32-bit bounded timeouts on connections explicitly reject floating promises, safely closing idle sockets that attempt to hold resources hostage.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🛑</div>
+                    <h3>Anti-SSRF & Protocol Engine</h3>
+                    <p>Default-deny redirect policies, sensitive credential stripping across hops, and active CRLF sanitization to prevent HTTP Request Smuggling.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="installation" class="usage-section glass">
+            <div class="code-showcase">
+                <div class="window-header">
+                    <div class="dots"><span></span><span></span><span></span></div>
+                    <div class="filename">server.ts</div>
+                </div>
+                <pre><code class="language-typescript">
+<span class="keyword">import</span> { <span class="class">UltraTonClient</span> } <span class="keyword">from</span> <span class="string">'ultraton'</span>;
+
+<span class="comment">// 1. Instantiate the military-grade client</span>
+<span class="keyword">const</span> client = <span class="keyword">new</span> <span class="class">UltraTonClient</span>();
+
+<span class="keyword">async</span> <span class="keyword">function</span> <span class="function">fetchSecureData</span>() {
+    <span class="keyword">try</span> {
+        <span class="comment">// 2. Execute a secure request. </span>
+        <span class="comment">// Redirections and payload sizes are actively policed.</span>
+        <span class="keyword">const</span> response = <span class="keyword">await</span> client.<span class="method">get</span>(<span class="string">'https://api.vault.io/data'</span>, {
+            headers: { <span class="string">'Accept'</span>: <span class="string">'application/json'</span> }
+        });
+        
+        <span class="keyword">if</span> (response.statusCode === <span class="number">200</span>) {
+            <span class="keyword">const</span> data = <span class="keyword">await</span> response.<span class="method">json</span>();
+            <span class="built_in">console</span>.<span class="method">log</span>(<span class="string">'Securely retrieved:'</span>, data);
+        }
+    } <span class="keyword">catch</span> (error) {
+        <span class="comment">// Throws SecureHttpError on ANY protocol violation or timeout</span>
+        <span class="built_in">console</span>.<span class="method">error</span>(<span class="string">'Threat neutralized / Request failed:'</span>, error);
+    }
+}
+                </code></pre>
+            </div>
+            <div class="usage-content">
+                <h2>Simple API.<br>Complex Security.</h2>
+                <p>We believe that developers shouldn't have to be cryptography or networking experts to write safe code. UltraTon wraps complex defensive parameters—like strict generic typing, bounded asynchronous promises, and locked internal constructors—inside a beautifully simple OOP interface.</p>
+                <ul class="check-list">
+                    <li>Strict TypeScript typing out-of-the-box</li>
+                    <li>Synchronous <code>.json()</code> extraction</li>
+                    <li>Lexical `this` binding guarantees context preservation</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="investors" class="investor-pitch glass glow-box">
+            <div class="pitch-content">
+                <h2>Why Invest in UltraTon?</h2>
+                <h3 class="highlight-text">The Market Problem</h3>
+                <p>The Node.js ecosystem is crippled by supply chain attacks. Standard enterprise applications assemble simple HTTP clients (like Axios or node-fetch) that bring in dozens of transient dependencies. Even worse, default clients allow Server-Side Request Forgery (SSRF)—the exact vulnerability responsible for the $190M Capital One breach.</p>
+                
+                <h3 class="highlight-text">The UltraTon Moat</h3>
+                <p>UltraTon provides a strict, defensible network boundary. While it cannot replace a WAF, it acts as your application's last line of defense against SSRF, OOM exploits, and HTTP parsing attacks. With exactly <strong>zero external dependencies</strong>, it significantly accelerates SOC2 and HIPAA compliance by ensuring your outgoing requests are cryptographically and structurally governed out-of-the-box.</p>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <div class="logo">
+                <span class="logo-icon">🛡️</span>
+                UltraTon
+            </div>
+            <p>Built for the absolute security of your network boundaries.</p>
+            <p class="copyright">© 2026 UltraTon Project. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script src="js/main.js"></script>
+</body>
+</html>

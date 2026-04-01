@@ -48,3 +48,6 @@ This document meticulously tracks our progress and architectural goals. We stric
 - [x] Handle mute stream events (e.g., `'aborted'`, `'close'`) to guarantee floating promises are resolved/rejected.
 - [x] Lock down the class constructor to prevent untrusted `node:https` transport injections.
 
+## 🚧 Sprint 7: Advanced Engine Resiliency
+- [ ] **Objective:** Address fundamental Node.js boundaries requiring complex mitigation strategies.
+- [ ] **DNS Rebinding Prevention:** Investigate custom caching resolver to lock host IPs across the request lifecycle to neutralize split-second SSRF DNS rebinding.
