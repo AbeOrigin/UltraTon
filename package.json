@@ -1,0 +1,25 @@
+{
+  "name": "ultraton",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Ultra safe HTTP client for critical environments in Node.js",
+  "main": "./dist/http-client.js",
+  "types": "./dist/http-client.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-strip-types --test __tests__/**/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=24.14.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
