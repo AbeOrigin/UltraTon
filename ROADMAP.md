@@ -49,12 +49,12 @@ This document meticulously tracks our progress and architectural goals. We stric
 - [x] Lock down the class constructor to prevent untrusted `node:https` transport injections.
 
 ## 🚧 Sprint 7: Post-Audit Security Hardening _(8 pts total)_
-- [ ] **Objective:** Remediate all exploitable issues identified during the full-codebase security audit.
-- [ ] `[2 pts]` **Promise Settlement Race Condition (CRITICAL):** Guard `_consumeResponseBuffer` with a `settled` boolean flag to prevent `'close'` from rejecting after `'end'` has already resolved — eliminates spurious `SecureHttpError` allocations on every successful request.
-- [ ] `[1 pt]` **Redirect Detection Type Safety (HIGH):** Replace the `in` operator lookup on `HTTP_CODES_REDIRECTS` with a `ReadonlySet<number>.has()` check to eliminate implicit string coercion and prototype chain pollution vectors.
-- [ ] `[1 pt]` **`maxBodySize` Boundary Enforcement (MEDIUM):** Apply the same `Number.isInteger() && >= 0 && <= 2147483647` guard to `maxBodySize` that already protects timeout fields — a negative or `Infinity` value currently disables the Memory Shield entirely.
-- [ ] `[1 pt]` **Redirect Loop Hard Cap (MEDIUM):** Enforce an absolute `MAX_REDIRECTS_CEILING` (e.g., 20) inside `buildSafeRequestOptions` to prevent unbounded CPU/object allocation when `timeoutMs` is opted-out (`0`).
-- [ ] `[3 pts]` **URL Credential Redaction (LOW):** Reject or strip `urlObj.username`/`urlObj.password` per RFC 3986 §3.2.1, and redact raw URLs from all thrown error messages to prevent credential leakage into logs.
+- [x] **Objective:** Remediate all exploitable issues identified during the full-codebase security audit.
+- [x] `[2 pts]` **Promise Settlement Race Condition (CRITICAL):** Guard `_consumeResponseBuffer` with a `settled` boolean flag to prevent `'close'` from rejecting after `'end'` has already resolved — eliminates spurious `SecureHttpError` allocations on every successful request.
+- [x] `[1 pt]` **Redirect Detection Type Safety (HIGH):** Replace the `in` operator lookup on `HTTP_CODES_REDIRECTS` with a `ReadonlySet<number>.has()` check to eliminate implicit string coercion and prototype chain pollution vectors.
+- [x] `[1 pt]` **`maxBodySize` Boundary Enforcement (MEDIUM):** Apply the same `Number.isInteger() && >= 0 && <= 2147483647` guard to `maxBodySize` that already protects timeout fields — a negative or `Infinity` value currently disables the Memory Shield entirely.
+- [x] `[1 pt]` **Redirect Loop Hard Cap (MEDIUM):** Enforce an absolute `MAX_REDIRECTS_CEILING` (e.g., 20) inside `buildSafeRequestOptions` to prevent unbounded CPU/object allocation when `timeoutMs` is opted-out (`0`).
+- [x] `[3 pts]` **URL Credential Redaction (LOW):** Reject or strip `urlObj.username`/`urlObj.password` per RFC 3986 §3.2.1, and redact raw URLs from all thrown error messages to prevent credential leakage into logs.
 
 ## 🔮 Sprint 8: DX & Composability _(13 pts total)_
 - [ ] **Objective:** Elevate UltraTon from secure HTTP primitive to enterprise-ready composable client.

@@ -5,6 +5,7 @@ import { SecureHttpError } from "./exceptions/secure-http.error.ts";
 import { UltraTonRedirectError } from "./exceptions/redirect.error.ts";
 import { UltraTonParseError } from "./exceptions/parse.error.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
+import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
 import * as https from 'node:https';
@@ -182,16 +183,7 @@ export class UltraTonClient {
         });
 
         while (true) {
-            let urlObj: URL;
-            try {
-                urlObj = new URL(currentUrl);
-            } catch (e: unknown) {
-                throw new SecureHttpError(`UltraTon: Invalid URL provided "${currentUrl}"`);
-            }
-
-            if (urlObj.protocol !== 'https:') {
-                throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
-            }
+            const urlObj: URL = parseSafeUrl(currentUrl);
 
             let currentTimeoutMs = reqOpts.timeoutMs;
             if (reqOpts.timeoutMs > 0) {
@@ -213,14 +205,8 @@ export class UltraTonClient {
                     redirectCount++;
                     const location = hop.headers.location;
 
-                    let nextUrlObj: URL;
-                    try {
-                        nextUrlObj = new URL(location, currentUrl);
-                    } catch (e: unknown) {
-                        throw new SecureHttpError(`UltraTon: Invalid redirect location "${location}"`);
-                    }
-
-                    const originalUrlObj = new URL(currentUrl);
+                    const nextUrlObj: URL = parseSafeUrl(location, currentUrl);
+                    const originalUrlObj = urlObj;
                     const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
 
                     if (originalUrlObj.origin !== nextUrlObj.origin) {
