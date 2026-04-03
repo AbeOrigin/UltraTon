@@ -14,6 +14,8 @@ import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
 
 
 export class UltraTonClient {
+    // Internal testing interceptor
+    private _transport?: typeof https.request | typeof http.request;
 
     constructor() {
         // Transport dynamically assigned per network hop to support localhost HTTP escape hatch
@@ -112,7 +114,7 @@ export class UltraTonClient {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
-            const transport = urlObj.protocol === 'http:' ? http.request : https.request;
+            const transport = this._transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
             const req = transport(urlObj, {
                 ...reqOpts,

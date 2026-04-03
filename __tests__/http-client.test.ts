@@ -43,7 +43,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
     it('Should completely block http:// URLs and reject synchronously', async () => {
         const client = new UltraTonClient();
         await assert.rejects(
-            client.get(`http://localhost/json`),
+            client.get(`http://example.com/json`),
             { message: 'UltraTon: Unsupported protocol "http:"' }
         );
     });
