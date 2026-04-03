@@ -11,7 +11,7 @@ UltraTon is an enterprise-grade, highly secure HTTP client for Node.js written i
 - **Memory Shield**: Implements strict constraints on response payload sizes, providing native protection against memory exhaustion attacks. Optimized using V8 zero-GC allocation controls.
 - **Network Control**: Absolute, safe-integer bounded timeouts on connections that explicitly reject floating promises, completely neutralizing Slowloris and TCP hung-socket attacks.
 - **Protocol Purism (CRLF & Pollution Defense)**: Actively downcases and filters headers at the pipeline boundary against `\r\n\0`, rendering HTTP request smuggling and prototype pollution void.
-- **Anti-SSRF**: Default-deny redirect policies and secure credential stripping.
+- **Anti-SSRF & DNS Rebinding Mitigation**: Deep Dual-Stack (IPv4 & IPv6) IP validation neutralizing localhost SSRF, internal metadata attacks, and split-second DNS Rebinding using a zero-dependency native resolver interceptor. Combined with default-deny redirect policies and secure credential stripping.
 - **Sandbox Isolation**: Locked constructor implementations physically enforce inner requests to remain native, neutralizing rogue transport injection and monkey-patching.
 - **First-class TypeScript Support**: Written in TypeScript with strict typings and security-focused interfaces.
 
@@ -60,6 +60,8 @@ UltraTon is developed in methodical security-focused sprints:
 4. **Anti-SSRF**: Default-deny redirect policies and sensitive header stripping across domain hops.
 5. **DX & Tooling**: Strict TypeScript generics, secure error handling, and final package structuring.
 6. **Hardening**: CRLF Injection defenses, strict integer boundary verification, floating promise execution prevention, and zero GC allocation buffering.
+7. **DX & Composability**: Advanced generics, robust Promise-based rejection interfaces, and structural modularity.
+8. **Rebinding & Deep SSRF Prevention**: Native `node:dns` interception to block IPv4, IPv6, and IPv4-Mapped internal IP addresses with resilient Dual-Stack resolution mapping.
 
 ## License
 
