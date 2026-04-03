@@ -1,8 +1,16 @@
 {
   "name": "ultraton",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Ultra safe HTTP client for critical environments in Node.js",
+  "homepage":"https://abeorigin.github.io/UltraTon/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AbeOrigin/UltraTon.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AbeOrigin/UltraTon/issues"
+  },
   "main": "./dist/http-client.js",
   "types": "./dist/http-client.d.ts",
   "exports": {
