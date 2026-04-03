@@ -8,6 +8,7 @@ import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
+import { resolveAndPinHost } from "./security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
@@ -119,6 +120,17 @@ export class UltraTonClient {
             const req = transport(urlObj, {
                 ...reqOpts,
                 timeout: reqOpts.socketTimeoutMs,
+                lookup: (lookupHostname: string, _lookupOptions: any, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
+                    const cleanHostname = lookupHostname.replace(/\0/g, '');
+                    resolveAndPinHost(cleanHostname)
+                        .then(ip => {
+                            const family = ip.includes(':') ? 6 : 4;
+                            callback(null, ip, family);
+                        })
+                        .catch(err => {
+                            callback(err as NodeJS.ErrnoException, '', 4);
+                        });
+                }
             });
 
             if (currentTimeoutMs > 0) {
