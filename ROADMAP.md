@@ -48,6 +48,15 @@ This document meticulously tracks our progress and architectural goals. We stric
 - [x] Handle mute stream events (e.g., `'aborted'`, `'close'`) to guarantee floating promises are resolved/rejected.
 - [x] Lock down the class constructor to prevent untrusted `node:https` transport injections.
 
-## 🚧 Sprint 7: Advanced Engine Resiliency
-- [ ] **Objective:** Address fundamental Node.js boundaries requiring complex mitigation strategies.
-- [ ] **DNS Rebinding Prevention:** Investigate custom caching resolver to lock host IPs across the request lifecycle to neutralize split-second SSRF DNS rebinding.
+## 🚧 Sprint 7: Post-Audit Security Hardening _(8 pts total)_
+- [ ] **Objective:** Remediate all exploitable issues identified during the full-codebase security audit.
+- [ ] `[2 pts]` **Promise Settlement Race Condition (CRITICAL):** Guard `_consumeResponseBuffer` with a `settled` boolean flag to prevent `'close'` from rejecting after `'end'` has already resolved — eliminates spurious `SecureHttpError` allocations on every successful request.
+- [ ] `[1 pt]` **Redirect Detection Type Safety (HIGH):** Replace the `in` operator lookup on `HTTP_CODES_REDIRECTS` with a `ReadonlySet<number>.has()` check to eliminate implicit string coercion and prototype chain pollution vectors.
+- [ ] `[1 pt]` **`maxBodySize` Boundary Enforcement (MEDIUM):** Apply the same `Number.isInteger() && >= 0 && <= 2147483647` guard to `maxBodySize` that already protects timeout fields — a negative or `Infinity` value currently disables the Memory Shield entirely.
+- [ ] `[1 pt]` **Redirect Loop Hard Cap (MEDIUM):** Enforce an absolute `MAX_REDIRECTS_CEILING` (e.g., 20) inside `buildSafeRequestOptions` to prevent unbounded CPU/object allocation when `timeoutMs` is opted-out (`0`).
+- [ ] `[3 pts]` **URL Credential Redaction (LOW):** Reject or strip `urlObj.username`/`urlObj.password` per RFC 3986 §3.2.1, and redact raw URLs from all thrown error messages to prevent credential leakage into logs.
+
+## 🔮 Sprint 8: DX & Composability _(13 pts total)_
+- [ ] **Objective:** Elevate UltraTon from secure HTTP primitive to enterprise-ready composable client.
+- [ ] `[5 pts]` **Request/Response Interceptor Pipeline:** Implement type-safe synchronous function arrays (`interceptors.request` / `interceptors.response`) that run inside the security boundary, enabling auth injection, telemetry, and logging without forking the client.
+- [ ] `[8 pts]` **DNS Rebinding Prevention:** Investigate custom caching resolver to lock host IPs across the request lifecycle to neutralize split-second SSRF DNS rebinding.

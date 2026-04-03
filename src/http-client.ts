@@ -53,12 +53,15 @@ export class UltraTonClient {
         executionTimer: NodeJS.Timeout | undefined
     ): Promise<Buffer> {
         return new Promise((resolve, reject) => {
+            let settled = false;
             let currentBodySize = 0;
             const chunks: Buffer[] = [];
 
             res.on('data', (chunk: Buffer) => {
+                if (settled) return;
                 currentBodySize += chunk.length;
                 if (currentBodySize > reqOpts.maxBodySize) {
+                    settled = true;
                     res.destroy();
                     req.destroy();
                     chunks.length = 0;
@@ -70,21 +73,29 @@ export class UltraTonClient {
             });
 
             res.on('aborted', () => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(executionTimer);
                 reject(new SecureHttpError('UltraTon: The connection was abruptly aborted by the server.'));
             });
 
             res.on('close', () => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(executionTimer);
                 reject(new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.'));
             });
 
             res.on('error', (err: Error) => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(executionTimer);
                 reject(err);
             });
 
             res.on('end', () => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(executionTimer);
                 resolve(Buffer.concat(chunks, currentBodySize));
             });
@@ -113,7 +124,7 @@ export class UltraTonClient {
             }
 
             req.on('response', (res: IncomingMessage) => {
-                const isRedirect = res.statusCode && res.statusCode in HTTP_CODES_REDIRECTS;
+                const isRedirect = res.statusCode !== undefined && HTTP_CODES_REDIRECTS.has(res.statusCode);
                 const location = res.headers.location;
 
                 if (isRedirect && location) {

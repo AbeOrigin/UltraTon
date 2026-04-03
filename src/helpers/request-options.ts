@@ -1,4 +1,5 @@
 import type { UltraTonRequestOptions, SecureUltraTonRequestOptions } from "../types/request-options.types.ts";
+import { MAX_REDIRECTS_CEILING } from "../constants/limits.ts";
 
 /**
  * Evaluates a runtime property against a strict primitive type boundary.
@@ -94,7 +95,7 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
         safeOptions.timeout = options.timeout;
     }
 
-    if (validateType('maxBodySize', options.maxBodySize, 'number')) {
+    if (validateType('maxBodySize', options.maxBodySize, 'number') && Number.isInteger(options.maxBodySize) && options.maxBodySize! >= 0 && options.maxBodySize! <= 2147483647) {
         safeOptions.maxBodySize = options.maxBodySize;
     } else {
         safeOptions.maxBodySize = 1024 * 1024 * 2; // Strict 2MB Fallback
@@ -113,7 +114,7 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
     }
 
     if (validateType('maxRedirects', options.maxRedirects, 'number') && options.maxRedirects! >= 0 && Number.isInteger(options.maxRedirects)) {
-        safeOptions.maxRedirects = options.maxRedirects;
+        safeOptions.maxRedirects = Math.min(options.maxRedirects!, MAX_REDIRECTS_CEILING);
     } else {
         safeOptions.maxRedirects = 0; // Strict 0 Fallback
     }

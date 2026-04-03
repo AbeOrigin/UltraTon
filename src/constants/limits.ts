@@ -1,0 +1,1 @@
+export const MAX_REDIRECTS_CEILING = 20;
