@@ -10,7 +10,8 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
             maxBodySize: 2097152, 
             socketTimeoutMs: 10000, 
             timeoutMs: 30000,
-            maxRedirects: 0
+            maxRedirects: 0,
+            permitReservedIps: false
         });
     });
 

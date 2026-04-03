@@ -11,6 +11,7 @@ import type { UltraTonResponse } from "./types/request-response.ts";
 import { resolveAndPinHost } from "./security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
+import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
 
 
@@ -120,14 +121,16 @@ export class UltraTonClient {
             const req = transport(urlObj, {
                 ...reqOpts,
                 timeout: reqOpts.socketTimeoutMs,
-                lookup: (lookupHostname: string, _lookupOptions: any, callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void) => {
+                lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
                     const cleanHostname = lookupHostname.replace(/\0/g, '');
-                    resolveAndPinHost(cleanHostname)
+                    resolveAndPinHost(cleanHostname, reqOpts.permitReservedIps)
                         .then(ip => {
                             const family = ip.includes(':') ? 6 : 4;
-                            callback(null, ip, family);
+                            const result = lookupOptions.all ? [{ address: ip, family }] : ip;
+                            callback(null, result, family);
                         })
                         .catch(err => {
+                            // Passing the error back into the Node HTTP machinery so it emits an 'error' event on req
                             callback(err as NodeJS.ErrnoException, '', 4);
                         });
                 }

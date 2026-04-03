@@ -43,6 +43,13 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
      * Default is 0.
      */
     readonly maxRedirects?: number;
+
+    /**
+     * Allows resolution of internal/reserved IPs (like localhost or private network space).
+     * Set to true ONLY if you are building an internal API client. 
+     * Default is false (Strict SSRF mitigation).
+     */
+    readonly permitReservedIps?: boolean;
 }
 
 /**
@@ -54,4 +61,5 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
     readonly maxRedirects: number;
+    readonly permitReservedIps: boolean;
 }

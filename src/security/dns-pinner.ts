@@ -55,12 +55,12 @@ export function isReservedIp(ip: string): boolean {
     return false;
 }
 
-export async function resolveAndPinHost(hostname: string): Promise<string> {
+export async function resolveAndPinHost(hostname: string, permitReservedIps: boolean = false): Promise<string> {
     try {
         // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
         const result = await dnsPromises.lookup(hostname, { family: 0 });
 
-        if (isReservedIp(result.address)) {
+        if (!permitReservedIps && isReservedIp(result.address)) {
             throw new SecureHttpError(
                 'UltraTon: Target resolved to a strictly prohibited internal/reserved network IP.'
             );

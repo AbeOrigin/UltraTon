@@ -7,7 +7,8 @@ const client = new UltraTonClient();
 const testOptions = {
   maxBodySize: 1024 * 1024 * 5, // 5MB absolute limit
   timeoutMs: 2000,              // 2-second strict complete cycle timeout
-  maxRedirects: 3               // Cap on redirect hops
+  maxRedirects: 3,              // Cap on redirect hops
+  permitReservedIps: true       // REQUIRED: Allow testing against localhost server
 };
 
 async function runTests() {
@@ -73,7 +74,7 @@ async function runTests() {
       console.log(`✅ PASS: SSRF redirect intercepted. Engine bubbled: ${error.name} - ${errorMsg}\n`);
       console.log(`👉 Check server logs to ensure the 'Authorization' header was safely stripped!\n`);
     } else {
-      console.log(`⚠️ UNEXPECTED ERROR BEHAVIOR: ${error.name} - ${errorMsg}\n`);
+      console.log(`⚠️ UNEXPECTED ERROR BEHAVIOR: ${error.stack}\n`);
     }
   }
 

@@ -10,7 +10,7 @@ import { MAX_REDIRECTS_CEILING } from "../constants/limits.ts";
  * @throws {TypeError} Synchronously throws if the value is defined but breaches the expected type.
  * @returns {boolean} `true` if the value exists and is valid. `false` if `undefined`.
  */
-function validateType(propName: string, value: any, expectedType: 'string' | 'number' | 'object'): boolean {
+function validateType(propName: string, value: any, expectedType: 'string' | 'number' | 'object' | 'boolean'): boolean {
     if (value === undefined) return false;
 
     let isValid = false;
@@ -21,6 +21,8 @@ function validateType(propName: string, value: any, expectedType: 'string' | 'nu
         isValid = typeof value === 'number' && !isNaN(value);
     } else if (expectedType === 'object') {
         isValid = typeof value === 'object' && value !== null && !Array.isArray(value);
+    } else if (expectedType === 'boolean') {
+        isValid = typeof value === 'boolean';
     }
 
     if (!isValid) {
@@ -117,6 +119,12 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
         safeOptions.maxRedirects = Math.min(options.maxRedirects!, MAX_REDIRECTS_CEILING);
     } else {
         safeOptions.maxRedirects = 0; // Strict 0 Fallback
+    }
+
+    if (validateType('permitReservedIps', options.permitReservedIps, 'boolean')) {
+        safeOptions.permitReservedIps = options.permitReservedIps;
+    } else {
+        safeOptions.permitReservedIps = false; // Strict fallback: block SSRF
     }
 
     return safeOptions as SecureUltraTonRequestOptions;
