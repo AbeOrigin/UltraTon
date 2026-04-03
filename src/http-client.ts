@@ -8,15 +8,15 @@ import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
+import * as http from 'node:http';
 import * as https from 'node:https';
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
 
 
 export class UltraTonClient {
-    private _transport: typeof https.request;
 
     constructor() {
-        this._transport = https.request;
+        // Transport dynamically assigned per network hop to support localhost HTTP escape hatch
     }
 
     public async get<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
@@ -112,7 +112,9 @@ export class UltraTonClient {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
-            const req = this._transport(urlObj, {
+            const transport = urlObj.protocol === 'http:' ? http.request : https.request;
+            
+            const req = transport(urlObj, {
                 ...reqOpts,
                 timeout: reqOpts.socketTimeoutMs,
             });

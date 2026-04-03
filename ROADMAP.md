@@ -60,3 +60,9 @@ This document meticulously tracks our progress and architectural goals. We stric
 - [ ] **Objective:** Elevate UltraTon from secure HTTP primitive to enterprise-ready composable client.
 - [ ] `[5 pts]` **Request/Response Interceptor Pipeline:** Implement type-safe synchronous function arrays (`interceptors.request` / `interceptors.response`) that run inside the security boundary, enabling auth injection, telemetry, and logging without forking the client.
 - [ ] `[8 pts]` **DNS Rebinding Prevention:** Investigate custom caching resolver to lock host IPs across the request lifecycle to neutralize split-second SSRF DNS rebinding.
+
+## 🧪 Sprint 9: Chaos Engineering & Security Assurance _(15 pts total)_
+- [ ] **Objective:** Prove UltraTon's resilience against worst-case, malformed, and adversarial network responses.
+- [ ] `[5 pts]` **The Compression Bomb (Zip Bomb):** Ensure `maxBodySize` logic safely terminates decompressed streams that eclipse the buffer ceiling despite headers claiming small payload size.
+- [ ] `[5 pts]` **The Lying Authority (DNS Rebind bypass via credentials):** Implement test scenarios where URLs inject `@` spoofed credentials (e.g., `http://api.trusted.com@evil.com`) to evaluate regex vulnerabilities in standard HTTP parsers.
+- [ ] `[5 pts]` **The Slow Read (Reverse Slowloris):** Guarantee our client drops sockets if a hostile server accepts connection but reads our stream at 1 byte per second, preventing local Event Loop starvation.

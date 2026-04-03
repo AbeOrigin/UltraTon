@@ -23,8 +23,14 @@ export function parseSafeUrl(url: string, base?: string): URL {
         throw new SecureHttpError(`UltraTon: Credentials in URL authority are strictly prohibited. Use the 'auth' option instead.`);
     }
 
+    const isLocalhost = urlObj.hostname === 'localhost' || urlObj.hostname === '127.0.0.1';
+
     if (urlObj.protocol !== 'https:') {
-        throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
+        if (urlObj.protocol === 'http:' && isLocalhost) {
+            // [Localhost Escape Hatch] Accept plain HTTP only for local development testing
+        } else {
+            throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
+        }
     }
 
     return urlObj;
