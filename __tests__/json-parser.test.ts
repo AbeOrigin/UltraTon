@@ -36,8 +36,7 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
     };
 
     it('Should cleanly parse JSON and explicitly map it to the requested interface synchronously', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         
         interface UserShape {
             user: string;
@@ -57,8 +56,7 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
     });
 
     it('Should cleanly trap native SyntaxError and throw UltraTonParseError upon malformed payload', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         const res = await client.get('https://example.com/invalid-json');
         
         assert.throws(

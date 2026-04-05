@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonRedirectError } from '../src/exceptions/redirect.error.ts';
 import { UltraTonNetworkTimeoutError } from '../src/exceptions/network-timeout.error.ts';
+import https from 'node:https';
 
 describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
 
@@ -92,16 +93,14 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     };
 
     it('Should cleanly return 3xx when maxRedirects is 0 (Default Deny)', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         const res = await client.get('https://example.com/default-deny'); // Implicitly maxRedirects: 0
         assert.strictEqual(res.statusCode, 302);
         assert.strictEqual(res.headers.location, 'https://example.com/target');
     });
 
     it('Should throw UltraTonNetworkTimeoutError if absolute timeout is hit during a tarpit redirect', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         await assert.rejects(
             client.get('https://example.com/tarpit-step1', { maxRedirects: 5, timeoutMs: 50 }),
             (err: any) => err instanceof UltraTonNetworkTimeoutError && err.message.includes('exceeded')
@@ -109,8 +108,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should throw UltraTonRedirectError on infinite local loopback', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         await assert.rejects(
             client.get('https://example.com/infinite', { maxRedirects: 3 }),
             (err: any) => err instanceof UltraTonRedirectError && err.message.includes('Max redirects (3) exceeded')
@@ -118,13 +116,13 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should case-insensitively strip credentials upon domain hopping', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         const res = await client.get('https://domaina.com/hop', {
             maxRedirects: 1,
             headers: {
                 'aUthorizAtion': 'Bearer secret',
                 'cOOkie': 'session=victim',
+                'pRoXy-AuThoriZatIon': 'Basic secret_proxy_token',
                 'X-Safe-Header': 'keep-me'
             }
         });
@@ -132,13 +130,13 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
         // Ensure sensitive headers were dropped
         assert.strictEqual(res.headers['authorization'], undefined);
         assert.strictEqual(res.headers['cookie'], undefined);
+        assert.strictEqual(res.headers['proxy-authorization'], undefined);
         // Ensure safe headers were kept
         assert.strictEqual(res.headers['x-safe-header'], 'keep-me');
     });
 
     it('Should downgrade POST to GET on 303 and strip smuggling headers and body', async () => {
-        const client = new UltraTonClient();
-        (client as any)._transport = createSmartMockTransport();
+        const client = new UltraTonClient(createSmartMockTransport() as any);
         const res = await client.post('https://example.com/smuggle-start', 'massive-payload', {
             maxRedirects: 1,
             headers: {

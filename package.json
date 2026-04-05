@@ -1,6 +1,6 @@
 {
   "name": "ultraton",
-  "version": "1.0.1",
+  "version": "1.0.3",
   "type": "module",
   "description": "Ultra safe HTTP client for critical environments in Node.js",
   "homepage":"https://abeorigin.github.io/UltraTon/",

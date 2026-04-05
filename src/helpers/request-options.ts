@@ -10,7 +10,7 @@ import { MAX_REDIRECTS_CEILING } from "../constants/limits.ts";
  * @throws {TypeError} Synchronously throws if the value is defined but breaches the expected type.
  * @returns {boolean} `true` if the value exists and is valid. `false` if `undefined`.
  */
-function validateType(propName: string, value: any, expectedType: 'string' | 'number' | 'object' | 'boolean'): boolean {
+function validateType(propName: string, value: unknown, expectedType: 'string' | 'number' | 'object' | 'boolean'): boolean {
     if (value === undefined) return false;
 
     let isValid = false;
@@ -18,7 +18,7 @@ function validateType(propName: string, value: any, expectedType: 'string' | 'nu
     if (expectedType === 'string') {
         isValid = typeof value === 'string';
     } else if (expectedType === 'number') {
-        isValid = typeof value === 'number' && !isNaN(value);
+        isValid = typeof value === 'number' && !Number.isNaN(value);
     } else if (expectedType === 'object') {
         isValid = typeof value === 'object' && value !== null && !Array.isArray(value);
     } else if (expectedType === 'boolean') {
@@ -38,7 +38,7 @@ function validateType(propName: string, value: any, expectedType: 'string' | 'nu
  * @param rawHeaders - User input headers.
  * @throws {TypeError} Synchronously throws if CRLF injection is detected.
  */
-function sanitizeHeaders(rawHeaders: Record<string, any>): Record<string, string | string[]> {
+function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, string | string[]> {
     const sanitized: Record<string, string | string[]> = {};
     const crlfRegex = /[\r\n\0]/;
 
@@ -54,15 +54,23 @@ function sanitizeHeaders(rawHeaders: Record<string, any>): Record<string, string
         }
 
         const value = rawHeaders[key];
+        let normalizedValue = value;
 
-        if (typeof value === 'string') {
-            if (crlfRegex.test(value)) {
+        if ((typeof value === 'number' && !Number.isNaN(value)) || typeof value === 'boolean') {
+            normalizedValue = String(value);
+        }
+
+        if (typeof normalizedValue === 'string') {
+            if (crlfRegex.test(normalizedValue)) {
                 throw new TypeError(`UltraTon: Header value for '${key}' contains invalid CRLF characters.`);
             }
-            sanitized[lowerKey] = value;
-        } else if (Array.isArray(value)) {
+            sanitized[lowerKey] = normalizedValue;
+        } else if (Array.isArray(normalizedValue)) {
             const sanitizedVal: string[] = [];
-            for (const item of value) {
+            for (let item of normalizedValue) {
+                if ((typeof item === 'number' && !Number.isNaN(item)) || typeof item === 'boolean') {
+                    item = String(item);
+                }
                 if (typeof item === 'string') {
                     if (crlfRegex.test(item)) {
                         throw new TypeError(`UltraTon: Header array value for '${key}' contains invalid CRLF characters.`);
@@ -84,13 +92,13 @@ function sanitizeHeaders(rawHeaders: Record<string, any>): Record<string, string
  * Throws TypeError synchronously on malformed security primitives to fail loud.
  */
 export function buildSafeRequestOptions(options: UltraTonRequestOptions): SecureUltraTonRequestOptions {
-    const safeOptions: any = {};
+    const safeOptions: Record<string, unknown> = {};
 
     if (validateType('method', options.method, 'string')) safeOptions.method = options.method;
     if (validateType('auth', options.auth, 'string')) safeOptions.auth = options.auth;
     if (validateType('signal', options.signal, 'object')) safeOptions.signal = options.signal;
     if (validateType('headers', options.headers, 'object')) {
-        safeOptions.headers = sanitizeHeaders(options.headers as Record<string, any>);
+        safeOptions.headers = sanitizeHeaders(options.headers as Record<string, unknown>);
     }
 
     if (validateType('timeout', options.timeout, 'number') && Number.isInteger(options.timeout) && options.timeout! >= 0 && options.timeout! <= 2147483647) {
@@ -127,5 +135,5 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
         safeOptions.permitReservedIps = false; // Strict fallback: block SSRF
     }
 
-    return safeOptions as SecureUltraTonRequestOptions;
+    return safeOptions as unknown as SecureUltraTonRequestOptions;
 }

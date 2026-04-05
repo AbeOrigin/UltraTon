@@ -17,10 +17,13 @@ import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
 
 export class UltraTonClient {
     // Internal testing interceptor
-    private _transport?: typeof https.request | typeof http.request;
+    #transport?: typeof https.request | typeof http.request;
 
-    constructor() {
-        // Transport dynamically assigned per network hop to support localhost HTTP escape hatch
+    /**
+     * @param transportInterceptor - Optional transport layer interceptor used strictly for internal testing.
+     */
+    constructor(transportInterceptor?: typeof https.request | typeof http.request) {
+        this.#transport = transportInterceptor;
     }
 
     public async get<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
@@ -116,7 +119,7 @@ export class UltraTonClient {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
-            const transport = this._transport || (urlObj.protocol === 'http:' ? http.request : https.request);
+            const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
             const req = transport(urlObj, {
                 ...reqOpts,
@@ -231,7 +234,7 @@ export class UltraTonClient {
                     if (originalUrlObj.origin !== nextUrlObj.origin) {
                         for (const key of Object.keys(nextHeaders)) {
                             const lowerKey = key.toLowerCase();
-                            if (lowerKey === 'authorization' || lowerKey === 'cookie') {
+                            if (lowerKey === 'authorization' || lowerKey === 'cookie' || lowerKey === 'proxy-authorization') {
                                 delete nextHeaders[key];
                             }
                         }

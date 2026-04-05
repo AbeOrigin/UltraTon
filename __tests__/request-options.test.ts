@@ -76,4 +76,24 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         });
     });
 
+    it('Should correctly stringify valid numeric or boolean header values without throwing them away', () => {
+        const result = buildSafeRequestOptions({
+            headers: {
+                'Content-Length': 100,
+                'x-custom-bool': true,
+                'x-dropped': false,
+                'x-number-zero': 0,
+                'x-array-mixed': ['string', 123, true]
+            } as any
+        });
+
+        assert.deepStrictEqual(result.headers, {
+            'content-length': '100',
+            'x-custom-bool': 'true',
+            'x-dropped': 'false',
+            'x-number-zero': '0',
+            'x-array-mixed': ['string', '123', 'true']
+        });
+    });
+
 });

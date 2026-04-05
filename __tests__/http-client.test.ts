@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { UltraTonClient } from '../src/http-client.ts';
+import https from 'node:https';
 
 describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
@@ -50,8 +51,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a basic GET request (https)', async () => {
         const fakeTransport = createMockTransport({ success: true }, 'GET');
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.get(`https://localhost/json`);
         assert.strictEqual(response.statusCode, 200);
@@ -62,8 +62,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a POST request', async () => {
         const fakeTransport = createMockTransport({}, 'POST', 201);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.post(`https://localhost/echo`, JSON.stringify({ test: 'post' }));
         assert.strictEqual(response.statusCode, 201);
@@ -73,8 +72,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a PUT request', async () => {
         const fakeTransport = createMockTransport({}, 'PUT', 201);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.put(`https://localhost/echo`, JSON.stringify({ test: 'put' }));
         assert.strictEqual(response.headers['x-method-used'], 'PUT');
@@ -83,8 +81,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a PATCH request', async () => {
         const fakeTransport = createMockTransport({}, 'PATCH', 201);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.patch(`https://localhost/echo`, JSON.stringify({ test: 'patch' }));
         assert.strictEqual(response.headers['x-method-used'], 'PATCH');
@@ -94,8 +91,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
     it('Should successfully perform a DELETE request', async () => {
         // empty body response
         const fakeTransport = createMockTransport('', 'DELETE', 204);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.delete(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'DELETE');
@@ -104,8 +100,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform an OPTIONS request', async () => {
         const fakeTransport = createMockTransport('', 'OPTIONS', 204);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.options(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'OPTIONS');
@@ -113,8 +108,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a HEAD request', async () => {
         const fakeTransport = createMockTransport('', 'HEAD', 204);
-        const client = new UltraTonClient();
-        (client as any)._transport = fakeTransport;
+        const client = new UltraTonClient(fakeTransport as any);
         
         const response = await client.head(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'HEAD');
