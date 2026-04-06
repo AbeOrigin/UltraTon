@@ -8,6 +8,7 @@ CHANGELOG.md
 
 # Agent Tooling
 .agents/
+.agents-docs/
 .agent/
 _agents/
 _agent/
