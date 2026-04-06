@@ -2,11 +2,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { resolveAndPinHost } from '../../src/security/dns-pinner.ts';
-import { SecureHttpError } from '../../src/exceptions/secure-http.error.ts';
+import { resolveAndPinHost } from '../src/security/dns-pinner.ts';
+import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
-    
     it('Allowed: Public IPv4 (8.8.8.8) resolves successfully', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
             return { address: '8.8.8.8', family: 4 };
