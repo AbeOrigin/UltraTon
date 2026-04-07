@@ -23,9 +23,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 - [x] Native event handling: Automatically purge sessions upon receiving `goaway` or `error` events from the server.
 
 ### Sprint 4: Cross-Domain SSRF (Secure Redirects)
-- [ ] Implement strict tracking of 301/302/307 status codes.
-- [ ] Execute security sanitization upon detecting a domain hop (strip `authorization`, `cookie`, `proxy-authorization`).
-- [ ] Reconnection logic: Request a new tunnel to the destination domain from the Session Manager before opening the new stream.
+- [x] Implement strict tracking of 301/302/307 status codes.
+- [x] Execute security sanitization upon detecting a domain hop (strip `authorization`, `cookie`, `proxy-authorization`).
+- [x] Reconnection logic: Request a new tunnel to the destination domain from the Session Manager before opening the new stream.
 
 ---
 

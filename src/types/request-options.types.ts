@@ -71,6 +71,7 @@ export interface UltraTonRequestOptionsHttp2 extends RequestOptions {
     readonly method?: string;
     readonly body?: Buffer | string;
     readonly headers?: Record<string, string | string[] | undefined>;
+    readonly maxRedirects?: number;
 }
 
 
@@ -86,4 +87,10 @@ export interface UltraTonOptionsHttp2 {
      * TLS Settings for the session.
      */
     tlsSettings?: SecureClientSessionOptions;
+
+    /**
+     * The maximum number of redirects to follow.
+     * Default is 0.
+     */
+    maxRedirects?: number;
 }
