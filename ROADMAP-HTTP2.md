@@ -18,9 +18,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 - [x] Execute `session.request()`, collect chunks via `stream.on('data')`, and resolve the response in a format compatible with UltraTon 1.0.
 
 ### Sprint 3: The "Garbage Collector" (Preventing Memory Leaks)
-- [ ] Implement **Idle Timeout** (e.g., 10 seconds) per session.
-- [ ] Purge logic: Execute `session.close()` and clear the `Map` if the session registers no active streams within the idle period.
-- [ ] Native event handling: Automatically purge sessions upon receiving `goaway` or `error` events from the server.
+- [x] Implement **Idle Timeout** (e.g., 10 seconds) per session.
+- [x] Purge logic: Execute `session.destroy()` and clear the `Map` if the session registers no active streams within the idle period.
+- [x] Native event handling: Automatically purge sessions upon receiving `goaway` or `error` events from the server.
 
 ### Sprint 4: Cross-Domain SSRF (Secure Redirects)
 - [ ] Implement strict tracking of 301/302/307 status codes.
