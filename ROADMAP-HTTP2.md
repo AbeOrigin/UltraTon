@@ -13,9 +13,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 - [x] Routing logic: Resolve `http2.connect()` if the session does not exist, or return the active session if it is already in the pool.
 
 ### Sprint 2: Transmission and Pseudo-Headers (The Core)
-- [ ] Implement the main entry point `UltraTon2.request(url, options)`.
-- [ ] Develop the adapter from traditional headers to Pseudo-Headers (`:method`, `:path`, `:authority`).
-- [ ] Execute `session.request()`, collect chunks via `stream.on('data')`, and resolve the response in a format compatible with UltraTon 1.0.
+- [x] Implement the main entry point `UltraTon2.request(url, options)`.
+- [x] Develop the adapter from traditional headers to Pseudo-Headers (`:method`, `:path`, `:authority`).
+- [x] Execute `session.request()`, collect chunks via `stream.on('data')`, and resolve the response in a format compatible with UltraTon 1.0.
 
 ### Sprint 3: The "Garbage Collector" (Preventing Memory Leaks)
 - [ ] Implement **Idle Timeout** (e.g., 10 seconds) per session.

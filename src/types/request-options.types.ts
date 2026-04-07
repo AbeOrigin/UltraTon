@@ -1,3 +1,4 @@
+import { SecureClientSessionOptions } from "node:http2";
 import { RequestOptions } from "node:https";
 
 type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'timeout' | 'auth' | 'signal'>
@@ -62,4 +63,27 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
     readonly timeoutMs: number;
     readonly maxRedirects: number;
     readonly permitReservedIps: boolean;
+}
+
+// HTTP2 Options
+
+export interface UltraTonRequestOptionsHttp2 extends RequestOptions {
+    readonly method?: string;
+    readonly body?: Buffer | string;
+    readonly headers?: Record<string, string | string[] | undefined>;
+}
+
+
+
+export interface UltraTonOptionsHttp2 {
+    /**
+     * If true, the session will be isolated to the current request.
+     * Default is false.
+     */
+    isolatePool?: boolean;
+
+    /**
+     * TLS Settings for the session.
+     */
+    tlsSettings?: SecureClientSessionOptions;
 }
