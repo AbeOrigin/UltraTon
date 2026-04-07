@@ -72,6 +72,8 @@ export interface UltraTonRequestOptionsHttp2 extends RequestOptions {
     readonly body?: Buffer | string;
     readonly headers?: Record<string, string | string[] | undefined>;
     readonly maxRedirects?: number;
+    readonly timeoutMs?: number;
+    readonly maxBodySize?: number;
 }
 
 
@@ -93,4 +95,16 @@ export interface UltraTonOptionsHttp2 {
      * Default is 0.
      */
     maxRedirects?: number;
+
+    /**
+     * The maximum time to wait for a single stream to complete in milliseconds.
+     * Default is 30000ms.
+     */
+    timeoutMs?: number;
+
+    /**
+     * The maximum size of any response body in bytes.
+     * Default is 2MB (2,097,152 bytes).
+     */
+    maxBodySize?: number;
 }

@@ -15,17 +15,19 @@ export class Http2SessionManager {
 
     public closeSession(hostname: string): void {
         const session = this.#sessions.get(hostname);
-        if (session && !session.closed && !session.destroyed) {
-            session.close();
+        if (session) {
+            try {
+                if (!session.closed && !session.destroyed) session.close();
+            } catch { /* Session already transitioned */ }
             this.#sessions.delete(hostname);
         }
     }
 
     public closeAll(): void {
-        for (const [_, session] of this.#sessions.entries()) {
-            if (!session.closed && !session.destroyed) {
-                session.close();
-            }
+        for (const [, session] of this.#sessions.entries()) {
+            try {
+                if (!session.closed && !session.destroyed) session.close();
+            } catch { /* Session already transitioned */ }
         }
         this.#sessions.clear();
     }
@@ -44,8 +46,14 @@ export class Http2SessionManager {
 
         const newSession = connect(hostname, connectionOptions);
         newSession.setTimeout(IDLE_TIMEOUT);
-        newSession.on('error', () => this.#sessions.delete(hostname));
-        newSession.on('goaway', () => this.#sessions.delete(hostname));
+        newSession.on('error', () => {
+            this.#sessions.delete(hostname);
+            if (!newSession.destroyed) newSession.destroy();
+        });
+        newSession.on('goaway', () => {
+            this.#sessions.delete(hostname);
+            if (!newSession.destroyed) newSession.destroy();
+        });
         newSession.on('close', () => this.#sessions.delete(hostname));
         newSession.on('timeout', () => {
             newSession.destroy();

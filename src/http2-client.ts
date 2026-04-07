@@ -1,12 +1,14 @@
 import { Buffer } from "node:buffer";
-import { ClientHttp2Session, ClientHttp2Stream, IncomingHttpHeaders } from "node:http2";
+import { ClientHttp2Session, ClientHttp2Stream, IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http2";
 import { UltraTonResponse } from "./types/request-response.ts";
 import { Http2SessionManager } from "./classes/http-session-mannager.ts";
 import { UltraTonOptionsHttp2, UltraTonRequestOptionsHttp2 } from "./types/request-options.types.ts";
 import { SecureHttpError } from "./exceptions/secure-http.error.ts";
 import { UltraTonParseError } from "./exceptions/parse.error.ts";
 import { UltraTonRedirectError } from "./exceptions/redirect.error.ts";
+import { UltraTonMemoryError } from "./exceptions/out-of-memory.error.ts";
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
+import { MAX_REDIRECTS_CEILING } from "./constants/limits.ts";
 
 const globalPool = new Http2SessionManager();
 
@@ -56,7 +58,7 @@ export class UltraTonHTTP2 {
         let currentUrl = targetUrl;
         let currentOptions = { ...options };
         let redirectCount = 0;
-        const maxRedirects = currentOptions.maxRedirects ?? this.#globalOptions.maxRedirects ?? 0;
+        const maxRedirects = Math.min(currentOptions.maxRedirects ?? this.#globalOptions.maxRedirects ?? 0, MAX_REDIRECTS_CEILING);
 
         while (true) {
             const parsedUrl = new URL(currentUrl);
@@ -73,14 +75,17 @@ export class UltraTonHTTP2 {
 
             const method = (currentOptions.method || 'GET').toUpperCase();
 
-            const pseudoHeaders = {
+            const pseudoHeaders: OutgoingHttpHeaders = {
                 ':method': method,
                 ':path': path,
                 ':authority': parsedUrl.host,
                 ...safeHeaders
             };
 
-            const response = await this.#executeStream<T>(session, pseudoHeaders, currentOptions.body);
+            const streamTimeoutMs = currentOptions.timeoutMs ?? this.#globalOptions.timeoutMs ?? 30_000;
+            const maxBodySize = currentOptions.maxBodySize ?? this.#globalOptions.maxBodySize ?? 2_097_152;
+
+            const response = await this.#executeStream<T>(session, pseudoHeaders, currentOptions.body, streamTimeoutMs, maxBodySize);
 
             const statusCode = response.statusCode;
             const location = response.headers.location;
@@ -139,7 +144,7 @@ export class UltraTonHTTP2 {
         return clean;
     }
 
-    #executeStream<T = unknown>(session: ClientHttp2Session, pseudoHeaders: any, body?: Buffer | string): Promise<UltraTonResponse<T>> {
+    #executeStream<T = unknown>(session: ClientHttp2Session, pseudoHeaders: any, body: Buffer | string | undefined, streamTimeoutMs: number, maxBodySize: number): Promise<UltraTonResponse<T>> {
         return new Promise((resolve, reject) => {
             let settled = false;
             let statusCode: number | undefined;
@@ -154,6 +159,15 @@ export class UltraTonHTTP2 {
                 return reject(new SecureHttpError(`UltraTon: Failed to initialize HTTP/2 stream: ${err instanceof Error ? err.message : String(err)}`));
             }
 
+            const streamTimer = streamTimeoutMs > 0
+                ? setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    stream.close();
+                    reject(new SecureHttpError('UltraTon: HTTP/2 stream execution timeout exceeded.'));
+                }, streamTimeoutMs)
+                : undefined;
+
             stream.on('response', (headers) => {
                 if (settled) return;
                 statusCode = Number(headers[':status']);
@@ -161,6 +175,7 @@ export class UltraTonHTTP2 {
 
                 if (pseudoHeaders[':method'] === 'HEAD') {
                     settled = true;
+                    clearTimeout(streamTimer);
                     stream.close();
 
                     return resolve({
@@ -172,14 +187,24 @@ export class UltraTonHTTP2 {
                 }
             });
 
+            let totalBytes = 0;
             stream.on('data', (chunk: Buffer) => {
                 if (settled) return;
+                totalBytes += chunk.length;
+                if (totalBytes > maxBodySize) {
+                    settled = true;
+                    clearTimeout(streamTimer);
+                    stream.close();
+                    reject(new UltraTonMemoryError(`UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${maxBodySize} bytes.`));
+                    return;
+                }
                 chunks.push(chunk);
             });
 
             stream.on('end', () => {
                 if (settled) return;
                 settled = true;
+                clearTimeout(streamTimer);
 
                 const data = Buffer.concat(chunks);
 
@@ -201,6 +226,7 @@ export class UltraTonHTTP2 {
             stream.on('error', (err: Error) => {
                 if (settled) return;
                 settled = true;
+                clearTimeout(streamTimer);
                 reject(new SecureHttpError(`UltraTon stream error: ${err.message}`));
             });
 
