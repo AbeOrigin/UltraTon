@@ -22,7 +22,7 @@ export class Http2SessionManager {
     }
 
     public closeAll(): void {
-        for (const [hostname, session] of this.#sessions.entries()) {
+        for (const [_, session] of this.#sessions.entries()) {
             if (!session.closed && !session.destroyed) {
                 session.close();
             }
