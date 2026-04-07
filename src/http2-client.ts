@@ -156,8 +156,20 @@ export class UltraTonHTTP2 {
 
             stream.on('response', (headers) => {
                 if (settled) return;
-                statusCode = headers[':status'];
-                responseHeaders = headers as import('node:http').IncomingHttpHeaders;
+                statusCode = Number(headers[':status']);
+                responseHeaders = headers;
+
+                if (pseudoHeaders[':method'] === 'HEAD') {
+                    settled = true;
+                    stream.close();
+
+                    return resolve({
+                        statusCode,
+                        headers: responseHeaders,
+                        data: Buffer.alloc(0),
+                        json: (): T => ({} as T)
+                    });
+                }
             });
 
             stream.on('data', (chunk: Buffer) => {
@@ -177,6 +189,7 @@ export class UltraTonHTTP2 {
                     data,
                     json: (): T => {
                         try {
+                            if (data.length === 0) return {} as T;
                             return JSON.parse(data.toString('utf-8')) as T;
                         } catch (e: unknown) {
                             throw new UltraTonParseError(`UltraTon: Failed to parse JSON response payload.`);
@@ -188,8 +201,6 @@ export class UltraTonHTTP2 {
             stream.on('error', (err: Error) => {
                 if (settled) return;
                 settled = true;
-
-                // Protect V8 from floating socket errors by instantly rejecting
                 reject(new SecureHttpError(`UltraTon stream error: ${err.message}`));
             });
 
