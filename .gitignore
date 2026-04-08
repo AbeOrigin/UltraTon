@@ -8,6 +8,7 @@ CHANGELOG.md
 
 # Agent Tooling
 .agents/
+.zed/
 .agents-docs/
 .agent/
 _agents/

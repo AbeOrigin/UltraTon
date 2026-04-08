@@ -8,9 +8,10 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 *Objective: Build the core of the client guaranteeing efficient multiplexing without exposing state management to the user.*
 
 ### Sprint 1: The Session Manager (Connection Pool)
-- [x] Create the abstract `Http2SessionManager` class.
+- [x] Create the `Http2SessionManager` class.
 - [x] Implement an in-memory dictionary (`Map<string, ClientHttp2Session>`) indexed by `hostname`.
 - [x] Routing logic: Resolve `http2.connect()` if the session does not exist, or return the active session if it is already in the pool.
+- [x] Implement concurrency handling: Use a pending connection map to prevent redundant simultaneous connection attempts for the same hostname.
 
 ### Sprint 2: Transmission and Pseudo-Headers (The Core)
 - [x] Implement the main entry point `UltraTon2.request(url, options)`.

@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { ClientHttp2Session, ClientHttp2Stream, IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http2";
 import { UltraTonResponse } from "./types/request-response.ts";
-import { Http2SessionManager } from "./classes/http-session-mannager.ts";
+import { Http2SessionManager } from "./classes/http-session-manager.ts";
 import { UltraTonOptionsHttp2, UltraTonRequestOptionsHttp2 } from "./types/request-options.types.ts";
 import { SecureHttpError } from "./exceptions/secure-http.error.ts";
 import { UltraTonParseError } from "./exceptions/parse.error.ts";
@@ -65,7 +65,7 @@ export class UltraTonHTTP2 {
             const origin = parsedUrl.origin;
             const path = parsedUrl.pathname + parsedUrl.search;
 
-            const session = this.#sessionManager.getSession(origin);
+            const session = await this.#sessionManager.getSession(origin);
 
             const safeHeaders = this.#sanitizeHeaders(currentOptions.headers || {});
 
