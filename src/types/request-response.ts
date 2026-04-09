@@ -14,13 +14,12 @@ export interface UltraTonResponse<T = unknown> {
      */
     readonly headers: IncomingHttpHeaders;
     /**
-     * The aggregated response payload.
-     * 🛡️ SECURITY COMMITMENT: This MUST always be a unified raw Buffer.
-     * We do not auto-parse JSON or convert to UTF-8 at this core layer to
-     * prevent prototype pollution or V8 heap exhaustion attacks that can 
-     * happen when implicitly allocating massive strings.
+     * The response payload.
+     * 🛡️ SECURITY COMMITMENT: Automatic parsing of valid 'application/json' payloads.
+     * Massive payloads (>5MB) bypass automatic sync parsing returning the raw Buffer
+     * to protect the V8 Event Loop. Prototype injection vectors are stripped.
      */
-    readonly data: Buffer;
+    readonly body: T | Buffer;
     
     /**
      * Synchronously parses the raw stream Buffer into a generic output context.

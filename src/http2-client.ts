@@ -9,6 +9,7 @@ import { UltraTonRedirectError } from "./exceptions/redirect.error.ts";
 import { UltraTonMemoryError } from "./exceptions/out-of-memory.error.ts";
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
 import { MAX_REDIRECTS_CEILING } from "./constants/limits.ts";
+import { parseSecurePayload } from "./helpers/payload-parser.ts";
 
 const globalPool = new Http2SessionManager();
 
@@ -181,7 +182,7 @@ export class UltraTonHTTP2 {
                     return resolve({
                         statusCode,
                         headers: responseHeaders,
-                        data: Buffer.alloc(0),
+                        body: Buffer.alloc(0),
                         json: (): T => ({} as T)
                     });
                 }
@@ -211,7 +212,7 @@ export class UltraTonHTTP2 {
                 resolve({
                     statusCode,
                     headers: responseHeaders,
-                    data,
+                    body: parseSecurePayload<T>(data, responseHeaders['content-type']),
                     json: (): T => {
                         try {
                             if (data.length === 0) return {} as T;

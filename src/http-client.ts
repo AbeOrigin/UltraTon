@@ -13,6 +13,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
+import { parseSecurePayload } from "./helpers/payload-parser.ts";
 
 
 export class UltraTonClient {
@@ -270,7 +271,7 @@ export class UltraTonClient {
             return {
                 statusCode: hop.statusCode,
                 headers: hop.headers,
-                data: hop.data,
+                body: parseSecurePayload<T>(hop.data, hop.headers['content-type']),
                 json(): T {
                     try {
                         return JSON.parse(hop.data.toString('utf-8')) as T;
