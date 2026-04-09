@@ -23,6 +23,8 @@
     "build": "tsc",
     "test": "node --experimental-strip-types --test __tests__/**/*.test.ts",
     "prepublishOnly": "npm run test && npm run build",
+    "demo:http2:server": "node --experimental-strip-types demo/http2.server.ts",
+    "demo:http2:client": "node --experimental-strip-types demo/http2.client.ts",
     "demo:server": "node --experimental-strip-types demo/server.ts",
     "demo:client": "node --experimental-strip-types demo/client.ts"
   },
