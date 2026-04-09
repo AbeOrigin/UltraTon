@@ -35,9 +35,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 
 ### Sprint 5: Zero-Cache Atomic DNS Pinning
 *Mitigation: DNS Rebinding (TOCTOU)*
-- [ ] Inject the custom `lookup` function (from `dns-pinner.ts`) into the `http2.connect()` options.
-- [ ] Implement **Forced Rotation (Max Connection Life)**: Set an absolute lifespan limit per session (e.g., 30 minutes).
-- [ ] Upon Max Life expiration, block new streams, allow active ones to drain, and destroy the socket to force a new DNS validation on the next request.
+- [x] Inject the custom `lookup` function (from `dns-pinner.ts`) into the `http2.connect()` options.
+- [x] Implement **Forced Rotation (Max Connection Life)**: Set an absolute lifespan limit per session (e.g., 30 minutes).
+- [x] Upon Max Life expiration, block new streams, allow active ones to drain, and destroy the socket to force a new DNS validation on the next request.
 
 ### Sprint 6: Surgical Memory Shield
 *Mitigation: L7 OOM (Infinite Payloads)*

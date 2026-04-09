@@ -5,6 +5,7 @@ dist/
 coverage/
 .env
 CHANGELOG.md
+task.md
 
 # Agent Tooling
 .agents/
