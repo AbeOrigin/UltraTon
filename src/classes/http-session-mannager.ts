@@ -6,6 +6,7 @@ import {
 import { MAX_SESSION_LIFESPAN } from "../constants/session.ts";
 import { IDLE_TIMEOUT } from "../constants/idle.ts";
 import { resolveAndPinHost } from "../security/dns-pinner.ts";
+import { SecureHttpError } from "../exceptions/secure-http.error.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -67,13 +68,18 @@ export class Http2SessionManager {
 
       if (isExpired) {
         // Graceful shutdown: close prevents new streams but allows existing ones to finish.
-        // The 'close' event listener will handle removing it from the map.
         try {
           if (!session.closed && !session.destroyed) {
             session.close();
           }
-        } catch (error: unknown) {
+        } catch {
           /* Session might have already transitioned state */
+        }
+        // Eagerly evict from the pool so concurrent callers arriving before the
+        // async 'close' event fires correctly hit the #pendingConnections
+        // deduplication gate instead of spawning a duplicate TCP connection.
+        if (this.#sessions.get(hostname)?.session === session) {
+          this.#sessions.delete(hostname);
         }
       }
     }
@@ -134,11 +140,22 @@ export class Http2SessionManager {
       connectUrl = `https://${pinnedHost}`;
     }
 
-    const newSession = this.#connectFn(connectUrl, connectionOptions);
-    newSession.setTimeout(IDLE_TIMEOUT);
+    let newSession: ClientHttp2Session;
+    try {
+      newSession = this.#connectFn(connectUrl, connectionOptions);
+    } catch (err: unknown) {
+      throw new SecureHttpError(
+        `UltraTon: Failed to establish HTTP/2 connection to ${bareHost}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
 
-    // Attach event listeners for lifecycle management
+    // Attach 'error' FIRST — before setTimeout or any other logic — to eliminate
+    // the synchronous gap between session creation and error handler registration.
     newSession.on("error", () => this.#destroySession(hostname, newSession));
+
+    newSession.setTimeout(IDLE_TIMEOUT);
     newSession.on("goaway", () => this.#destroySession(hostname, newSession));
     newSession.on("close", () => {
       if (this.#sessions.get(hostname)?.session === newSession) {

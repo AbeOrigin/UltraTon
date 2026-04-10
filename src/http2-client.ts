@@ -237,7 +237,7 @@ export class UltraTonHTTP2 {
 
   #executeStream<T = unknown>(
     session: ClientHttp2Session,
-    pseudoHeaders: any,
+    pseudoHeaders: OutgoingHttpHeaders,
     body: Buffer | string | undefined,
     streamTimeoutMs: number,
     maxBodySize: number,

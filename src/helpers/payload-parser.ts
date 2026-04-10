@@ -36,9 +36,6 @@ export function parseSecurePayload<T = unknown>(
   }
 
   if (rawData.length > MAX_SYNC_PARSE_BYTES) {
-    console.warn(
-      `UltraTon: Payload size (${rawData.length} bytes) exceeds MAX_SYNC_PARSE_BYTES limit. Returning raw Buffer to prevent event loop blocking.`,
-    );
     return rawData;
   }
 
