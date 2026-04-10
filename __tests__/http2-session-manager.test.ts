@@ -37,7 +37,7 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         assert.equal(mockConnect.mock.callCount(), 1);
         const args = mockConnect.mock.calls[0].arguments;
         
-        assert.equal(args[0], '8.8.8.8', 'The resolved IP must be passed to connect');
+        assert.equal(args[0], 'https://8.8.8.8', 'The resolved IP must be passed to connect as a full URL');
         assert.equal(args[1].servername, 'example.com', 'SNI/authority must be preserved');
     });
 
@@ -94,7 +94,7 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         const manager = new Http2SessionManager({}, mockConnect as any);
         
         await manager.getSession('rebind.com');
-        assert.equal(mockConnect.mock.calls[0].arguments[0], '8.8.8.8', 'Safe DNS applies initially');
+        assert.equal(mockConnect.mock.calls[0].arguments[0], 'https://8.8.8.8', 'Safe DNS applies initially');
         
         // Fast forward cache duration
         currentTime += MAX_SESSION_LIFESPAN + 500;

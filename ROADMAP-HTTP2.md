@@ -41,9 +41,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 
 ### Sprint 6: Surgical Memory Shield
 *Mitigation: L7 OOM (Infinite Payloads)*
-- [ ] Migrate the `maxBodySize` logic to the streams environment.
-- [ ] Implement the surgical "kill switch": If the sum of chunks exceeds the limit, isolate and kill only the affected stream using `stream.close(http2.constants.NGHTTP2_CANCEL)`.
-- [ ] Ensure the global socket (`session`) survives to avoid interrupting the rest of the multiplexed streams.
+- [x] Migrate the `maxBodySize` logic to the streams environment.
+- [x] Implement the surgical "kill switch": If the sum of chunks exceeds the limit, isolate and kill only the affected stream using `stream.close(http2.constants.NGHTTP2_CANCEL)`.
+- [x] Ensure the global socket (`session`) survives to avoid interrupting the rest of the multiplexed streams.
 
 ### Sprint 7: Native Configuration Hardening
 *Mitigation: HPACK Bombs and Ping/Settings Floods*

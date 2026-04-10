@@ -101,14 +101,40 @@ export class Http2SessionManager {
     hostname: string,
     overrideOptions?: SecureClientSessionOptions,
   ): Promise<ClientHttp2Session> {
+    // `hostname` may be a full origin URL (e.g. "https://example.com") because
+    // the session pool is keyed by origin. Extract the bare hostname for DNS
+    // resolution and TLS SNI — both require a plain host, not a URL.
+    let bareHost: string;
+    try {
+      bareHost = hostname.includes("://")
+        ? new URL(hostname).hostname
+        : hostname;
+    } catch {
+      bareHost = hostname;
+    }
+
     const connectionOptions: SecureClientSessionOptions = {
       ...this.#tlsConfig,
       ...overrideOptions,
-      servername: hostname,
+      servername: bareHost,
     };
 
-    const pinnedHost = await resolveAndPinHost(hostname);
-    const newSession = this.#connectFn(pinnedHost, connectionOptions);
+    const pinnedHost = await resolveAndPinHost(bareHost);
+
+    // http2.connect() requires a full URL (e.g. "https://172.233.17.91"), not a
+    // bare IP. Reconstruct it using the original origin's scheme and port so the
+    // TCP connection targets the resolved IP while SNI (servername) stays as the
+    // original hostname for correct TLS certificate validation.
+    let connectUrl: string;
+    try {
+      const parsed = new URL(hostname.includes("://") ? hostname : `https://${hostname}`);
+      const port = parsed.port ? `:${parsed.port}` : "";
+      connectUrl = `${parsed.protocol}//${pinnedHost}${port}`;
+    } catch {
+      connectUrl = `https://${pinnedHost}`;
+    }
+
+    const newSession = this.#connectFn(connectUrl, connectionOptions);
     newSession.setTimeout(IDLE_TIMEOUT);
 
     // Attach event listeners for lifecycle management

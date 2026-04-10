@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { constants } from "node:http2";
 import type {
   ClientHttp2Session,
   ClientHttp2Stream,
@@ -25,8 +26,21 @@ export class UltraTonHTTP2 {
   readonly #sessionManager: Http2SessionManager;
   readonly #globalOptions: UltraTonOptionsHttp2;
 
-  constructor(options: UltraTonOptionsHttp2 = {}) {
+  /**
+   * @param options - Public configuration options.
+   * @param _sessionManager - Internal DI seam for unit testing. Allows injecting
+   *   a pre-wired Http2SessionManager (with a mock connectFn) so tests never
+   *   touch the network. Do NOT use in production code.
+   */
+  constructor(
+    options: UltraTonOptionsHttp2 = {},
+    _sessionManager?: Http2SessionManager,
+  ) {
     this.#globalOptions = options;
+    if (_sessionManager) {
+      this.#sessionManager = _sessionManager;
+      return;
+    }
     if (options.isolatePool) {
       this.#sessionManager = new Http2SessionManager(options.tlsSettings);
       return;
@@ -249,15 +263,15 @@ export class UltraTonHTTP2 {
       const streamTimer =
         streamTimeoutMs > 0
           ? setTimeout(() => {
-              if (settled) return;
-              settled = true;
-              stream.close();
-              reject(
-                new SecureHttpError(
-                  "UltraTon: HTTP/2 stream execution timeout exceeded.",
-                ),
-              );
-            }, streamTimeoutMs)
+            if (settled) return;
+            settled = true;
+            stream.close(constants.NGHTTP2_CANCEL);
+            reject(
+              new SecureHttpError(
+                "UltraTon: HTTP/2 stream execution timeout exceeded.",
+              ),
+            );
+          }, streamTimeoutMs)
           : undefined;
 
       stream.on("response", (headers) => {
@@ -286,7 +300,7 @@ export class UltraTonHTTP2 {
         if (totalBytes > maxBodySize) {
           settled = true;
           clearTimeout(streamTimer);
-          stream.close();
+          stream.close(constants.NGHTTP2_CANCEL);
           reject(
             new UltraTonMemoryError(
               `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${maxBodySize} bytes.`,

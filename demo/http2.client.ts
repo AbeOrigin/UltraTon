@@ -1,20 +1,18 @@
 import { UltraTonHTTP2 } from "../src/http2-client.ts";
 
-const client = new UltraTonHTTP2({
-  permitReservedIps: true,
-});
-const url = "http://127.0.0.1:8080";
+const client = new UltraTonHTTP2();
+const url = "http://mruuf-167-57-14-39.run.pinggy-free.link:33769";
 
 async function makeGet(url: string, id: number) {
   console.log(`[CLIENT] Starting request ${id} to ${url}`);
-  const response = await client.get(url, { permitReservedIps: true });
+  const response = await client.get(url);
   console.log(`[CLIENT] Request ${id} finished. Status: ${response.statusCode}`);
   return response;
 }
 
 async function main() {
   console.log("🚀 Starting multiplexing test...");
-  
+
   // We create an array of promises. 
   // Note: We are NOT 'awaiting' them inside the loop, so they all start nearly simultaneously.
   const requestCount = 5;
