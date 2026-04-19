@@ -5,6 +5,11 @@ import {
 } from "node:http2";
 import { MAX_SESSION_LIFESPAN } from "../constants/session.ts";
 import { IDLE_TIMEOUT } from "../constants/idle.ts";
+import {
+  MAX_HEADER_LIST_PAIRS,
+  MAX_HEADER_LIST_SIZE,
+  MAX_SESSION_MEMORY_MB,
+} from "../constants/limits.ts";
 import { resolveAndPinHost } from "../security/dns-pinner.ts";
 import { SecureHttpError } from "../exceptions/secure-http.error.ts";
 
@@ -119,9 +124,18 @@ export class Http2SessionManager {
       bareHost = hostname;
     }
 
-    const connectionOptions: SecureClientSessionOptions = {
+    const connectionOptions: SecureClientSessionOptions & {
+      maxHeaderListPairs?: number;
+    } = {
+      maxHeaderListPairs: MAX_HEADER_LIST_PAIRS,
+      maxSessionMemory: MAX_SESSION_MEMORY_MB,
       ...this.#tlsConfig,
       ...overrideOptions,
+      settings: {
+        maxHeaderListSize: MAX_HEADER_LIST_SIZE,
+        ...this.#tlsConfig?.settings,
+        ...overrideOptions?.settings,
+      },
       servername: bareHost,
     };
 
@@ -133,7 +147,9 @@ export class Http2SessionManager {
     // original hostname for correct TLS certificate validation.
     let connectUrl: string;
     try {
-      const parsed = new URL(hostname.includes("://") ? hostname : `https://${hostname}`);
+      const parsed = new URL(
+        hostname.includes("://") ? hostname : `https://${hostname}`,
+      );
       const port = parsed.port ? `:${parsed.port}` : "";
       connectUrl = `${parsed.protocol}//${pinnedHost}${port}`;
     } catch {

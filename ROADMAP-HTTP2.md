@@ -47,9 +47,9 @@ This roadmap details the implementation of the native HTTP/2 engine for UltraTon
 
 ### Sprint 7: Native Configuration Hardening
 *Mitigation: HPACK Bombs and Ping/Settings Floods*
-- [ ] Enforce paranoid limits during session initialization (`http2.connect`).
-- [ ] Limit the size and quantity of headers (`maxHeaderListSize`, `maxHeaderListPairs`) to prevent RAM exhaustion when decompressing HPACK.
-- [ ] Limit the global memory footprint per tunnel (`maxSessionMemory`).
+- [x] Enforce paranoid limits during session initialization (`http2.connect`).
+- [x] Limit the size and quantity of headers (`maxHeaderListSize`, `maxHeaderListPairs`) to prevent RAM exhaustion when decompressing HPACK.
+- [x] Limit the global memory footprint per tunnel (`maxSessionMemory`).
 
 ### Sprint 8: App-Level Backpressure
 *Mitigation: Concurrency Denial (Inverted Rapid Reset)*
