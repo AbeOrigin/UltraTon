@@ -52,7 +52,8 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
      * `true` allows all of them: set it ONLY if you are building an internal API client.
      * An array allows just what it names: IPs (`'10.0.0.5'`), CIDRs (`'10.0.0.0/8'`) and exact,
-     * case-insensitive hostnames (`'api.internal'`, no wildcards). A hostname entry allows that host to
+     * case-insensitive hostnames (`'api.internal'`, no wildcards). IPv4 and IPv6 entries are independent:
+     * an IPv6 entry (even `'::/0'`) never covers a native IPv4 address, so list IPv4 CIDRs for those. A hostname entry allows that host to
      * resolve to any reserved IP, so prefer IP/CIDR entries when you know the addresses.
      * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
      */

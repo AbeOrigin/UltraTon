@@ -65,6 +65,18 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         assert.equal(hits, 0);
     });
 
+    it('permitReservedIps: an IPv6 allowlist entry (::/0) does not reach a native IPv4 reserved literal', async () => {
+        hits = 0;
+        for (const entry of ['::/0', '::ffff:0:0/96']) {
+            await assert.rejects(
+                new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: [entry] }),
+                (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message),
+                entry
+            );
+        }
+        assert.equal(hits, 0);
+    });
+
     it('permitReservedIps: a hostname entry lets that host through, but a redirect to a reserved IP literal is still blocked', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
         const other = http.createServer((_req, res) => { hits++; res.end('OTHER'); });

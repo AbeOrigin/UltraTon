@@ -171,6 +171,34 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
         assert.doesNotThrow(() => assertAllowedIp('::ffff:127.0.0.1', ['127.0.0.0/8']));
     });
 
+    it('an IPv6 entry never covers a native IPv4 address, whatever its prefix length', () => {
+        // BlockList checks an IPv4 address against IPv6 rules as ::ffff:a.b.c.d, so ::/0 .. ::/80 and ::ffff:0:0/96 contain all of IPv4.
+        for (const entry of ['::/0', '::/80', '::/96', '::ffff:0:0/96']) {
+            for (const ip of ['169.254.169.254', '127.0.0.1', '10.1.2.3']) {
+                assert.throws(() => assertAllowedIp(ip, [entry]), SecureHttpError, `${entry} must not cover ${ip}`);
+                assert.throws(() => assertAllowedIp(ip, [entry], 'api.internal'), SecureHttpError, `${entry} must not cover ${ip}`);
+            }
+        }
+    });
+
+    it('an IPv4 entry never covers a native IPv6 address', () => {
+        for (const ip of ['fe80::1', '::1', 'fd00:ec2::254']) {
+            assert.throws(() => assertAllowedIp(ip, ['0.0.0.0/0']), SecureHttpError, `0.0.0.0/0 must not cover ${ip}`);
+        }
+        assert.doesNotThrow(() => assertAllowedIp('127.0.0.1', ['0.0.0.0/0']));
+    });
+
+    it('an IPv6 entry still covers the IPv6 addresses inside it, including mapped ones it contains', () => {
+        assert.doesNotThrow(() => assertAllowedIp('fd00::1', ['::/0']));
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::/0']));
+        assert.throws(() => assertAllowedIp('fd00::1', ['fe80::/10']), SecureHttpError);
+        // A mapped address is an IPv6 address: an IPv6 rule that contains it covers it, as BlockList does.
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:127.0.0.1', ['::ffff:0:0/96']));
+        // ...and an IPv4 rule covers its mapped form, an IPv6 rule that does not contain it does not.
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:10.0.0.1', ['10.0.0.0/8']));
+        assert.throws(() => assertAllowedIp('::ffff:10.0.0.1', ['fe80::/10']), SecureHttpError);
+    });
+
     it('true permits everything; false and an empty list block every reserved IP', () => {
         assert.doesNotThrow(() => assertAllowedIp('169.254.169.254', true));
         assert.throws(() => assertAllowedIp('169.254.169.254', false), SecureHttpError);

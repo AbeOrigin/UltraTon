@@ -64,8 +64,12 @@ export function policyKey(policy: ReservedIpPolicy): string {
     return 'list:' + policy.map(entry => entry.toLowerCase()).sort().join(',');
 }
 
+// IPv4 and IPv6 rules live in separate lists on purpose. BlockList checks a native IPv4 address against IPv6 rules as
+// ::ffff:a.b.c.d, so one shared list would let any IPv6 rule containing ::ffff:0:0/96 (::/0 .. ::/80, or that prefix
+// itself) allow every IPv4 address. Keeping them apart makes an IPv6 entry unable to cover native IPv4.
 interface CompiledAllowlist {
-    allowed: BlockList;
+    ipv4: BlockList;
+    ipv6: BlockList;
     hostnames: Set<string>;
 }
 
@@ -77,15 +81,18 @@ function compileAllowlist(entries: readonly string[], key: string): CompiledAllo
     let compiled = compiledAllowlists.get(key);
     if (compiled) return compiled;
 
-    compiled = { allowed: new BlockList(), hostnames: new Set() };
+    compiled = { ipv4: new BlockList(), ipv6: new BlockList(), hostnames: new Set() };
     for (const entry of entries) {
         const lower = entry.toLowerCase();
         const slash = lower.indexOf('/');
         if (slash !== -1) {
             const network = lower.slice(0, slash);
-            compiled.allowed.addSubnet(network, Number(lower.slice(slash + 1)), isIP(network) === 4 ? 'ipv4' : 'ipv6');
-        } else if (isIP(lower) !== 0) {
-            compiled.allowed.addAddress(lower, isIP(lower) === 4 ? 'ipv4' : 'ipv6');
+            if (isIP(network) === 4) compiled.ipv4.addSubnet(network, Number(lower.slice(slash + 1)), 'ipv4');
+            else compiled.ipv6.addSubnet(network, Number(lower.slice(slash + 1)), 'ipv6');
+        } else if (isIP(lower) === 4) {
+            compiled.ipv4.addAddress(lower, 'ipv4');
+        } else if (isIP(lower) === 6) {
+            compiled.ipv6.addAddress(lower, 'ipv6');
         } else {
             compiled.hostnames.add(lower);
         }
@@ -103,8 +110,11 @@ export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?:
     if (policy === true || !isReservedIp(ip)) return;
 
     if (typeof policy !== 'boolean' && policy.length > 0) {
-        const { allowed, hostnames } = compileAllowlist(policy, policyKey(policy));
-        if (allowed.check(ip, isIP(ip) === 4 ? 'ipv4' : 'ipv6')) return;
+        const { ipv4, ipv6, hostnames } = compileAllowlist(policy, policyKey(policy));
+        // A native IPv4 address is checked against IPv4 rules only (see CompiledAllowlist). An IPv6 address is checked
+        // against both, so ::ffff:10.0.0.1 stays covered by 10.0.0.0/8 and by an IPv6 rule that contains it.
+        const covered = isIP(ip) === 4 ? ipv4.check(ip, 'ipv4') : ipv4.check(ip, 'ipv6') || ipv6.check(ip, 'ipv6');
+        if (covered) return;
         if (hostname !== undefined && hostnames.has(hostname.toLowerCase().replace(/^\[|\]$/g, ''))) return;
     }
 
