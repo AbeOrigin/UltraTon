@@ -8,7 +8,8 @@ import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
-import { resolveAndPinHost } from "./security/dns-pinner.ts";
+import { assertAllowedIp, resolveAndPinHost } from "./security/dns-pinner.ts";
+import { isIP } from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
@@ -206,6 +207,13 @@ export class UltraTonClient {
 
         while (true) {
             const urlObj: URL = parseSafeUrl(currentUrl);
+
+            // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
+            // URL.hostname keeps the brackets on IPv6 literals; strip them so isIP() recognizes them.
+            const literalHost = urlObj.hostname.replace(/^\[|\]$/g, '');
+            if (isIP(literalHost) !== 0) {
+                assertAllowedIp(literalHost, reqOpts.permitReservedIps);
+            }
 
             let currentTimeoutMs = reqOpts.timeoutMs;
             if (reqOpts.timeoutMs > 0) {
