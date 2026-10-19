@@ -399,6 +399,54 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
   });
 });
 
+describe("HTTP/2 redirects never downgrade from https to http", () => {
+  it("rejects an https to http redirect even with permitReservedIps, before opening another stream", async (t) => {
+    // The first hop's hostname must resolve without touching the network.
+    t.mock.method(dnsPromises, "lookup", async () => ({
+      address: "93.184.216.34",
+      family: 4,
+    }));
+
+    // A session whose every stream answers 302 to a plaintext loopback service.
+    const authorities: unknown[] = [];
+    const session = Object.assign(fakeSession(), {
+      request(headers: Record<string, unknown>) {
+        authorities.push(headers[":authority"]);
+        const stream = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stream.write = () => true;
+        stream.close = () => {};
+        stream.end = () => {
+          setImmediate(() => {
+            stream.emit("response", {
+              ":status": 302,
+              location: "http://127.0.0.1:1/x",
+            });
+            stream.emit("end");
+          });
+        };
+        return stream;
+      },
+    });
+    const connect = t.mock.fn(() => session);
+    const manager = new Http2SessionManager({}, connect as any);
+    t.after(() => manager.closeAll());
+    const client = new UltraTonHTTP2({}, manager);
+
+    await assert.rejects(
+      client.get("https://example.com/downgrade", {
+        permitReservedIps: true,
+        maxRedirects: 1,
+      }),
+      (err: unknown) =>
+        err instanceof SecureHttpError &&
+        /Redirect from https to http is not allowed/.test(err.message),
+    );
+    // Only the original https hop ever reached a session; nothing was asked of 127.0.0.1:1.
+    assert.deepStrictEqual(authorities, ["example.com"]);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+});
+
 type OnStream = (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => void;
 type Echo = {
   method: string;

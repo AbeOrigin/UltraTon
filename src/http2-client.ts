@@ -179,6 +179,14 @@ export class UltraTonHTTP2 {
           redirectCount++;
 
           const nextUrl = parseSafeUrl(location, currentUrl);
+
+          // A response fetched over TLS must never steer the request onto plaintext (e.g. the http loopback escape hatch).
+          if (parsedUrl.protocol === "https:" && nextUrl.protocol === "http:") {
+            throw new SecureHttpError(
+              "UltraTon: Redirect from https to http is not allowed.",
+            );
+          }
+
           // sanitizeHeaders already lowercased every key
           const nextHeaders = { ...reqOpts.headers } as Record<
             string,
