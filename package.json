@@ -11,18 +11,20 @@
   "bugs": {
     "url": "https://github.com/AbeOrigin/UltraTon/issues"
   },
-  "main": "./dist/http-client.js",
-  "types": "./dist/http-client.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/http-client.js",
-      "types": "./dist/http-client.d.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc",
     "build:strict": "tsc --noEmit --strict",
     "test": "node --test __tests__/**/*.test.ts",
+    "test:package": "node scripts/smoke-package.mjs",
     "prepublishOnly": "npm run test && npm run build",
     "demo:http2:server": "node demo/http2.server.ts",
     "demo:http2:client": "node demo/http2.client.ts",
