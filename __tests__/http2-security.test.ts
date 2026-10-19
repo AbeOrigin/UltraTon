@@ -818,7 +818,10 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     const origin = "https://late.test";
 
     // The caller that opened the lookup gives up at 100ms; the second one joined it with no deadline.
-    const gaveUp = manager.getSession(origin, undefined, false, AbortSignal.timeout(100));
+    // A ref'd timer, not AbortSignal.timeout(): that one is unref'd, and on Node 22 nothing else keeps the loop alive.
+    const deadline = new AbortController();
+    setTimeout(() => deadline.abort(new DOMException("deadline", "TimeoutError")), 100);
+    const gaveUp = manager.getSession(origin, undefined, false, deadline.signal);
     const patient = manager.getSession(origin, undefined, false);
     await assert.rejects(gaveUp, { name: "TimeoutError" });
     answer(PUBLIC_IP);
