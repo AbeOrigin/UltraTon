@@ -779,3 +779,46 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     assert.strictEqual(connect.mock.callCount(), 1);
   });
 });
+
+/**
+ * A caller that gives up on a lookup it opened leaves the pending map at once, so a later request
+ * starts a second attempt while a joiner is still waiting on the first. Both lookups can then answer.
+ */
+describe("HTTP/2 concurrent connection attempts for one pool key", () => {
+  it("never opens a second session for a key when a concurrent attempt already pooled one", { timeout: 5000 }, async (t) => {
+    const { manager, port, connect, accepted, openSessions } = await startFixture(t);
+    // Every lookup stays pending until the test answers it, so the order of the answers is the test's to choose.
+    const answers: Array<() => void> = [];
+    t.mock.method(dnsPromises, "lookup", (() =>
+      new Promise((resolve) => {
+        answers.push(() => resolve({ address: "127.0.0.1", family: 4 }));
+      })) as any);
+    const origin = `http://race.test:${port}`;
+    const giveUp = new AbortController();
+
+    // First attempt: the caller that opened it and a joiner with no deadline wait on one lookup.
+    const opener = manager.getSession(origin, undefined, true, giveUp.signal);
+    const joiner = manager.getSession(origin, undefined, true);
+    giveUp.abort(new Error("budget spent"));
+    await assert.rejects(opener, /budget spent/);
+
+    // The opener left the pending map, so this request starts a second attempt beside the first.
+    const newcomer = manager.getSession(origin, undefined, true);
+    assert.strictEqual(answers.length, 2);
+
+    // The second attempt answers and pools its session first; the first one's late answer must reuse it.
+    answers[1]();
+    const pooled = await newcomer;
+    answers[0]();
+    const joined = await joiner;
+
+    assert.strictEqual(connect.mock.callCount(), 1, "the late attempt opened a second connection");
+    assert.strictEqual(joined, pooled);
+
+    // The pooled session is the only one, so closeAll() must leave nothing open on the server.
+    await until(() => accepted() === connect.mock.callCount());
+    manager.closeAll();
+    await until(() => openSessions() === 0);
+    assert.strictEqual(openSessions(), 0, "a session survived closeAll()");
+  });
+});

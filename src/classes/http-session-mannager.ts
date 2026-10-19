@@ -260,6 +260,19 @@ export class Http2SessionManager {
       );
     }
 
+    // The caller that opened an attempt can give up and leave the pending map while a joiner keeps waiting, so a newer
+    // attempt may have pooled a session for this key during our lookup. Setting ours would orphan that one from the
+    // pool and closeAll(): use it. Nothing may be awaited between this check and the `set` below.
+    const pooled = this.#sessions.get(key);
+    if (
+      pooled &&
+      !pooled.session.closed &&
+      !pooled.session.destroyed &&
+      Date.now() - pooled.createdAt <= MAX_SESSION_LIFESPAN
+    ) {
+      return pooled;
+    }
+
     // http2.connect() requires a full URL (e.g. "https://172.233.17.91"), not a
     // bare IP. Reconstruct it using the original origin's scheme and port so the
     // TCP connection targets the resolved IP while SNI (servername) stays as the
