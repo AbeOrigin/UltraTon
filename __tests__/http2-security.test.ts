@@ -570,3 +570,164 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
     assert.deepStrictEqual(paths, ["/first"]);
   });
 });
+
+/**
+ * DNS runs inside the request's timeout budget. `hang.test` never gets an answer from
+ * its nameserver (a lookup promise that never settles); the injected connectFn is a spy
+ * that fails on purpose, so nothing here touches the network. Every test carries its own
+ * `timeout` so a regression is reported as a failure instead of hanging the run.
+ */
+describe("HTTP/2 DNS resolution timeout budget", () => {
+  const PUBLIC_IP = { address: "93.184.216.34", family: 4 };
+  const neverResolves = () => new Promise<never>(() => {});
+
+  const buildHangingDns = (t: TestContext) => {
+    const lookup = t.mock.method(dnsPromises, "lookup", neverResolves as any);
+    const connect = t.mock.fn(() => {
+      throw new Error("connect refused on purpose");
+    });
+    const manager = new Http2SessionManager({}, connect as any);
+    return { lookup, connect, manager, client: new UltraTonHTTP2({}, manager) };
+  };
+
+  /** Rejects with the error and when it did, so a request that wrongly succeeds fails the test. */
+  const failsAfter = async (request: Promise<unknown>, start: number) => {
+    try {
+      await request;
+    } catch (error) {
+      return { error, ms: Date.now() - start };
+    }
+    throw new Error("expected the request to reject");
+  };
+
+  it("bounds DNS resolution by timeoutMs", { timeout: 5000 }, async (t) => {
+    const { client, connect } = buildHangingDns(t);
+    const start = Date.now();
+
+    await assert.rejects(client.get("https://hang.test/", { timeoutMs: 300 }), (err: unknown) => {
+      assert.ok(err instanceof UltraTonNetworkTimeoutError);
+      assert.strictEqual(err.message, "UltraTon: Absolute execution time of 300ms exceeded.");
+      return true;
+    });
+
+    assert.ok(Date.now() - start < 1000, "rejected within the budget plus a small margin");
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("does not poison the pool when DNS hangs", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+
+    await assert.rejects(
+      client.get("https://hang.test/", { timeoutMs: 200 }),
+      UltraTonNetworkTimeoutError,
+    );
+    assert.strictEqual(lookup.mock.callCount(), 1);
+
+    // The nameserver recovers: the next request must ask it again instead of joining the hung lookup.
+    lookup.mock.mockImplementation((async () => PUBLIC_IP) as any);
+    await assert.rejects(
+      client.get("https://hang.test/", { timeoutMs: 2000 }),
+      (err: unknown) => {
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        return true;
+      },
+    );
+
+    assert.strictEqual(lookup.mock.callCount(), 2);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("applies each caller budget to a shared pending connection", { timeout: 5000 }, async (t) => {
+    const { client, lookup } = buildHangingDns(t);
+    const start = Date.now();
+
+    // Same origin and policy, issued in the same tick: the 200ms request opens the lookup, the 600ms one joins it.
+    const [short, long] = await Promise.all([
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 200 }), start),
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 600 }), start),
+    ]);
+
+    assert.strictEqual(lookup.mock.callCount(), 1, "the second request joined the pending lookup");
+    for (const [outcome, limit] of [[short, 200], [long, 600]] as const) {
+      assert.ok(outcome.error instanceof UltraTonNetworkTimeoutError);
+      assert.strictEqual(
+        outcome.error.message,
+        `UltraTon: Absolute execution time of ${limit}ms exceeded.`,
+      );
+      assert.ok(outcome.ms >= limit - 50, `${limit}ms request rejected too early (${outcome.ms}ms)`);
+      assert.ok(outcome.ms < limit + 300, `${limit}ms request rejected too late (${outcome.ms}ms)`);
+    }
+  });
+
+  it("lets a joined caller outlive the request that opened the lookup", { timeout: 5000 }, async (t) => {
+    const { client, lookup } = buildHangingDns(t);
+    const start = Date.now();
+
+    // Reverse order: the long request opens the lookup, the short one joins it and gives up first.
+    const [long, short] = await Promise.all([
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 600 }), start),
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 200 }), start),
+    ]);
+
+    assert.strictEqual(lookup.mock.callCount(), 1);
+    assert.ok(short.ms < 500, `the joined 200ms request rejected at ${short.ms}ms`);
+    assert.ok(long.ms >= 550 && long.ms < 900, `the 600ms request rejected at ${long.ms}ms`);
+    assert.ok(short.error instanceof UltraTonNetworkTimeoutError);
+    assert.ok(long.error instanceof UltraTonNetworkTimeoutError);
+  });
+
+  it("keeps timeoutMs: 0 as no timeout for a slow DNS answer", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+    lookup.mock.mockImplementation(
+      (() => new Promise((resolve) => setTimeout(() => resolve(PUBLIC_IP), 300))) as any,
+    );
+
+    await assert.rejects(
+      client.get("https://slow.test/", { timeoutMs: 0 }),
+      (err: unknown) => {
+        // Reaching the connect step proves the slow lookup was waited for, not timed out.
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        return true;
+      },
+    );
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("opens no connection when the lookup answers after every caller gave up", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+    let answer!: (value: unknown) => void;
+    lookup.mock.mockImplementation((() => new Promise((resolve) => { answer = resolve; })) as any);
+
+    await assert.rejects(
+      client.get("https://late.test/", { timeoutMs: 100 }),
+      UltraTonNetworkTimeoutError,
+    );
+    answer(PUBLIC_IP);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("hands a late lookup answer to a caller that is still within budget", { timeout: 5000 }, async (t) => {
+    const { manager, lookup, connect } = buildHangingDns(t);
+    let answer!: (value: unknown) => void;
+    lookup.mock.mockImplementation((() => new Promise((resolve) => { answer = resolve; })) as any);
+    const session = fakeSession();
+    connect.mock.mockImplementation((() => session) as any);
+    const origin = "https://late.test";
+
+    // The caller that opened the lookup gives up at 100ms; the second one joined it with no deadline.
+    const gaveUp = manager.getSession(origin, undefined, false, AbortSignal.timeout(100));
+    const patient = manager.getSession(origin, undefined, false);
+    await assert.rejects(gaveUp, { name: "TimeoutError" });
+    answer(PUBLIC_IP);
+
+    assert.strictEqual(await patient, session);
+    // The session is pooled under the policy and origin it was resolved for: no second lookup, no second connection.
+    assert.strictEqual(await manager.getSession(origin, undefined, false), session);
+    assert.strictEqual(lookup.mock.callCount(), 1);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+});

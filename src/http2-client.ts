@@ -119,10 +119,12 @@ export class UltraTonHTTP2 {
       const origin = parsedUrl.origin;
       const path = parsedUrl.pathname + parsedUrl.search;
 
-      const session = await this.#sessionManager.getSession(
+      // DNS and the pool wait run under the same budget as the stream: a nameserver that never answers must not
+      // outlive timeoutMs. The budget left here is what bounds session acquisition; it is measured again below.
+      const session = await this.#acquireSession(
         origin,
-        undefined,
-        reqOpts.permitReservedIps,
+        reqOpts,
+        this.#remainingBudget(reqOpts.timeoutMs, startTime),
       );
 
       // reqOpts.headers is already lowercased and CRLF/pseudo-header checked.
@@ -145,18 +147,9 @@ export class UltraTonHTTP2 {
         ...safeHeaders,
       };
 
-      // Measured after getSession, so DNS resolution and pool wait are already charged to the budget.
+      // Measured again after getSession, so DNS resolution and pool wait are already charged to the budget.
       // The TCP/TLS connect runs inside the stream and is bounded by the same remaining budget.
-      // A spent budget must throw here: a non-positive value would disable the stream timer.
-      let remainingMs = reqOpts.timeoutMs;
-      if (reqOpts.timeoutMs > 0) {
-        remainingMs = reqOpts.timeoutMs - (Date.now() - startTime);
-        if (remainingMs <= 0) {
-          throw new UltraTonNetworkTimeoutError(
-            `UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`,
-          );
-        }
-      }
+      const remainingMs = this.#remainingBudget(reqOpts.timeoutMs, startTime);
 
       const response = await this.#executeStream<T>(
         session,
@@ -229,6 +222,59 @@ export class UltraTonHTTP2 {
       }
 
       return response;
+    }
+  }
+
+  /**
+   * What is left of the budget `timeoutMs` shared by every hop and step of a request, or `timeoutMs` itself
+   * when it is not positive (0 means no timeout). A spent budget must throw here: a non-positive value
+   * would silently disable the timer it is passed to.
+   */
+  #remainingBudget(timeoutMs: number, startTime: number): number {
+    if (timeoutMs <= 0) return timeoutMs;
+    const remainingMs = timeoutMs - (Date.now() - startTime);
+    if (remainingMs <= 0) {
+      throw new UltraTonNetworkTimeoutError(
+        `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
+      );
+    }
+    return remainingMs;
+  }
+
+  /**
+   * Gets a session, giving up with the same error as the stream timer once `remainingMs` is spent.
+   * The timer lives only as long as this call and is cleared on every path.
+   */
+  async #acquireSession(
+    origin: string,
+    reqOpts: SecureUltraTonRequestOptions,
+    remainingMs: number,
+  ): Promise<ClientHttp2Session> {
+    if (remainingMs <= 0) {
+      return this.#sessionManager.getSession(
+        origin,
+        undefined,
+        reqOpts.permitReservedIps,
+      );
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(
+        new UltraTonNetworkTimeoutError(
+          `UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`,
+        ),
+      );
+    }, remainingMs);
+    try {
+      return await this.#sessionManager.getSession(
+        origin,
+        undefined,
+        reqOpts.permitReservedIps,
+        controller.signal,
+      );
+    } finally {
+      clearTimeout(timer);
     }
   }
 
