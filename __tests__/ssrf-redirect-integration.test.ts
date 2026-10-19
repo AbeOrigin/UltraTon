@@ -66,4 +66,24 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
             other.close();
         }
     });
+
+    it('Keeps auth dropped after returning to the original origin (A→B→A)', async () => {
+        const authSeenByB: Array<string | undefined> = [];
+        const other = http.createServer((req, res) => {
+            authSeenByB.push(req.headers.authorization);
+            res.writeHead(302, { location: `http://127.0.0.1:${port}/landing` });
+            res.end();
+        });
+        await new Promise<void>(r => other.listen(0, '127.0.0.1', r));
+        const otherPort = (other.address() as AddressInfo).port;
+        try {
+            lastAuth = 'unset';
+            const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, { auth: 'user:secret', maxRedirects: 2, permitReservedIps: true });
+            assert.equal(res.data.toString(), 'INTERNAL');
+            assert.deepEqual(authSeenByB, [undefined]);
+            assert.equal(lastAuth, undefined);
+        } finally {
+            other.close();
+        }
+    });
 });

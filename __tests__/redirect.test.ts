@@ -148,6 +148,20 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
         );
     });
 
+    it('Should block a NAT64 literal embedding a private IPv4', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        await assert.rejects(
+            client.get('https://[64:ff9b::a00:5]/'),
+            (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+        );
+    });
+
+    it('Should not block a public IP literal', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const res = await client.get('https://8.8.8.8/anything');
+        assert.strictEqual(res.statusCode, 404); // mock fallback route: reached the transport
+    });
+
     it('Should downgrade POST to GET on 303 and strip smuggling headers and body', async () => {
         const client = new UltraTonClient(createSmartMockTransport() as any);
         const res = await client.post('https://example.com/smuggle-start', 'massive-payload', {

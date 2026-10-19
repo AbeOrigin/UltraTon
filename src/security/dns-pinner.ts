@@ -4,8 +4,7 @@ import { SecureHttpError } from '../exceptions/secure-http.error.ts';
 
 const reservedIps = new BlockList();
 
-// BlockList also matches IPv4 rules against IPv4-mapped IPv6 forms (::ffff:a.b.c.d and ::ffff:hhhh:hhhh).
-for (const [network, prefix] of [
+const reservedIpv4Ranges = [
     ['0.0.0.0', 8],        // "This" network
     ['10.0.0.0', 8],       // Private
     ['100.64.0.0', 10],    // Carrier-grade NAT
@@ -20,14 +19,21 @@ for (const [network, prefix] of [
     ['203.0.113.0', 24],   // TEST-NET-3
     ['224.0.0.0', 4],      // Multicast
     ['240.0.0.0', 4]       // Reserved + limited broadcast (255.255.255.255)
-] as const) {
+] as const;
+
+for (const [network, prefix] of reservedIpv4Ranges) {
+    // BlockList also matches IPv4 rules against IPv4-mapped IPv6 forms (::ffff:a.b.c.d and ::ffff:hhhh:hhhh).
     reservedIps.addSubnet(network, prefix, 'ipv4');
+    // NAT64 well-known prefix (RFC 6052) carries the IPv4 address in its low 32 bits, so every reserved IPv4 range maps
+    // to the IPv6 range 64:ff9b::<network>/(96 + prefix). Public embedded IPv4 (64:ff9b::8.8.8.8) stays allowed.
+    reservedIps.addSubnet(`64:ff9b::${network}`, 96 + prefix, 'ipv6');
 }
 
-// ponytail: NAT64 (64:ff9b::/96), 6to4 (2002::/16) and Teredo (2001::/32) are not blocked because they legitimately
-// embed public IPv4 addresses. Upgrade path: decode the embedded IPv4 and validate it against the IPv4 rules above.
+// ponytail: 6to4 (2002::/16) and Teredo (2001::/32) are not blocked because they legitimately embed public IPv4
+// addresses and need host tunnel interfaces to be reachable. Upgrade path: decode the embedded IPv4 like NAT64 above.
 for (const [network, prefix] of [
     ['::', 96],            // Unspecified, loopback and IPv4-compatible (::7f00:1)
+    ['64:ff9b:1::', 48],   // Local-use NAT64 (RFC 8215): targets non-global IPv4 by definition
     ['100::', 64],         // Discard-only
     ['2001:db8::', 32],    // Documentation
     ['fc00::', 7],         // Unique local
