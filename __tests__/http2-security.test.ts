@@ -142,6 +142,11 @@ const startFixture = async (t: TestContext) => {
       stream.end();
       return;
     }
+    if (headers[":path"] === "/to-literal") {
+      stream.respond({ ":status": 302, location: `http://127.0.0.1:${port}/x` });
+      stream.end();
+      return;
+    }
     stream.respond({ ":status": 200, "content-type": "text/plain" });
     stream.end("H2-INTERNAL");
   });
@@ -396,6 +401,51 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const [url, options] = connect.mock.calls[0].arguments;
     assert.strictEqual(url, "https://[::1]:8443");
     assert.strictEqual((options as any).servername, "::1");
+  });
+});
+
+describe("HTTP/2 hostname entries in permitReservedIps", () => {
+  // "localhost" resolves to the fixture's loopback address; any other host is echoed, as for IP literals.
+  const mockLocalhostDns = (t: TestContext) =>
+    t.mock.method(dnsPromises, "lookup", async (host: string) => ({
+      address: host === "localhost" ? "127.0.0.1" : host,
+      family: 4,
+    }));
+
+  it("reaches a reserved IP through the hostname the allowlist names", async (t) => {
+    mockLocalhostDns(t);
+    const { client, port, connect } = await startFixture(t);
+
+    const res = await client.get(`http://localhost:${port}/`, { permitReservedIps: ["localhost"] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    // The connection went to the pinned address, not to the name.
+    assert.strictEqual(connect.mock.callCount(), 1);
+    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://127.0.0.1:${port}`);
+  });
+
+  it("blocks a redirect from the allowed hostname to a reserved IP literal without connecting", async (t) => {
+    const lookup = mockLocalhostDns(t);
+    const { client, port, connect } = await startFixture(t);
+
+    await assert.rejects(
+      client.get(`http://localhost:${port}/to-literal`, {
+        permitReservedIps: ["localhost"],
+        maxRedirects: 1,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, RESERVED);
+        return true;
+      },
+    );
+    // The second hop was resolved and judged as the literal it is, and no connection was opened for it.
+    assert.deepStrictEqual(
+      lookup.mock.calls.map((call) => call.arguments[0]),
+      ["localhost", "127.0.0.1"],
+    );
+    assert.strictEqual(connect.mock.callCount(), 1, "only the first hop connected");
   });
 });
 
@@ -777,6 +827,43 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     assert.strictEqual(await manager.getSession(origin, undefined, false), session);
     assert.strictEqual(lookup.mock.callCount(), 1);
     assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("charges a redirect hop's DNS to the shared timeout budget", { timeout: 5000 }, async (t) => {
+    // Hop 1 resolves at once and is answered with a 302 after 250ms; the redirect target's nameserver never answers.
+    t.mock.method(dnsPromises, "lookup", (async (host: string) =>
+      host === "hang.test" ? neverResolves() : PUBLIC_IP) as any);
+    const session = Object.assign(fakeSession(), {
+      request() {
+        const stream = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stream.write = () => true;
+        stream.close = () => {};
+        stream.end = () => {
+          setTimeout(() => {
+            stream.emit("response", { ":status": 302, location: "https://hang.test/" });
+            stream.emit("end");
+          }, 250);
+        };
+        return stream;
+      },
+    });
+    const connect = t.mock.fn(() => session);
+    const manager = new Http2SessionManager({}, connect as any);
+    t.after(() => manager.closeAll());
+    const client = new UltraTonHTTP2({}, manager);
+    const start = Date.now();
+
+    // 150ms of the 400ms budget is left for hop 2. A hop that got the full budget again would wait until ~650ms.
+    const { error, ms } = await failsAfter(
+      client.get("https://slow.test/", { timeoutMs: 400, maxRedirects: 2 }),
+      start,
+    );
+
+    assert.ok(error instanceof UltraTonNetworkTimeoutError);
+    assert.strictEqual(error.message, "UltraTon: Absolute execution time of 400ms exceeded.");
+    assert.ok(ms >= 350, `rejected before the budget could be spent (${ms}ms)`);
+    assert.ok(ms < 550, `the redirect hop got more than the remaining budget (${ms}ms)`);
+    assert.strictEqual(connect.mock.callCount(), 1, "only the first hop reached the connect step");
   });
 });
 

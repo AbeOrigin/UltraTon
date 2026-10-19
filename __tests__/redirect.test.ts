@@ -63,6 +63,14 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
                     (res as any).statusCode = 302;
                     (res as any).headers = { location: 'http://127.0.0.1:1/x' };
                 }
+                else if (urlObj.pathname === '/start') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'https://example.com/mid' };
+                }
+                else if (urlObj.pathname === '/mid') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'http://127.0.0.1:1/end' };
+                }
                 else if (urlObj.pathname === '/smuggle-start') {
                     (res as any).statusCode = 303;
                     (res as any).headers = { location: 'https://example.com/smuggle-end' };
@@ -157,6 +165,23 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
         );
         // Only the original https hop was ever attempted: the http://127.0.0.1 target never got a connection.
         assert.deepStrictEqual(hostsReached, ['example.com']);
+    });
+
+    it('Should reject an https to http downgrade in the middle of a chain that started on http', async () => {
+        const inner = createSmartMockTransport();
+        const reached: string[] = [];
+        const client = new UltraTonClient(((urlObj: URL, options: any, callback?: any) => {
+            reached.push(urlObj.href);
+            return inner(urlObj, options, callback);
+        }) as any);
+
+        // http://127.0.0.1:1/start -> https://example.com/mid -> http://127.0.0.1:1/end
+        await assert.rejects(
+            client.get('http://127.0.0.1:1/start', { permitReservedIps: true, maxRedirects: 5 }),
+            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message)
+        );
+        // The check applies to every hop, not only to a chain that started on https: /end was never contacted.
+        assert.deepStrictEqual(reached, ['http://127.0.0.1:1/start', 'https://example.com/mid']);
     });
 
     it('Should still follow a redirect that upgrades from http to https', async () => {
