@@ -4,8 +4,9 @@
  * input must fail BEFORE a session is requested. The option-validation tests
  * need no server: the injected connectFn records any attempt to connect and
  * the assertions prove there was none. The URL and reserved-IP tests use a
- * real h2c server on 127.0.0.1 whose `session` counter proves whether a
- * connection was ever opened.
+ * real h2c server on 127.0.0.1, but count connections on the client side: the
+ * connectFn is a spy around the real http2.connect, so "no connection" holds for
+ * any port (a server-side counter is racy and blind to everything but its own port).
  */
 import {
   afterEach,
@@ -19,6 +20,8 @@ import assert from "node:assert/strict";
 import EventEmitter from "node:events";
 import dnsPromises from "node:dns/promises";
 import {
+  type ClientHttp2Session,
+  connect as nativeConnect,
   createServer,
   type Http2Server,
   type IncomingHttpHeaders,
@@ -92,16 +95,31 @@ describe("HTTP/2 validation firewall", () => {
 
 const RESERVED = /prohibited internal\/reserved/;
 
+/** Polls instead of sleeping a fixed time: resolves as soon as `condition` holds, or after `ms`. */
+const until = async (condition: () => boolean, ms = 1000) => {
+  for (const deadline = Date.now() + ms; !condition() && Date.now() < deadline; ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+};
+
 /**
  * Cleartext HTTP/2 server on 127.0.0.1 plus a client wired to its own session
- * manager. `sessionCount()` is how many connections the server ever accepted.
- * Cleanup is registered on the test context so the process always exits.
+ * manager. `connect` is a spy around the real http2.connect: its call count is
+ * how many connections the client opened. The server-side `accepted()` and
+ * `openSessions()` only say what has arrived by now, so they are never used to
+ * prove that nothing was opened. Cleanup is registered on the test context so
+ * the process always exits.
  */
 const startFixture = async (t: TestContext) => {
-  let sessions = 0;
+  let accepted = 0;
+  let open = 0;
   const server = createServer();
-  server.on("session", () => {
-    sessions++;
+  server.on("session", (session) => {
+    accepted++;
+    open++;
+    session.on("close", () => {
+      open--;
+    });
   });
   server.on("stream", (stream, headers) => {
     if (headers[":path"] === "/redirect") {
@@ -115,7 +133,8 @@ const startFixture = async (t: TestContext) => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
 
-  const manager = new Http2SessionManager();
+  const connect = t.mock.fn(nativeConnect);
+  const manager = new Http2SessionManager({}, connect);
   t.after(async () => {
     manager.closeAll();
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -125,7 +144,10 @@ const startFixture = async (t: TestContext) => {
     port,
     url: `http://127.0.0.1:${port}/`,
     client: new UltraTonHTTP2({}, manager),
-    sessionCount: () => sessions,
+    manager,
+    connect,
+    accepted: () => accepted,
+    openSessions: () => open,
   };
 };
 
@@ -162,7 +184,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
   afterEach(() => mock.restoreAll());
 
   it("blocks reserved IP literals by default without opening a session", async (t) => {
-    const { client, port, sessionCount } = await startFixture(t);
+    const { client, port, connect } = await startFixture(t);
 
     for (const url of [
       `http://127.0.0.1:${port}/`,
@@ -176,7 +198,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
         return true;
       });
     }
-    assert.strictEqual(sessionCount(), 0);
+    assert.strictEqual(connect.mock.callCount(), 0);
   });
 
   it("connects to a reserved IP when permitReservedIps is true", async (t) => {
@@ -189,7 +211,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
   });
 
   it("does not reuse a pooled session for a request that forbids reserved IPs", async (t) => {
-    const { client, url, sessionCount } = await startFixture(t);
+    const { client, url, connect } = await startFixture(t);
 
     const allowed = await client.get(url, { permitReservedIps: true });
     assert.strictEqual(allowed.statusCode, 200);
@@ -198,11 +220,11 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
       client.get(url, { permitReservedIps: false }),
       RESERVED,
     );
-    assert.strictEqual(sessionCount(), 1);
+    assert.strictEqual(connect.mock.callCount(), 1);
   });
 
   it("does not share a pending connection across permit flags", async (t) => {
-    const { client, url, sessionCount } = await startFixture(t);
+    const { client, url, connect } = await startFixture(t);
 
     const [permitted, forbidden] = await Promise.allSettled([
       client.get(url, { permitReservedIps: true }),
@@ -212,11 +234,11 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     assert.strictEqual(permitted.status, "fulfilled");
     assert.strictEqual(forbidden.status, "rejected");
     assert.match((forbidden as PromiseRejectedResult).reason.message, RESERVED);
-    assert.strictEqual(sessionCount(), 1);
+    assert.strictEqual(connect.mock.callCount(), 1);
   });
 
   it("does not fail a permitted request because a concurrent forbidden one failed", async (t) => {
-    const { client, url, sessionCount } = await startFixture(t);
+    const { client, url, connect } = await startFixture(t);
 
     const [forbidden, permitted] = await Promise.allSettled([
       client.get(url, { permitReservedIps: false }),
@@ -226,11 +248,59 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     assert.strictEqual(forbidden.status, "rejected");
     assert.match((forbidden as PromiseRejectedResult).reason.message, RESERVED);
     assert.strictEqual(permitted.status, "fulfilled");
-    assert.strictEqual(sessionCount(), 1);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("dedupes concurrent permissive requests into one connection", async (t) => {
+    const { manager, port, connect, accepted, openSessions } = await startFixture(t);
+    const origin = `http://127.0.0.1:${port}`;
+
+    // The strict request starts first: the permissive ones must not wait for, or retry after, its failure.
+    const [strict, ...permissive] = await Promise.allSettled([
+      manager.getSession(origin, undefined, false),
+      ...Array.from({ length: 5 }, () => manager.getSession(origin, undefined, true)),
+    ]);
+
+    assert.strictEqual(strict.status, "rejected");
+    assert.match((strict as PromiseRejectedResult).reason.message, RESERVED);
+    const sessions = permissive.map((result) => {
+      assert.strictEqual(result.status, "fulfilled");
+      return (result as PromiseFulfilledResult<ClientHttp2Session>).value;
+    });
+    assert.strictEqual(connect.mock.callCount(), 1);
+    assert.ok(sessions.every((session) => session === sessions[0]));
+
+    // Wait for the server to see every connection first, or "0 open" below would hold vacuously.
+    await until(() => accepted() === connect.mock.callCount());
+    manager.closeAll();
+    await until(() => openSessions() === 0);
+    assert.strictEqual(openSessions(), 0);
+  });
+
+  it("closeSession closes the origin's sessions under both permit modes", async () => {
+    const opened: ReturnType<typeof fakeSession>[] = [];
+    const connect = mock.fn(() => {
+      opened.push(fakeSession());
+      return opened[opened.length - 1];
+    });
+    const manager = new Http2SessionManager({}, connect as any);
+    const origin = "https://8.8.8.8";
+
+    const strict = await manager.getSession(origin, undefined, false);
+    const permissive = await manager.getSession(origin, undefined, true);
+    assert.notStrictEqual(strict, permissive);
+    assert.strictEqual(connect.mock.callCount(), 2);
+
+    manager.closeSession(origin);
+
+    assert.ok(opened.every((session) => session.closed && session.destroyed));
+    // Nothing is left in the pool: the next caller of either mode connects afresh.
+    await manager.getSession(origin, undefined, true);
+    assert.strictEqual(connect.mock.callCount(), 3);
   });
 
   it("rejects credentials in the URL", async (t) => {
-    const { client, port, sessionCount } = await startFixture(t);
+    const { client, port, connect } = await startFixture(t);
 
     await assert.rejects(
       client.get(`http://u:p@127.0.0.1:${port}/`, {
@@ -238,7 +308,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
       }),
       /Credentials in URL/,
     );
-    assert.strictEqual(sessionCount(), 0);
+    assert.strictEqual(connect.mock.callCount(), 0);
   });
 
   it("rejects a redirect that downgrades to http on a non-local host", async (t) => {

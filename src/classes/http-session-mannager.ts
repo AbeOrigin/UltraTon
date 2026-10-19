@@ -21,15 +21,16 @@ interface SessionEntry {
   ip: string;
 }
 
-interface PendingConnection {
-  promise: Promise<SessionEntry>;
-  /** The policy the attempt was resolved under (a strict attempt can fail for a permissive caller). */
-  permitReservedIps: boolean;
-}
+/**
+ * Both maps below are keyed per policy as well as per origin: a session resolved
+ * with `permitReservedIps: true` must never be reachable by a caller that forbids it.
+ */
+const poolKey = (origin: string, permitReservedIps: boolean): string =>
+  `${permitReservedIps}|${origin}`;
 
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
-  #pendingConnections: Map<string, PendingConnection> = new Map();
+  #pendingConnections: Map<string, Promise<SessionEntry>> = new Map();
   readonly #tlsConfig?: SecureClientSessionOptions;
   readonly #connectFn: typeof nativeConnect;
 
@@ -42,12 +43,16 @@ export class Http2SessionManager {
   }
 
   /**
-   * Closes a specific session and removes it from the manager.
+   * Closes the sessions of a specific origin (under both reserved-IP policies)
+   * and removes them from the manager.
    */
   public closeSession(hostname: string): void {
-    const entry = this.#sessions.get(hostname);
-    if (entry) {
-      this.#destroySession(hostname, entry.session);
+    for (const permitReservedIps of [false, true]) {
+      const key = poolKey(hostname, permitReservedIps);
+      const entry = this.#sessions.get(key);
+      if (entry) {
+        this.#destroySession(key, entry.session);
+      }
     }
   }
 
@@ -55,8 +60,8 @@ export class Http2SessionManager {
    * Closes all active sessions and clears the manager.
    */
   public closeAll(): void {
-    for (const [hostname, entry] of this.#sessions.entries()) {
-      this.#destroySession(hostname, entry.session);
+    for (const [key, entry] of this.#sessions.entries()) {
+      this.#destroySession(key, entry.session);
     }
     this.#sessions.clear();
     this.#pendingConnections.clear();
@@ -64,12 +69,13 @@ export class Http2SessionManager {
 
   /**
    * Retrieves an existing active session or creates a new one.
-   * Handles concurrent requests for the same hostname by returning the same promise.
+   * Concurrent callers for the same origin and the same `permitReservedIps` share
+   * one connection attempt; callers of the other policy never join it (nor retry
+   * after it), so a failed strict attempt cannot fail or multiply permissive ones.
    *
-   * The pool is shared across callers, so the reserved-IP policy is enforced per
-   * caller on the way out: a session opened with `permitReservedIps: true` is never
-   * handed to a caller that forbids it, whether it was pooled, still connecting,
-   * or just created.
+   * The pool is shared across callers and keyed by policy and origin, so a session
+   * opened with `permitReservedIps: true` is never handed to a caller that forbids
+   * it. The IP check still runs on every hand-out as defence in depth.
    */
   public async getSession(
     hostname: string,
@@ -90,7 +96,8 @@ export class Http2SessionManager {
     overrideOptions: SecureClientSessionOptions | undefined,
     permitReservedIps: boolean,
   ): Promise<SessionEntry> {
-    const entry = this.#sessions.get(hostname);
+    const key = poolKey(hostname, permitReservedIps);
+    const entry = this.#sessions.get(key);
 
     if (entry) {
       const { session, createdAt } = entry;
@@ -112,49 +119,35 @@ export class Http2SessionManager {
         // Eagerly evict from the pool so concurrent callers arriving before the
         // async 'close' event fires correctly hit the #pendingConnections
         // deduplication gate instead of spawning a duplicate TCP connection.
-        if (this.#sessions.get(hostname)?.session === session) {
-          this.#sessions.delete(hostname);
+        if (this.#sessions.get(key)?.session === session) {
+          this.#sessions.delete(key);
         }
       }
     }
 
-    // If a connection attempt is already in progress, share it
-    const pendingConnection = this.#pendingConnections.get(hostname);
+    // If a connection attempt is already in progress for this policy, share it
+    const pendingConnection = this.#pendingConnections.get(key);
     if (pendingConnection) {
-      try {
-        return await pendingConnection.promise;
-      } catch (err: unknown) {
-        // An attempt made under a stricter policy may fail (reserved IP) for reasons
-        // that do not apply to this caller, so it retries under its own.
-        if (!permitReservedIps || pendingConnection.permitReservedIps) {
-          throw err;
-        }
-        return this.#establishConnection(
-          hostname,
-          overrideOptions,
-          permitReservedIps,
-        );
-      }
+      return pendingConnection;
     }
 
     const connectionPromise = this.#establishConnection(
+      key,
       hostname,
       overrideOptions,
       permitReservedIps,
     );
-    this.#pendingConnections.set(hostname, {
-      promise: connectionPromise,
-      permitReservedIps,
-    });
+    this.#pendingConnections.set(key, connectionPromise);
 
     try {
       return await connectionPromise;
     } finally {
-      this.#pendingConnections.delete(hostname);
+      this.#pendingConnections.delete(key);
     }
   }
 
   async #establishConnection(
+    key: string,
     hostname: string,
     overrideOptions: SecureClientSessionOptions | undefined,
     permitReservedIps: boolean,
@@ -220,23 +213,23 @@ export class Http2SessionManager {
 
     // Attach 'error' FIRST — before setTimeout or any other logic — to eliminate
     // the synchronous gap between session creation and error handler registration.
-    newSession.on("error", () => this.#destroySession(hostname, newSession));
+    newSession.on("error", () => this.#destroySession(key, newSession));
 
     newSession.setTimeout(IDLE_TIMEOUT);
-    newSession.on("goaway", () => this.#destroySession(hostname, newSession));
+    newSession.on("goaway", () => this.#destroySession(key, newSession));
     newSession.on("close", () => {
-      if (this.#sessions.get(hostname)?.session === newSession) {
-        this.#sessions.delete(hostname);
+      if (this.#sessions.get(key)?.session === newSession) {
+        this.#sessions.delete(key);
       }
     });
-    newSession.on("timeout", () => this.#destroySession(hostname, newSession));
+    newSession.on("timeout", () => this.#destroySession(key, newSession));
 
     const entry: SessionEntry = {
       session: newSession,
       createdAt: Date.now(),
       ip: pinnedHost,
     };
-    this.#sessions.set(hostname, entry);
+    this.#sessions.set(key, entry);
 
     return entry;
   }
@@ -244,7 +237,7 @@ export class Http2SessionManager {
   /**
    * Unified cleanup logic for destroying sessions.
    */
-  #destroySession(hostname: string, session: ClientHttp2Session): void {
+  #destroySession(key: string, session: ClientHttp2Session): void {
     try {
       if (!session.closed && !session.destroyed) {
         session.close();
@@ -252,8 +245,8 @@ export class Http2SessionManager {
     } catch {
       /* Session might have already transitioned state */
     } finally {
-      if (this.#sessions.get(hostname)?.session === session) {
-        this.#sessions.delete(hostname);
+      if (this.#sessions.get(key)?.session === session) {
+        this.#sessions.delete(key);
       }
       if (!session.destroyed) {
         session.destroy();
