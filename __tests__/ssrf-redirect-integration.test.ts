@@ -1,4 +1,5 @@
 import { describe, it, before, after } from 'node:test';
+import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import dnsPromises from 'node:dns/promises';
@@ -197,5 +198,66 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         } finally {
             other.close();
         }
+    });
+});
+
+// The SSRF check lives in the custom `lookup`, which Node only calls when it opens a NEW socket. A pooled keep-alive socket
+// therefore skips the check, so sockets must never be shared between requests that carry different reserved-IP policies.
+describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP policy (real sockets)', () => {
+    // One server per test: the keep-alive agents are module-level, so a shared port would leak pooled sockets between tests.
+    async function startCountingServer(t: TestContext) {
+        const server = http.createServer((_req, res) => { res.end('INTERNAL'); });
+        let connections = 0;
+        server.on('connection', () => { connections++; });
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        // Free keep-alive sockets are unref'd client-side; closing the server side ends them so nothing outlives the test.
+        t.after(() => { server.closeAllConnections(); server.close(); });
+        return { port: (server.address() as AddressInfo).port, connections: () => connections };
+    }
+
+    const reservedBlocked = (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message);
+
+    it('never reuses a keep-alive socket across reserved-IP policies', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        const { port, connections } = await startCountingServer(t);
+        const client = new UltraTonClient();
+        const url = `http://localhost:${port}/`;
+
+        // (A) default-deny is rejected by the lookup before any connection.
+        await assert.rejects(client.get(url), reservedBlocked);
+        assert.equal(connections(), 0);
+
+        // (B) permitReservedIps: true connects, and the socket goes back to the pool.
+        const allowed = await client.get(url, { permitReservedIps: true });
+        assert.equal((allowed.body as Buffer).toString(), 'INTERNAL');
+        assert.equal(connections(), 1);
+
+        // (C) the identical default-deny request must NOT ride (B)'s pooled socket.
+        await assert.rejects(client.get(url), reservedBlocked);
+        assert.equal(connections(), 1);
+    });
+
+    it('gives each distinct allowlist its own keep-alive pool', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        const { port, connections } = await startCountingServer(t);
+        const client = new UltraTonClient();
+        const url = `http://localhost:${port}/`;
+
+        await client.get(url, { permitReservedIps: ['127.0.0.0/8'] });
+        assert.equal(connections(), 1);
+
+        await client.get(url, { permitReservedIps: ['127.0.0.0/8', '10.0.0.0/8'] });
+        assert.equal(connections(), 2);
+    });
+
+    it('still reuses the keep-alive socket within one policy, however its allowlist is ordered or cased', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        const { port, connections } = await startCountingServer(t);
+        const client = new UltraTonClient();
+        const url = `http://localhost:${port}/`;
+
+        await client.get(url, { permitReservedIps: ['127.0.0.0/8', 'Localhost'] });
+        await client.get(url, { permitReservedIps: ['localhost', '127.0.0.0/8'] });
+        assert.equal(connections(), 1);
     });
 });

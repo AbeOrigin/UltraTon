@@ -4,12 +4,30 @@ import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
-import { assertAllowedIp, resolveAndPinHost } from "./security/dns-pinner.ts";
+import { assertAllowedIp, policyKey, resolveAndPinHost } from "./security/dns-pinner.ts";
+import type { ReservedIpPolicy } from "./security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from './constants.ts';
 import { parseSecurePayload, secureReviver } from './helpers/payload-parser.ts';
+
+// Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
+// host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
+// Hence one keep-alive agent pair per policy: sockets are never shared across policies.
+// ponytail: one agent pair per distinct policy, never evicted, so the map grows with distinct allowlists; the ceiling is the
+// number of policies an app uses. Same upgrade path as the compiled-allowlist cache: bound it if lists ever come from request-time input.
+const agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
+
+function agentFor(policy: ReservedIpPolicy, protocol: string): http.Agent {
+    const key = policyKey(policy);
+    let agents = agentsByPolicy.get(key);
+    if (!agents) {
+        agents = { http: new http.Agent({ keepAlive: true }), https: new https.Agent({ keepAlive: true }) };
+        agentsByPolicy.set(key, agents);
+    }
+    return protocol === 'http:' ? agents.http : agents.https;
+}
 
 export class UltraTonClient {
     // Internal testing interceptor
@@ -93,6 +111,7 @@ export class UltraTonClient {
             const req = transport(urlObj, {
                 ...reqOpts,
                 timeout: reqOpts.socketTimeoutMs,
+                agent: agentFor(reqOpts.permitReservedIps, urlObj.protocol),
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
                     resolveAndPinHost(lookupHostname, reqOpts.permitReservedIps)
                         .then(ip => {
