@@ -1,11 +1,13 @@
 import { UltraTonHTTP2 } from "../src/http2-client.ts";
 
 const client = new UltraTonHTTP2();
-const url = "http://mruuf-167-57-14-39.run.pinggy-free.link:33769";
+// The h2c server from demo/http2.server.ts (run `npm run demo:http2:server` first).
+const url = "http://127.0.0.1:8080";
 
 async function makeGet(url: string, id: number) {
   console.log(`[CLIENT] Starting request ${id} to ${url}`);
-  const response = await client.get(url);
+  // Loopback is a reserved address: the SSRF guard blocks it unless the caller opts in.
+  const response = await client.get(url, { permitReservedIps: true });
   console.log(`[CLIENT] Request ${id} finished. Status: ${response.statusCode}`);
   return response;
 }
