@@ -1,8 +1,12 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
 import https from 'node:https';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { SecureHttpError, UltraTonMemoryError } from '../src/errors.ts';
 
 describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
@@ -19,23 +23,19 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
             (req as any).destroy = () => {};
             
             (req as any).end = () => {
-                const res = new EventEmitter();
-                (res as any).statusCode = statusCode;
-                (res as any).headers = { 'x-method-used': options.method };
-
                 if (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH') {
                     // Echo the body back structurally if needed
                     mockResponseData = Buffer.concat(reqBody);
                 }
 
+                const dataBuffer = Buffer.isBuffer(mockResponseData) ? mockResponseData : Buffer.from(JSON.stringify(mockResponseData));
+                const res = Object.assign(Readable.from(dataBuffer.length > 0 ? [dataBuffer] : []), {
+                    statusCode,
+                    headers: { 'x-method-used': options.method }
+                });
+
                 if (callback) callback(res);
                 req.emit('response', res);
-                
-                setImmediate(() => {
-                    const dataBuffer = Buffer.isBuffer(mockResponseData) ? mockResponseData : Buffer.from(JSON.stringify(mockResponseData));
-                    if (dataBuffer.length > 0) res.emit('data', dataBuffer);
-                    res.emit('end');
-                });
             };
             return req as any;
         };
@@ -114,4 +114,45 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         assert.strictEqual(response.headers['x-method-used'], 'HEAD');
     });
 
+});
+
+// Real sockets: pins the body-consumption contract (size cap, truncated bodies) before any refactor of it.
+describe('UltraTonClient - response body consumption (real sockets)', () => {
+    let server: http.Server;
+    let base = '';
+
+    before(async () => {
+        server = http.createServer((req, res) => {
+            if (req.url === '/two-kb') {
+                res.write(Buffer.alloc(1024));
+                res.end(Buffer.alloc(1024));
+            } else if (req.url === '/truncated') {
+                res.writeHead(200, { 'content-length': '100' });
+                res.write(Buffer.alloc(10), () => res.socket!.destroy());
+            }
+        });
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    });
+
+    after(() => server.close());
+
+    it('Accepts a body exactly at maxBodySize', async () => {
+        const res = await new UltraTonClient().get(`${base}/two-kb`, { maxBodySize: 2048, permitReservedIps: true });
+        assert.strictEqual((res.body as Buffer).length, 2048);
+    });
+
+    it('Rejects with UltraTonMemoryError once the body exceeds maxBodySize', async () => {
+        await assert.rejects(
+            new UltraTonClient().get(`${base}/two-kb`, { maxBodySize: 1500, permitReservedIps: true }),
+            (err: unknown) => err instanceof UltraTonMemoryError
+        );
+    });
+
+    it('Rejects with SecureHttpError when the server cuts the body short', async () => {
+        await assert.rejects(
+            new UltraTonClient().get(`${base}/truncated`, { permitReservedIps: true }),
+            (err: unknown) => err instanceof SecureHttpError && !(err instanceof UltraTonMemoryError)
+        );
+    });
 });

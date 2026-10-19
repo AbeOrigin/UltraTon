@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { UltraTonParseError } from "../exceptions/parse.error.ts";
+import { UltraTonParseError } from "../errors.ts";
 
 export const MAX_SYNC_PARSE_BYTES = 5242880; // 5MB
 

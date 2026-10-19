@@ -1,8 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
 import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import { UltraTonClient } from "../src/http-client.ts";
-import { UltraTonParseError } from "../src/exceptions/parse.error.ts";
+import { UltraTonParseError } from "../src/errors.ts";
 
 describe("UltraTonClient - JSON Parsing Fix Validation", () => {
   // Helper to generate a fake https.request implementation
@@ -23,29 +24,28 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       (req as any).destroy = () => {};
 
       (req as any).end = () => {
-        const res = new EventEmitter();
-        (res as any).statusCode = statusCode;
-        (res as any).headers = {
-          "x-method-used": options.method,
-          "content-type": contentType,
-        };
+        let dataBuffer: Buffer;
+        if (Buffer.isBuffer(mockResponseData)) {
+          dataBuffer = mockResponseData;
+        } else if (typeof mockResponseData === "string") {
+          dataBuffer = Buffer.from(mockResponseData);
+        } else {
+          dataBuffer = Buffer.from(JSON.stringify(mockResponseData));
+        }
+
+        const res = Object.assign(
+          Readable.from(dataBuffer.length > 0 ? [dataBuffer] : []),
+          {
+            statusCode,
+            headers: {
+              "x-method-used": options.method,
+              "content-type": contentType,
+            },
+          },
+        );
 
         if (callback) callback(res);
         req.emit("response", res);
-
-        setImmediate(() => {
-          let dataBuffer: Buffer;
-          if (Buffer.isBuffer(mockResponseData)) {
-            dataBuffer = mockResponseData;
-          } else if (typeof mockResponseData === "string") {
-            dataBuffer = Buffer.from(mockResponseData);
-          } else {
-            dataBuffer = Buffer.from(JSON.stringify(mockResponseData));
-          }
-
-          if (dataBuffer.length > 0) res.emit("data", dataBuffer);
-          res.emit("end");
-        });
       };
       return req as any;
     };

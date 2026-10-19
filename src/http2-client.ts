@@ -12,12 +12,13 @@ import type {
   UltraTonOptionsHttp2,
   UltraTonRequestOptionsHttp2,
 } from "./types/request-options.types.ts";
-import { SecureHttpError } from "./exceptions/secure-http.error.ts";
-import { UltraTonParseError } from "./exceptions/parse.error.ts";
-import { UltraTonRedirectError } from "./exceptions/redirect.error.ts";
-import { UltraTonMemoryError } from "./exceptions/out-of-memory.error.ts";
-import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
-import { MAX_REDIRECTS_CEILING } from "./constants/limits.ts";
+import {
+  SecureHttpError,
+  UltraTonMemoryError,
+  UltraTonParseError,
+  UltraTonRedirectError,
+} from "./errors.ts";
+import { HTTP_CODES_REDIRECTS, MAX_REDIRECTS_CEILING } from "./constants.ts";
 import { parseSecurePayload, secureReviver } from "./helpers/payload-parser.ts";
 
 const globalPool = new Http2SessionManager();

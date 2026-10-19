@@ -1,4 +1,4 @@
-import { SecureHttpError } from "../exceptions/secure-http.error.ts";
+import { SecureHttpError } from "../errors.ts";
 
 /**
  * Safely parses a URL, avoids logging malformed strings,
@@ -27,7 +27,8 @@ export function parseSafeUrl(url: string, base?: string): URL {
 
     if (urlObj.protocol !== 'https:') {
         if (urlObj.protocol === 'http:' && isLocalhost) {
-            // [Localhost Escape Hatch] Accept plain HTTP only for local development testing
+            // [Localhost Escape Hatch] Accept plain HTTP only for local development testing. The reserved-IP check
+            // still rejects these hosts unless the caller also sets `permitReservedIps: true`.
         } else {
             throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
         }

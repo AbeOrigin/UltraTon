@@ -3,15 +3,15 @@ import {
   connect as nativeConnect,
   type SecureClientSessionOptions,
 } from "node:http2";
-import { MAX_SESSION_LIFESPAN } from "../constants/session.ts";
-import { IDLE_TIMEOUT } from "../constants/idle.ts";
 import {
+  IDLE_TIMEOUT,
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
+  MAX_SESSION_LIFESPAN,
   MAX_SESSION_MEMORY_MB,
-} from "../constants/limits.ts";
+} from "../constants.ts";
 import { resolveAndPinHost } from "../security/dns-pinner.ts";
-import { SecureHttpError } from "../exceptions/secure-http.error.ts";
+import { SecureHttpError } from "../errors.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;

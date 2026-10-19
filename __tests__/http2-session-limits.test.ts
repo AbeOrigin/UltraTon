@@ -11,7 +11,7 @@ import {
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
   MAX_SESSION_MEMORY_MB,
-} from "../src/constants/limits.ts";
+} from "../src/constants.ts";
 
 /**
  * Interface that mirrors what Http2SessionManager sends to http2.connect.

@@ -18,7 +18,7 @@ import dnsPromises from "node:dns/promises";
 import http2 from "node:http2";
 import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
 import { UltraTonHTTP2 } from "../src/http2-client.ts";
-import { UltraTonMemoryError } from "../src/exceptions/out-of-memory.error.ts";
+import { UltraTonMemoryError } from "../src/errors.ts";
 
 // ---------------------------------------------------------------------------
 // Mock factories

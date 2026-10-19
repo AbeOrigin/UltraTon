@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import EventEmitter from 'node:events';
 import dnsPromises from 'node:dns/promises';
 import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
-import { MAX_SESSION_LIFESPAN } from '../src/constants/session.ts';
-import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
+import { MAX_SESSION_LIFESPAN } from '../src/constants.ts';
+import { SecureHttpError } from '../src/errors.ts';
 
 describe('Http2SessionManager - DNS Pinning & Rotation', () => {
     let mockConnect: any;

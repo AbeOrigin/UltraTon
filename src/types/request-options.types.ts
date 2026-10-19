@@ -1,7 +1,7 @@
 import { SecureClientSessionOptions } from "node:http2";
 import { RequestOptions } from "node:https";
 
-type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'timeout' | 'auth' | 'signal'>
+type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'auth' | 'signal'>
 
 export interface UltraTonRequestOptions extends NativeHttpsOptions {
     /** 
