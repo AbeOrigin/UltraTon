@@ -1,6 +1,6 @@
 import dnsPromises from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
-import { SecureHttpError } from '../exceptions/secure-http.error.ts';
+import { SecureHttpError } from '../errors.ts';
 
 const reservedIps = new BlockList();
 
@@ -60,23 +60,11 @@ export function assertAllowedIp(ip: string, permitReservedIps: boolean): void {
 }
 
 export async function resolveAndPinHost(hostname: string, permitReservedIps: boolean = false): Promise<string> {
-    try {
-        // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
-        const result = await dnsPromises.lookup(hostname, { family: 0 });
+    // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
+    const { address } = await dnsPromises.lookup(hostname, { family: 0 }).catch((err: NodeJS.ErrnoException) => {
+        throw new SecureHttpError(`UltraTon: Hostname resolution failed for ${hostname} with code ${err.code || 'UNKNOWN_DNS_ERROR'}.`);
+    });
 
-        assertAllowedIp(result.address, permitReservedIps);
-
-        return result.address;
-    } catch (err: unknown) {
-        if (err instanceof SecureHttpError) {
-            throw err;
-        }
-
-        const standardError = err as NodeJS.ErrnoException;
-        const code = standardError.code || 'UNKNOWN_DNS_ERROR';
-
-        throw new SecureHttpError(
-            `UltraTon: Hostname resolution failed for ${hostname} with code ${code}.`
-        );
-    }
+    assertAllowedIp(address, permitReservedIps);
+    return address;
 }

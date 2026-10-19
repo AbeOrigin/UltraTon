@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
-import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
+import { SecureHttpError } from '../src/errors.ts';
 
 // Real sockets on purpose: Node skips the custom `lookup` for IP literals, so mocks cannot catch this class of bug.
 describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets)', () => {

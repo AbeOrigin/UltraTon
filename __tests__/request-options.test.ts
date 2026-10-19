@@ -20,7 +20,6 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         
         const result = buildSafeRequestOptions({
             method: 'POST',
-            timeout: 5000,
             auth: 'user:pass',
             headers: { 'x-request-id': '999' },
             signal: dummySignal,
@@ -30,7 +29,6 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         });
 
         assert.strictEqual(result.method, 'POST');
-        assert.strictEqual(result.timeout, 5000); 
         assert.strictEqual(result.auth, 'user:pass');
         assert.deepStrictEqual(result.headers, { 'x-request-id': '999' });
         assert.strictEqual(result.signal, dummySignal);

@@ -21,10 +21,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --experimental-strip-types --test __tests__/**/*.test.ts",
+    "test": "node --test __tests__/**/*.test.ts",
     "prepublishOnly": "npm run test && npm run build",
-    "demo:server": "node --experimental-strip-types demo/server.ts",
-    "demo:client": "node --experimental-strip-types demo/client.ts"
+    "demo:server": "node demo/server.ts",
+    "demo:client": "node demo/client.ts"
   },
   "engines": {
     "node": ">=24.14.0"

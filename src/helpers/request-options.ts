@@ -1,35 +1,30 @@
 import type { UltraTonRequestOptions, SecureUltraTonRequestOptions } from "../types/request-options.types.ts";
-import { MAX_REDIRECTS_CEILING } from "../constants/limits.ts";
+const MAX_REDIRECTS_CEILING = 20;
+const INT32_MAX = 2147483647;
 
 /**
- * Evaluates a runtime property against a strict primitive type boundary.
- * 
- * @param propName - The name of the property being evaluated (used for error contextualization).
- * @param value - The raw runtime value injected by the caller.
- * @param expectedType - The explicitly allowed primitive type.
  * @throws {TypeError} Synchronously throws if the value is defined but breaches the expected type.
  * @returns {boolean} `true` if the value exists and is valid. `false` if `undefined`.
  */
 function validateType(propName: string, value: unknown, expectedType: 'string' | 'number' | 'object' | 'boolean'): boolean {
     if (value === undefined) return false;
 
-    let isValid = false;
-
-    if (expectedType === 'string') {
-        isValid = typeof value === 'string';
-    } else if (expectedType === 'number') {
-        isValid = typeof value === 'number' && !Number.isNaN(value);
-    } else if (expectedType === 'object') {
-        isValid = typeof value === 'object' && value !== null && !Array.isArray(value);
-    } else if (expectedType === 'boolean') {
-        isValid = typeof value === 'boolean';
-    }
+    const isValid = expectedType === 'object' ? typeof value === 'object' && value !== null && !Array.isArray(value)
+        : expectedType === 'number' ? typeof value === 'number' && !Number.isNaN(value)
+        : typeof value === expectedType;
 
     if (!isValid) {
         throw new TypeError(`UltraTon: Expected '${propName}' to be a ${expectedType}, received ${typeof value}`);
     }
 
     return true;
+}
+
+/** Non-negative integer up to `max`; a wrong type throws, an out-of-range value falls back. */
+function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX): number {
+    return validateType(propName, value, 'number') && Number.isInteger(value) && (value as number) >= 0 && (value as number) <= max
+        ? value as number
+        : fallback;
 }
 
 /**
@@ -101,39 +96,12 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
         safeOptions.headers = sanitizeHeaders(options.headers as Record<string, unknown>);
     }
 
-    if (validateType('timeout', options.timeout, 'number') && Number.isInteger(options.timeout) && options.timeout! >= 0 && options.timeout! <= 2147483647) {
-        safeOptions.timeout = options.timeout;
-    }
-
-    if (validateType('maxBodySize', options.maxBodySize, 'number') && Number.isInteger(options.maxBodySize) && options.maxBodySize! >= 0 && options.maxBodySize! <= 2147483647) {
-        safeOptions.maxBodySize = options.maxBodySize;
-    } else {
-        safeOptions.maxBodySize = 1024 * 1024 * 2; // Strict 2MB Fallback
-    }
-
-    if (validateType('socketTimeoutMs', options.socketTimeoutMs, 'number') && Number.isInteger(options.socketTimeoutMs) && options.socketTimeoutMs! >= 0 && options.socketTimeoutMs! <= 2147483647) {
-        safeOptions.socketTimeoutMs = options.socketTimeoutMs;
-    } else {
-        safeOptions.socketTimeoutMs = 10 * 1000; // Strict 10s Fallback
-    }
-
-    if (validateType('timeoutMs', options.timeoutMs, 'number') && Number.isInteger(options.timeoutMs) && options.timeoutMs! >= 0 && options.timeoutMs! <= 2147483647) {
-        safeOptions.timeoutMs = options.timeoutMs;
-    } else {
-        safeOptions.timeoutMs = 30 * 1000; // Strict 30s Fallback
-    }
-
-    if (validateType('maxRedirects', options.maxRedirects, 'number') && options.maxRedirects! >= 0 && Number.isInteger(options.maxRedirects)) {
-        safeOptions.maxRedirects = Math.min(options.maxRedirects!, MAX_REDIRECTS_CEILING);
-    } else {
-        safeOptions.maxRedirects = 0; // Strict 0 Fallback
-    }
-
-    if (validateType('permitReservedIps', options.permitReservedIps, 'boolean')) {
-        safeOptions.permitReservedIps = options.permitReservedIps;
-    } else {
-        safeOptions.permitReservedIps = false; // Strict fallback: block SSRF
-    }
+    safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024); // Strict 2MB fallback
+    safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000); // Strict 10s fallback
+    safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000); // Strict 30s fallback
+    safeOptions.maxRedirects = Math.min(intOption('maxRedirects', options.maxRedirects, 0, Infinity), MAX_REDIRECTS_CEILING);
+    // Strict fallback: block SSRF
+    safeOptions.permitReservedIps = validateType('permitReservedIps', options.permitReservedIps, 'boolean') && options.permitReservedIps;
 
     return safeOptions as unknown as SecureUltraTonRequestOptions;
 }
