@@ -728,6 +728,7 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
       (err: unknown) => {
         assert.ok(err instanceof SecureHttpError);
         assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.doesNotMatch(err.message, /hang\.test/, "the hostname must not be echoed into the message");
         return true;
       },
     );

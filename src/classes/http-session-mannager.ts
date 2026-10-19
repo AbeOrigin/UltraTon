@@ -256,7 +256,7 @@ export class Http2SessionManager {
     // Every caller timed out while the lookup hung: do not open a connection nobody will use.
     if (!wanted()) {
       throw new SecureHttpError(
-        `UltraTon: Connection attempt to ${bareHost} was abandoned before it connected.`,
+        "UltraTon: Connection attempt was abandoned before it connected.",
       );
     }
 
@@ -295,7 +295,7 @@ export class Http2SessionManager {
       newSession = this.#connectFn(connectUrl, connectionOptions);
     } catch (err: unknown) {
       throw new SecureHttpError(
-        `UltraTon: Failed to establish HTTP/2 connection to ${bareHost}: ${
+        `UltraTon: Failed to establish HTTP/2 connection: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

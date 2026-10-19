@@ -28,7 +28,8 @@ export function parseSafeUrl(url: string, base?: string): URL {
     if (urlObj.protocol !== 'https:') {
         if (urlObj.protocol === 'http:' && isLocalhost) {
             // [Localhost Escape Hatch] Accept plain HTTP only for local development testing. The reserved-IP check
-            // still rejects these hosts unless the caller also sets `permitReservedIps: true`.
+            // still rejects these hosts unless the caller also sets `permitReservedIps` to allow the loopback target
+            // (true, or an allowlist covering it such as ['127.0.0.0/8'] or ['localhost']).
         } else {
             throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
         }
