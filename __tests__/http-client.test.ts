@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
 import https from 'node:https';
 import http from 'node:http';
@@ -22,23 +23,19 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
             (req as any).destroy = () => {};
             
             (req as any).end = () => {
-                const res = new EventEmitter();
-                (res as any).statusCode = statusCode;
-                (res as any).headers = { 'x-method-used': options.method };
-
                 if (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH') {
                     // Echo the body back structurally if needed
                     mockResponseData = Buffer.concat(reqBody);
                 }
 
+                const dataBuffer = Buffer.isBuffer(mockResponseData) ? mockResponseData : Buffer.from(JSON.stringify(mockResponseData));
+                const res = Object.assign(Readable.from(dataBuffer.length > 0 ? [dataBuffer] : []), {
+                    statusCode,
+                    headers: { 'x-method-used': options.method }
+                });
+
                 if (callback) callback(res);
                 req.emit('response', res);
-                
-                setImmediate(() => {
-                    const dataBuffer = Buffer.isBuffer(mockResponseData) ? mockResponseData : Buffer.from(JSON.stringify(mockResponseData));
-                    if (dataBuffer.length > 0) res.emit('data', dataBuffer);
-                    res.emit('end');
-                });
             };
             return req as any;
         };

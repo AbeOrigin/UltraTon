@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonParseError } from '../src/errors.ts';
 
@@ -14,22 +15,13 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
             (req as any).destroy = () => {};
             
             (req as any).end = () => {
-                const res = new EventEmitter();
-                (res as any).destroy = () => {};
-                (res as any).statusCode = 200;
-                (res as any).headers = { 'content-type': 'application/json' };
+                const body = urlObj.pathname === '/valid-json' ? [Buffer.from(JSON.stringify({ user: 'abe', role: 'architect' }))]
+                    : urlObj.pathname === '/invalid-json' ? [Buffer.from('<html>Sorry, Bad Gateway</html>')]
+                    : [];
+                const res = Object.assign(Readable.from(body), { statusCode: 200, headers: { 'content-type': 'application/json' } });
 
                 if (callback) callback(res);
                 req.emit('response', res);
-                
-                setImmediate(() => {
-                    if (urlObj.pathname === '/valid-json') {
-                        res.emit('data', Buffer.from(JSON.stringify({ user: 'abe', role: 'architect' })));
-                    } else if (urlObj.pathname === '/invalid-json') {
-                        res.emit('data', Buffer.from('<html>Sorry, Bad Gateway</html>'));
-                    }
-                    res.emit('end');
-                });
             };
             return req as any;
         };

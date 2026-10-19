@@ -51,60 +51,33 @@ export class UltraTonClient {
         return this._request<T>(url, { ...options, method: 'OPTIONS' });
     }
 
-    private _consumeResponseBuffer(
+    private async _consumeResponseBuffer(
         res: IncomingMessage,
         req: ClientRequest,
         reqOpts: SecureUltraTonRequestOptions,
         executionTimer: NodeJS.Timeout | undefined
     ): Promise<Buffer> {
-        return new Promise((resolve, reject) => {
-            let settled = false;
-            let currentBodySize = 0;
-            const chunks: Buffer[] = [];
+        const chunks: Buffer[] = [];
+        let currentBodySize = 0;
 
-            res.on('data', (chunk: Buffer) => {
-                if (settled) return;
+        try {
+            // Leaving the loop early (throw) destroys `res`; a premature close or socket error throws here.
+            for await (const chunk of res) {
                 currentBodySize += chunk.length;
                 if (currentBodySize > reqOpts.maxBodySize) {
-                    settled = true;
-                    res.destroy();
                     req.destroy();
-                    chunks.length = 0;
-                    clearTimeout(executionTimer);
-                    reject(new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`));
-                    return;
+                    throw new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`);
                 }
                 chunks.push(chunk);
-            });
+            }
+        } catch (err: unknown) {
+            if (err instanceof UltraTonMemoryError) throw err;
+            throw new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.');
+        } finally {
+            clearTimeout(executionTimer);
+        }
 
-            res.on('aborted', () => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(executionTimer);
-                reject(new SecureHttpError('UltraTon: The connection was abruptly aborted by the server.'));
-            });
-
-            res.on('close', () => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(executionTimer);
-                reject(new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.'));
-            });
-
-            res.on('error', (err: Error) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(executionTimer);
-                reject(err);
-            });
-
-            res.on('end', () => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(executionTimer);
-                resolve(Buffer.concat(chunks, currentBodySize));
-            });
-        });
+        return Buffer.concat(chunks, currentBodySize);
     }
 
     private _executeSingleNetworkHop(

@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
 import { SecureHttpError, UltraTonNetworkTimeoutError, UltraTonRedirectError } from '../src/errors.ts';
 import https from 'node:https';
@@ -19,9 +20,8 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
             (req as any).destroy = () => {};
             
             (req as any).end = () => {
-                const res = new EventEmitter();
-                (res as any).destroy = () => {};
-                
+                const res = Readable.from([Buffer.from(JSON.stringify({}))]);
+
                 // MOCK ROUTING TABLE
                 if (urlObj.pathname === '/default-deny') {
                     (res as any).statusCode = 302;
@@ -83,13 +83,6 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
 
                 if (callback) callback(res);
                 req.emit('response', res);
-                
-                if (urlObj.pathname !== '/tarpit-step2') {
-                    setImmediate(() => {
-                        res.emit('data', Buffer.from(JSON.stringify({})));
-                        res.emit('end');
-                    });
-                }
             };
             return req as any;
         };
