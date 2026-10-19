@@ -78,6 +78,21 @@ describe("HTTP/2 validation firewall", () => {
     assert.strictEqual(connect.mock.callCount(), 0);
   });
 
+  it("rejects a caller-supplied host header on HTTP/2", async (t) => {
+    const { client, connect } = buildClient(t);
+
+    // Mixed case on purpose: the check must not depend on how the caller spelled the key.
+    await assert.rejects(
+      client.get("https://example.com/", { headers: { Host: "evil.example" } }),
+      (err: unknown) => {
+        assert.ok(err instanceof TypeError);
+        assert.match(err.message, /'host' header cannot be set on HTTP\/2 requests/);
+        return true;
+      },
+    );
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
   it("rejects a non-number maxBodySize", async (t) => {
     const { client, connect } = buildClient(t);
 

@@ -195,6 +195,7 @@ export class UltraTonHTTP2 {
             delete nextHeaders["authorization"];
             delete nextHeaders["cookie"];
             delete nextHeaders["proxy-authorization"];
+            delete nextHeaders["host"];
           }
 
           let nextMethod = method;
@@ -239,13 +240,20 @@ export class UltraTonHTTP2 {
     options: UltraTonRequestOptionsHttp2,
   ): SecureUltraTonRequestOptions {
     const g = this.#globalOptions;
-    return buildSafeRequestOptions({
+    const safe = buildSafeRequestOptions({
       ...options,
       maxRedirects: options.maxRedirects ?? g.maxRedirects,
       timeoutMs: options.timeoutMs ?? g.timeoutMs,
       maxBodySize: options.maxBodySize ?? g.maxBodySize,
       permitReservedIps: options.permitReservedIps ?? g.permitReservedIps,
     });
+    // RFC 9113 8.3.1: a host header must not differ from :authority, which comes from the URL.
+    if (safe.headers && Object.hasOwn(safe.headers, "host")) {
+      throw new TypeError(
+        "UltraTon: The 'host' header cannot be set on HTTP/2 requests; it is derived from the URL.",
+      );
+    }
+    return safe;
   }
 
   #executeStream<T = unknown>(

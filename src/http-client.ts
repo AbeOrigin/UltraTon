@@ -202,6 +202,7 @@ export class UltraTonClient {
                     delete nextHeaders['authorization'];
                     delete nextHeaders['cookie'];
                     delete nextHeaders['proxy-authorization'];
+                    delete nextHeaders['host'];
                 }
 
                 let nextMethod = reqOpts.method;
