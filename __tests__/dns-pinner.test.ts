@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { isReservedIp, resolveAndPinHost } from '../src/security/dns-pinner.ts';
+import { assertAllowedIp, isReservedIp, policyKey, resolveAndPinHost } from '../src/security/dns-pinner.ts';
 import { SecureHttpError } from '../src/errors.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
@@ -119,8 +119,187 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
             () => resolveAndPinHost('ghost.domain.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
-                assert.match((err as Error).message, /ghost\.domain\.com/);
+                // S5: the message must not become an oracle for the hostname that was looked up.
                 assert.match((err as Error).message, /ENOTFOUND/);
+                assert.doesNotMatch((err as Error).message, /ghost\.domain\.com/);
+                return true;
+            }
+        );
+    });
+
+});
+
+describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
+
+    it('a CIDR entry permits a reserved IP inside it and only inside it', () => {
+        assert.doesNotThrow(() => assertAllowedIp('127.0.0.1', ['127.0.0.0/8']));
+        assert.throws(() => assertAllowedIp('127.0.0.1', ['10.0.0.0/8']), SecureHttpError);
+    });
+
+    it('a single-IP entry permits exactly that address', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['10.1.2.3']));
+        assert.throws(() => assertAllowedIp('10.1.2.4', ['10.1.2.3']), SecureHttpError);
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1']));
+    });
+
+    it('a hostname entry permits a reserved IP only for that exact hostname', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['api.internal'], 'api.internal'));
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['api.internal'], 'other.internal'), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['api.internal']), SecureHttpError, 'no hostname given');
+    });
+
+    it('hostname matching is case-insensitive and exact (no wildcards, no suffixes)', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['API.Internal'], 'api.INTERNAL'));
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['*.internal'], 'api.internal'), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['internal'], 'api.internal'), SecureHttpError);
+        // An IP literal is never matched through the hostname set.
+        assert.throws(() => assertAllowedIp('127.0.0.1', ['localhost'], '127.0.0.1'), SecureHttpError);
+    });
+
+    it('public IPs always pass, whatever the policy', () => {
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', []));
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', false));
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', ['10.0.0.0/8']));
+    });
+
+    it('an IPv6 CIDR entry permits a reserved IPv6 address', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1/128']));
+        assert.throws(() => assertAllowedIp('::1', ['fe80::/10']), SecureHttpError);
+    });
+
+    it('an IPv4 entry also covers the IPv4-mapped form of an address inside it', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:127.0.0.1', ['127.0.0.0/8']));
+    });
+
+    it('an IPv6 entry never covers a native IPv4 address, whatever its prefix length', () => {
+        // BlockList checks an IPv4 address against IPv6 rules as ::ffff:a.b.c.d, so ::/0 .. ::/80 and ::ffff:0:0/96 contain all of IPv4.
+        for (const entry of ['::/0', '::/80', '::/96', '::ffff:0:0/96']) {
+            for (const ip of ['169.254.169.254', '127.0.0.1', '10.1.2.3']) {
+                assert.throws(() => assertAllowedIp(ip, [entry]), SecureHttpError, `${entry} must not cover ${ip}`);
+                assert.throws(() => assertAllowedIp(ip, [entry], 'api.internal'), SecureHttpError, `${entry} must not cover ${ip}`);
+            }
+        }
+    });
+
+    it('an IPv4 entry never covers a native IPv6 address', () => {
+        for (const ip of ['fe80::1', '::1', 'fd00:ec2::254']) {
+            assert.throws(() => assertAllowedIp(ip, ['0.0.0.0/0']), SecureHttpError, `0.0.0.0/0 must not cover ${ip}`);
+        }
+        assert.doesNotThrow(() => assertAllowedIp('127.0.0.1', ['0.0.0.0/0']));
+    });
+
+    it('an IPv6 entry still covers the native IPv6 addresses inside it', () => {
+        assert.doesNotThrow(() => assertAllowedIp('fd00::1', ['::/0']));
+        assert.doesNotThrow(() => assertAllowedIp('fe80::1', ['::/0']));
+        // :: and ::1 are the unspecified and loopback addresses, not IPv4-compatible ones: they stay native IPv6.
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::/0']));
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1/128']));
+        assert.throws(() => assertAllowedIp('fd00::1', ['fe80::/10']), SecureHttpError);
+    });
+
+    // An IPv6 address that embeds an IPv4 in its low 32 bits (mapped ::ffff:0:0/96, compatible ::/96, NAT64 64:ff9b::/96
+    // and 64:ff9b:1::/48) is judged only by that IPv4 against the IPv4 entries; IPv6 entries never cover it.
+    const embeddingForms = [
+        // [address, the IPv4 it embeds]
+        ['::ffff:169.254.169.254', '169.254.169.254'],
+        ['::ffff:a9fe:a9fe', '169.254.169.254'],
+        ['0:0:0:0:0:ffff:a9fe:a9fe', '169.254.169.254'],
+        ['0000:0000:0000:0000:0000:FFFF:A9FE:A9FE', '169.254.169.254'],
+        ['::7f00:1', '127.0.0.1'],
+        ['::127.0.0.1', '127.0.0.1'],
+        ['0:0:0:0:0:0:7f00:1', '127.0.0.1'],
+        ['64:ff9b::a9fe:a9fe', '169.254.169.254'],
+        ['64:ff9b::169.254.169.254', '169.254.169.254'],
+        ['64:ff9b:0:0:0:0:a9fe:a9fe', '169.254.169.254'],
+        ['64:ff9b:1::a9fe:a9fe', '169.254.169.254'],
+        ['::ffff:10.0.0.1', '10.0.0.1'],
+        ['::ffff:a00:1', '10.0.0.1'],
+        ['64:ff9b::a00:1', '10.0.0.1'],
+        ['64:ff9b:1::a00:1', '10.0.0.1'],
+        ['::a00:1', '10.0.0.1'],
+    ] as const;
+
+    it('an IPv6 address embedding an IPv4 is not covered by IPv6 entries, not even ::/0', () => {
+        for (const [ip] of embeddingForms) {
+            for (const entry of ['::/0', '::/80', '::/96', '::ffff:0:0/96', '64:ff9b::/96', '64:ff9b:1::/48', ip]) {
+                assert.throws(() => assertAllowedIp(ip, [entry]), SecureHttpError, `${entry} must not cover ${ip}`);
+            }
+        }
+    });
+
+    it('an IPv6 address embedding an IPv4 is covered exactly when its embedded IPv4 is', () => {
+        for (const [ip, embedded] of embeddingForms) {
+            assert.doesNotThrow(() => assertAllowedIp(ip, [`${embedded}/32`]), `${embedded}/32 must cover ${ip}`);
+            assert.doesNotThrow(() => assertAllowedIp(ip, [embedded]), `${embedded} must cover ${ip}`);
+            assert.doesNotThrow(() => assertAllowedIp(ip, ['0.0.0.0/0']), `0.0.0.0/0 must cover ${ip}`);
+            assert.throws(() => assertAllowedIp(ip, ['203.0.113.0/24']), SecureHttpError, `an unrelated IPv4 entry must not cover ${ip}`);
+        }
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:10.0.0.1', ['10.0.0.0/8']));
+        assert.doesNotThrow(() => assertAllowedIp('64:ff9b::a00:1', ['10.0.0.0/8']));
+        assert.throws(() => assertAllowedIp('::ffff:127.0.0.1', ['10.0.0.0/8']), SecureHttpError);
+        assert.throws(() => assertAllowedIp('64:ff9b::7f00:1', ['10.0.0.0/8']), SecureHttpError);
+    });
+
+    it('an IPv6 entry written in mapped form is inert: it covers neither the mapped nor the native IPv4 address', () => {
+        assert.throws(() => assertAllowedIp('::ffff:10.0.0.1', ['::ffff:0:0/96']), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.0.0.1', ['::ffff:0:0/96']), SecureHttpError);
+    });
+
+    it('a hostname entry still allows an embedding address reached through that hostname', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:a9fe:a9fe', ['api.internal'], 'api.internal'));
+        assert.throws(() => assertAllowedIp('::ffff:a9fe:a9fe', ['api.internal'], 'other.internal'), SecureHttpError);
+    });
+
+    it('true permits everything; false and an empty list block every reserved IP', () => {
+        assert.doesNotThrow(() => assertAllowedIp('169.254.169.254', true));
+        assert.throws(() => assertAllowedIp('169.254.169.254', false), SecureHttpError);
+        assert.throws(() => assertAllowedIp('169.254.169.254', []), SecureHttpError);
+    });
+
+    it('the reserved-IP message names the option and leaks neither the IP nor the hostname', () => {
+        for (const policy of [false, [], ['10.0.0.0/8']] as const) {
+            assert.throws(
+                () => assertAllowedIp('127.0.0.1', policy, 'secret-host.internal'),
+                (err: unknown) => {
+                    assert.ok(err instanceof SecureHttpError);
+                    assert.match(err.message, /prohibited internal\/reserved network IP/);
+                    assert.match(err.message, /permitReservedIps/);
+                    assert.doesNotMatch(err.message, /127\.0\.0\.1/);
+                    assert.doesNotMatch(err.message, /secret-host/);
+                    return true;
+                }
+            );
+        }
+    });
+
+    it('policyKey: false and [] are deny, true is all, lists are normalized and order-independent', () => {
+        assert.equal(policyKey(false), 'deny');
+        assert.equal(policyKey([]), 'deny');
+        assert.equal(policyKey(true), 'all');
+        assert.equal(policyKey(['B.example', '10.0.0.0/8']), 'list:10.0.0.0/8,b.example');
+        assert.equal(policyKey(['B.example', '10.0.0.0/8']), policyKey(['10.0.0.0/8', 'b.example']));
+        assert.notEqual(policyKey(['10.0.0.0/8']), policyKey(['10.0.0.0/9']));
+    });
+
+    it('resolveAndPinHost hands the looked-up hostname to the policy', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '10.1.2.3', family: 4 }));
+
+        assert.equal(await resolveAndPinHost('api.internal', ['api.internal']), '10.1.2.3');
+        await assert.rejects(() => resolveAndPinHost('other.internal', ['api.internal']), SecureHttpError);
+        await assert.rejects(() => resolveAndPinHost('api.internal', []), SecureHttpError);
+        assert.equal(await resolveAndPinHost('anything.example', ['10.0.0.0/8']), '10.1.2.3');
+    });
+
+    it('a DNS failure message carries the error code but not the hostname', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => {
+            throw Object.assign(new Error('getaddrinfo EAI_AGAIN ghost.domain.com'), { code: 'EAI_AGAIN' });
+        });
+
+        await assert.rejects(
+            () => resolveAndPinHost('ghost.domain.com'),
+            (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.equal(err.message, 'UltraTon: Hostname resolution failed (EAI_AGAIN).');
                 return true;
             }
         );

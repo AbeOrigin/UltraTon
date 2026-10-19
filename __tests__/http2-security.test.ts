@@ -142,6 +142,11 @@ const startFixture = async (t: TestContext) => {
       stream.end();
       return;
     }
+    if (headers[":path"] === "/to-literal") {
+      stream.respond({ ":status": 302, location: `http://127.0.0.1:${port}/x` });
+      stream.end();
+      return;
+    }
     stream.respond({ ":status": 200, "content-type": "text/plain" });
     stream.end("H2-INTERNAL");
   });
@@ -223,6 +228,54 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(String(res.body), "H2-INTERNAL");
+  });
+
+  it("connects to a reserved IP covered by a CIDR allowlist", async (t) => {
+    const { client, url, connect } = await startFixture(t);
+
+    const res = await client.get(url, { permitReservedIps: ["127.0.0.0/8"] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("rejects a reserved IP outside the allowlist without connecting", async (t) => {
+    const { client, url, connect } = await startFixture(t);
+
+    await assert.rejects(client.get(url, { permitReservedIps: ["10.0.0.0/8"] }), (err: unknown) => {
+      assert.ok(err instanceof SecureHttpError);
+      assert.match(err.message, RESERVED);
+      assert.doesNotMatch(err.message, /127\.0\.0\.1/);
+      return true;
+    });
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("applies the client-wide allowlist when a request sets none", async (t) => {
+    const { manager, url, connect } = await startFixture(t);
+    const client = new UltraTonHTTP2({ permitReservedIps: ["127.0.0.0/8"] }, manager);
+
+    const res = await client.get(url);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("keeps sessions of different allowlists apart in the pool", async (t) => {
+    const { manager, port, connect } = await startFixture(t);
+    const origin = `http://127.0.0.1:${port}`;
+
+    const wide = await manager.getSession(origin, undefined, ["127.0.0.0/8"]);
+    const same = await manager.getSession(origin, undefined, ["127.0.0.0/8"]);
+    const narrow = await manager.getSession(origin, undefined, ["127.0.0.1"]);
+    const all = await manager.getSession(origin, undefined, true);
+    await assert.rejects(manager.getSession(origin, undefined, ["10.0.0.0/8"]), RESERVED);
+
+    assert.strictEqual(wide, same);
+    assert.notStrictEqual(wide, narrow);
+    assert.notStrictEqual(wide, all);
+    assert.strictEqual(connect.mock.callCount(), 3);
   });
 
   it("does not reuse a pooled session for a request that forbids reserved IPs", async (t) => {
@@ -348,6 +401,99 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const [url, options] = connect.mock.calls[0].arguments;
     assert.strictEqual(url, "https://[::1]:8443");
     assert.strictEqual((options as any).servername, "::1");
+  });
+});
+
+describe("HTTP/2 hostname entries in permitReservedIps", () => {
+  // "localhost" resolves to the fixture's loopback address; any other host is echoed, as for IP literals.
+  const mockLocalhostDns = (t: TestContext) =>
+    t.mock.method(dnsPromises, "lookup", async (host: string) => ({
+      address: host === "localhost" ? "127.0.0.1" : host,
+      family: 4,
+    }));
+
+  it("reaches a reserved IP through the hostname the allowlist names", async (t) => {
+    mockLocalhostDns(t);
+    const { client, port, connect } = await startFixture(t);
+
+    const res = await client.get(`http://localhost:${port}/`, { permitReservedIps: ["localhost"] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    // The connection went to the pinned address, not to the name.
+    assert.strictEqual(connect.mock.callCount(), 1);
+    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://127.0.0.1:${port}`);
+  });
+
+  it("blocks a redirect from the allowed hostname to a reserved IP literal without connecting", async (t) => {
+    const lookup = mockLocalhostDns(t);
+    const { client, port, connect } = await startFixture(t);
+
+    await assert.rejects(
+      client.get(`http://localhost:${port}/to-literal`, {
+        permitReservedIps: ["localhost"],
+        maxRedirects: 1,
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, RESERVED);
+        return true;
+      },
+    );
+    // The second hop was resolved and judged as the literal it is, and no connection was opened for it.
+    assert.deepStrictEqual(
+      lookup.mock.calls.map((call) => call.arguments[0]),
+      ["localhost", "127.0.0.1"],
+    );
+    assert.strictEqual(connect.mock.callCount(), 1, "only the first hop connected");
+  });
+});
+
+describe("HTTP/2 redirects never downgrade from https to http", () => {
+  it("rejects an https to http redirect even with permitReservedIps, before opening another stream", async (t) => {
+    // The first hop's hostname must resolve without touching the network.
+    t.mock.method(dnsPromises, "lookup", async () => ({
+      address: "93.184.216.34",
+      family: 4,
+    }));
+
+    // A session whose every stream answers 302 to a plaintext loopback service.
+    const authorities: unknown[] = [];
+    const session = Object.assign(fakeSession(), {
+      request(headers: Record<string, unknown>) {
+        authorities.push(headers[":authority"]);
+        const stream = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stream.write = () => true;
+        stream.close = () => {};
+        stream.end = () => {
+          setImmediate(() => {
+            stream.emit("response", {
+              ":status": 302,
+              location: "http://127.0.0.1:1/x",
+            });
+            stream.emit("end");
+          });
+        };
+        return stream;
+      },
+    });
+    const connect = t.mock.fn(() => session);
+    const manager = new Http2SessionManager({}, connect as any);
+    t.after(() => manager.closeAll());
+    const client = new UltraTonHTTP2({}, manager);
+
+    await assert.rejects(
+      client.get("https://example.com/downgrade", {
+        permitReservedIps: true,
+        maxRedirects: 1,
+      }),
+      (err: unknown) =>
+        err instanceof SecureHttpError &&
+        /Redirect from https to http is not allowed/.test(err.message),
+    );
+    // Only the original https hop ever reached a session; nothing was asked of 127.0.0.1:1.
+    assert.deepStrictEqual(authorities, ["example.com"]);
+    assert.strictEqual(connect.mock.callCount(), 1);
   });
 });
 
@@ -520,5 +666,247 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
       UltraTonNetworkTimeoutError,
     );
     assert.deepStrictEqual(paths, ["/first"]);
+  });
+});
+
+/**
+ * DNS runs inside the request's timeout budget. `hang.test` never gets an answer from
+ * its nameserver (a lookup promise that never settles); the injected connectFn is a spy
+ * that fails on purpose, so nothing here touches the network. Every test carries its own
+ * `timeout` so a regression is reported as a failure instead of hanging the run.
+ */
+describe("HTTP/2 DNS resolution timeout budget", () => {
+  const PUBLIC_IP = { address: "93.184.216.34", family: 4 };
+  const neverResolves = () => new Promise<never>(() => {});
+
+  const buildHangingDns = (t: TestContext) => {
+    const lookup = t.mock.method(dnsPromises, "lookup", neverResolves as any);
+    const connect = t.mock.fn(() => {
+      throw new Error("connect refused on purpose");
+    });
+    const manager = new Http2SessionManager({}, connect as any);
+    return { lookup, connect, manager, client: new UltraTonHTTP2({}, manager) };
+  };
+
+  /** Rejects with the error and when it did, so a request that wrongly succeeds fails the test. */
+  const failsAfter = async (request: Promise<unknown>, start: number) => {
+    try {
+      await request;
+    } catch (error) {
+      return { error, ms: Date.now() - start };
+    }
+    throw new Error("expected the request to reject");
+  };
+
+  it("bounds DNS resolution by timeoutMs", { timeout: 5000 }, async (t) => {
+    const { client, connect } = buildHangingDns(t);
+    const start = Date.now();
+
+    await assert.rejects(client.get("https://hang.test/", { timeoutMs: 300 }), (err: unknown) => {
+      assert.ok(err instanceof UltraTonNetworkTimeoutError);
+      assert.strictEqual(err.message, "UltraTon: Absolute execution time of 300ms exceeded.");
+      return true;
+    });
+
+    assert.ok(Date.now() - start < 1000, "rejected within the budget plus a small margin");
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("does not poison the pool when DNS hangs", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+
+    await assert.rejects(
+      client.get("https://hang.test/", { timeoutMs: 200 }),
+      UltraTonNetworkTimeoutError,
+    );
+    assert.strictEqual(lookup.mock.callCount(), 1);
+
+    // The nameserver recovers: the next request must ask it again instead of joining the hung lookup.
+    lookup.mock.mockImplementation((async () => PUBLIC_IP) as any);
+    await assert.rejects(
+      client.get("https://hang.test/", { timeoutMs: 2000 }),
+      (err: unknown) => {
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.doesNotMatch(err.message, /hang\.test/, "the hostname must not be echoed into the message");
+        return true;
+      },
+    );
+
+    assert.strictEqual(lookup.mock.callCount(), 2);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("applies each caller budget to a shared pending connection", { timeout: 5000 }, async (t) => {
+    const { client, lookup } = buildHangingDns(t);
+    const start = Date.now();
+
+    // Same origin and policy, issued in the same tick: the 200ms request opens the lookup, the 600ms one joins it.
+    const [short, long] = await Promise.all([
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 200 }), start),
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 600 }), start),
+    ]);
+
+    assert.strictEqual(lookup.mock.callCount(), 1, "the second request joined the pending lookup");
+    for (const [outcome, limit] of [[short, 200], [long, 600]] as const) {
+      assert.ok(outcome.error instanceof UltraTonNetworkTimeoutError);
+      assert.strictEqual(
+        outcome.error.message,
+        `UltraTon: Absolute execution time of ${limit}ms exceeded.`,
+      );
+      assert.ok(outcome.ms >= limit - 50, `${limit}ms request rejected too early (${outcome.ms}ms)`);
+      assert.ok(outcome.ms < limit + 300, `${limit}ms request rejected too late (${outcome.ms}ms)`);
+    }
+  });
+
+  it("lets a joined caller outlive the request that opened the lookup", { timeout: 5000 }, async (t) => {
+    const { client, lookup } = buildHangingDns(t);
+    const start = Date.now();
+
+    // Reverse order: the long request opens the lookup, the short one joins it and gives up first.
+    const [long, short] = await Promise.all([
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 600 }), start),
+      failsAfter(client.get("https://hang.test/", { timeoutMs: 200 }), start),
+    ]);
+
+    assert.strictEqual(lookup.mock.callCount(), 1);
+    assert.ok(short.ms < 500, `the joined 200ms request rejected at ${short.ms}ms`);
+    assert.ok(long.ms >= 550 && long.ms < 900, `the 600ms request rejected at ${long.ms}ms`);
+    assert.ok(short.error instanceof UltraTonNetworkTimeoutError);
+    assert.ok(long.error instanceof UltraTonNetworkTimeoutError);
+  });
+
+  it("keeps timeoutMs: 0 as no timeout for a slow DNS answer", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+    lookup.mock.mockImplementation(
+      (() => new Promise((resolve) => setTimeout(() => resolve(PUBLIC_IP), 300))) as any,
+    );
+
+    await assert.rejects(
+      client.get("https://slow.test/", { timeoutMs: 0 }),
+      (err: unknown) => {
+        // Reaching the connect step proves the slow lookup was waited for, not timed out.
+        assert.ok(err instanceof SecureHttpError);
+        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        return true;
+      },
+    );
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("opens no connection when the lookup answers after every caller gave up", { timeout: 5000 }, async (t) => {
+    const { client, lookup, connect } = buildHangingDns(t);
+    let answer!: (value: unknown) => void;
+    lookup.mock.mockImplementation((() => new Promise((resolve) => { answer = resolve; })) as any);
+
+    await assert.rejects(
+      client.get("https://late.test/", { timeoutMs: 100 }),
+      UltraTonNetworkTimeoutError,
+    );
+    answer(PUBLIC_IP);
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("hands a late lookup answer to a caller that is still within budget", { timeout: 5000 }, async (t) => {
+    const { manager, lookup, connect } = buildHangingDns(t);
+    let answer!: (value: unknown) => void;
+    lookup.mock.mockImplementation((() => new Promise((resolve) => { answer = resolve; })) as any);
+    const session = fakeSession();
+    connect.mock.mockImplementation((() => session) as any);
+    const origin = "https://late.test";
+
+    // The caller that opened the lookup gives up at 100ms; the second one joined it with no deadline.
+    const gaveUp = manager.getSession(origin, undefined, false, AbortSignal.timeout(100));
+    const patient = manager.getSession(origin, undefined, false);
+    await assert.rejects(gaveUp, { name: "TimeoutError" });
+    answer(PUBLIC_IP);
+
+    assert.strictEqual(await patient, session);
+    // The session is pooled under the policy and origin it was resolved for: no second lookup, no second connection.
+    assert.strictEqual(await manager.getSession(origin, undefined, false), session);
+    assert.strictEqual(lookup.mock.callCount(), 1);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("charges a redirect hop's DNS to the shared timeout budget", { timeout: 5000 }, async (t) => {
+    // Hop 1 resolves at once and is answered with a 302 after 250ms; the redirect target's nameserver never answers.
+    t.mock.method(dnsPromises, "lookup", (async (host: string) =>
+      host === "hang.test" ? neverResolves() : PUBLIC_IP) as any);
+    const session = Object.assign(fakeSession(), {
+      request() {
+        const stream = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        stream.write = () => true;
+        stream.close = () => {};
+        stream.end = () => {
+          setTimeout(() => {
+            stream.emit("response", { ":status": 302, location: "https://hang.test/" });
+            stream.emit("end");
+          }, 250);
+        };
+        return stream;
+      },
+    });
+    const connect = t.mock.fn(() => session);
+    const manager = new Http2SessionManager({}, connect as any);
+    t.after(() => manager.closeAll());
+    const client = new UltraTonHTTP2({}, manager);
+    const start = Date.now();
+
+    // 150ms of the 400ms budget is left for hop 2. A hop that got the full budget again would wait until ~650ms.
+    const { error, ms } = await failsAfter(
+      client.get("https://slow.test/", { timeoutMs: 400, maxRedirects: 2 }),
+      start,
+    );
+
+    assert.ok(error instanceof UltraTonNetworkTimeoutError);
+    assert.strictEqual(error.message, "UltraTon: Absolute execution time of 400ms exceeded.");
+    assert.ok(ms >= 350, `rejected before the budget could be spent (${ms}ms)`);
+    assert.ok(ms < 550, `the redirect hop got more than the remaining budget (${ms}ms)`);
+    assert.strictEqual(connect.mock.callCount(), 1, "only the first hop reached the connect step");
+  });
+});
+
+/**
+ * A caller that gives up on a lookup it opened leaves the pending map at once, so a later request
+ * starts a second attempt while a joiner is still waiting on the first. Both lookups can then answer.
+ */
+describe("HTTP/2 concurrent connection attempts for one pool key", () => {
+  it("never opens a second session for a key when a concurrent attempt already pooled one", { timeout: 5000 }, async (t) => {
+    const { manager, port, connect, accepted, openSessions } = await startFixture(t);
+    // Every lookup stays pending until the test answers it, so the order of the answers is the test's to choose.
+    const answers: Array<() => void> = [];
+    t.mock.method(dnsPromises, "lookup", (() =>
+      new Promise((resolve) => {
+        answers.push(() => resolve({ address: "127.0.0.1", family: 4 }));
+      })) as any);
+    const origin = `http://race.test:${port}`;
+    const giveUp = new AbortController();
+
+    // First attempt: the caller that opened it and a joiner with no deadline wait on one lookup.
+    const opener = manager.getSession(origin, undefined, true, giveUp.signal);
+    const joiner = manager.getSession(origin, undefined, true);
+    giveUp.abort(new Error("budget spent"));
+    await assert.rejects(opener, /budget spent/);
+
+    // The opener left the pending map, so this request starts a second attempt beside the first.
+    const newcomer = manager.getSession(origin, undefined, true);
+    assert.strictEqual(answers.length, 2);
+
+    // The second attempt answers and pools its session first; the first one's late answer must reuse it.
+    answers[1]();
+    const pooled = await newcomer;
+    answers[0]();
+    const joined = await joiner;
+
+    assert.strictEqual(connect.mock.callCount(), 1, "the late attempt opened a second connection");
+    assert.strictEqual(joined, pooled);
+
+    // The pooled session is the only one, so closeAll() must leave nothing open on the server.
+    await until(() => accepted() === connect.mock.callCount());
+    manager.closeAll();
+    await until(() => openSessions() === 0);
+    assert.strictEqual(openSessions(), 0, "a session survived closeAll()");
   });
 });

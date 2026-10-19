@@ -80,6 +80,46 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         }, TypeError);
     });
 
+    it('accepts permitReservedIps as an allowlist of IPs, CIDRs and hostnames', () => {
+        const list = ['10.0.0.0/8', 'api.internal', '::1', 'fd00::/8', '192.168.1.5'];
+        const result = buildSafeRequestOptions({ permitReservedIps: list });
+        assert.deepStrictEqual(result.permitReservedIps, list);
+    });
+
+    it('copies the allowlist so later mutation of the caller array cannot widen the policy', () => {
+        const list = ['10.0.0.0/8'];
+        const result = buildSafeRequestOptions({ permitReservedIps: list });
+        list.push('http://evil');
+        assert.deepStrictEqual(result.permitReservedIps, ['10.0.0.0/8']);
+    });
+
+    it('treats an empty permitReservedIps array as a valid (blocking) policy', () => {
+        assert.deepStrictEqual(buildSafeRequestOptions({ permitReservedIps: [] }).permitReservedIps, []);
+        assert.strictEqual(buildSafeRequestOptions({ permitReservedIps: true }).permitReservedIps, true);
+    });
+
+    it('rejects malformed permitReservedIps entries with a TypeError', () => {
+        const bad: unknown[] = [
+            'http://x', '10.0.0.0/33', 42, '::1/129', '10.0.0.0/', '10.0.0.0/-1', '10.0.0.0/8/8',
+            '', '.internal', 'internal.', 'a b', 'host_name', 'a/b', null, {}, ['10.0.0.0/8']
+        ];
+        for (const entry of bad) {
+            assert.throws(
+                () => buildSafeRequestOptions({ permitReservedIps: [entry] } as any),
+                { name: 'TypeError', message: /Invalid permitReservedIps entry/ },
+                `entry ${JSON.stringify(entry)} must be rejected`
+            );
+        }
+        assert.throws(
+            () => buildSafeRequestOptions({ permitReservedIps: ['http://x'] }),
+            { message: "UltraTon: Invalid permitReservedIps entry 'http://x': expected an IP, CIDR or hostname." }
+        );
+    });
+
+    it('still rejects a permitReservedIps value that is neither boolean nor array', () => {
+        assert.throws(() => buildSafeRequestOptions({ permitReservedIps: 'localhost' } as any), TypeError);
+    });
+
     it('Should correctly stringify valid numeric or boolean header values without throwing them away', () => {
         const result = buildSafeRequestOptions({
             headers: {

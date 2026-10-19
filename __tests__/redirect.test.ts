@@ -59,6 +59,18 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
                     (res as any).statusCode = 302;
                     (res as any).headers = { location: 'https://169.254.169.254/latest/meta-data' };
                 }
+                else if (urlObj.pathname === '/downgrade') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'http://127.0.0.1:1/x' };
+                }
+                else if (urlObj.pathname === '/start') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'https://example.com/mid' };
+                }
+                else if (urlObj.pathname === '/mid') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'http://127.0.0.1:1/end' };
+                }
                 else if (urlObj.pathname === '/smuggle-start') {
                     (res as any).statusCode = 303;
                     (res as any).headers = { location: 'https://example.com/smuggle-end' };
@@ -137,6 +149,46 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
             client.get('https://example.com/to-metadata', { maxRedirects: 1 }),
             (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
         );
+    });
+
+    it('Should reject an https to http redirect downgrade even with permitReservedIps, before connecting to the target', async () => {
+        const inner = createSmartMockTransport();
+        const hostsReached: string[] = [];
+        const client = new UltraTonClient(((urlObj: URL, options: any, callback?: any) => {
+            hostsReached.push(urlObj.host);
+            return inner(urlObj, options, callback);
+        }) as any);
+
+        await assert.rejects(
+            client.get('https://example.com/downgrade', { permitReservedIps: true, maxRedirects: 1 }),
+            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message)
+        );
+        // Only the original https hop was ever attempted: the http://127.0.0.1 target never got a connection.
+        assert.deepStrictEqual(hostsReached, ['example.com']);
+    });
+
+    it('Should reject an https to http downgrade in the middle of a chain that started on http', async () => {
+        const inner = createSmartMockTransport();
+        const reached: string[] = [];
+        const client = new UltraTonClient(((urlObj: URL, options: any, callback?: any) => {
+            reached.push(urlObj.href);
+            return inner(urlObj, options, callback);
+        }) as any);
+
+        // http://127.0.0.1:1/start -> https://example.com/mid -> http://127.0.0.1:1/end
+        await assert.rejects(
+            client.get('http://127.0.0.1:1/start', { permitReservedIps: true, maxRedirects: 5 }),
+            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message)
+        );
+        // The check applies to every hop, not only to a chain that started on https: /end was never contacted.
+        assert.deepStrictEqual(reached, ['http://127.0.0.1:1/start', 'https://example.com/mid']);
+    });
+
+    it('Should still follow a redirect that upgrades from http to https', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        // /default-deny redirects to https://example.com/target, which the mock answers with its 404 fallback.
+        const res = await client.get('http://127.0.0.1:1/default-deny', { permitReservedIps: true, maxRedirects: 1 });
+        assert.strictEqual(res.statusCode, 404);
     });
 
     it('Should block a NAT64 literal embedding a private IPv4', async () => {
