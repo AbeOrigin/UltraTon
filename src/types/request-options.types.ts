@@ -75,7 +75,7 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
 export interface UltraTonRequestOptionsHttp2 {
     readonly method?: string;
     readonly body?: Buffer | string;
-    /** Pseudo-headers (keys starting with ':') are rejected. */
+    /** Pseudo-headers (keys starting with ':') and 'host' (derived from the URL) are rejected. */
     readonly headers?: Record<string, string | string[] | undefined>;
     readonly maxRedirects?: number;
     readonly timeoutMs?: number;
@@ -105,7 +105,10 @@ export interface UltraTonOptionsHttp2 {
     maxRedirects?: number;
 
     /**
-     * The maximum time to wait for a single stream to complete in milliseconds.
+     * The absolute time budget for the whole request in milliseconds, shared by every
+     * redirect hop (it is not reset per hop). DNS resolution and pool wait are charged
+     * before each hop starts; the TCP/TLS connect and the stream itself are bounded by
+     * what remains of the budget.
      * Default is 30000ms.
      */
     timeoutMs?: number;

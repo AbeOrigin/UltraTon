@@ -34,14 +34,15 @@ const client = new UltraTonClient();
 
 async function run() {
     try {
-        const response = await client.get('https://example.com/api/data', {
+        const response = await client.get<{ items: string[] }>('https://example.com/api/data', {
             headers: {
                 'Accept': 'application/json'
             }
         });
-        
+
         console.log(`Status: ${response.statusCode}`);
-        console.log(response.data.toString());
+        // application/json responses arrive already parsed; any other content type is a Buffer.
+        console.log(response.body);
     } catch (error) {
         console.error('Request failed:', error);
     }
@@ -49,6 +50,12 @@ async function run() {
 
 run();
 ```
+
+## Breaking changes (unreleased)
+
+- **`data` is now `body`.** Responses expose `body: T | Buffer` instead of `data`, which no longer exists. A response with an `application/json` content type is parsed automatically (`__proto__`, `constructor` and `prototype` keys are stripped), and an invalid JSON payload with that content type rejects with `UltraTonParseError`. Any other content type, and any JSON payload over 5MB, is returned as a raw `Buffer`.
+- **The `timeout` option is removed.** It never had any effect. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
+- **`http://127.0.0.1` and `http://localhost` now need `permitReservedIps: true`.** Plain HTTP is still accepted for them, but they are reserved addresses, so the SSRF guard rejects them unless you opt in.
 
 ## Security Goals & Roadmap
 

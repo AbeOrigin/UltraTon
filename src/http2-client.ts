@@ -145,7 +145,8 @@ export class UltraTonHTTP2 {
         ...safeHeaders,
       };
 
-      // Measured after getSession so the time spent connecting is charged to the budget too.
+      // Measured after getSession, so DNS resolution and pool wait are already charged to the budget.
+      // The TCP/TLS connect runs inside the stream and is bounded by the same remaining budget.
       // A spent budget must throw here: a non-positive value would disable the stream timer.
       let remainingMs = reqOpts.timeoutMs;
       if (reqOpts.timeoutMs > 0) {
