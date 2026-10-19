@@ -1,6 +1,6 @@
 // Smoke test against the PACKED tarball (what npm users actually get).
-// Run with `npm run test:package`. Builds first, then: pack -> install into a
-// temp consumer -> check ESM import, CJS require and TypeScript types.
+// Run with `npm run test:package`. Packs (the `prepack` hook does a clean build),
+// then installs into a temp consumer -> check ESM import, CJS require and TypeScript types.
 // Only Node built-ins plus the repo's own `typescript` are used.
 import { execFileSync, execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -63,12 +63,11 @@ try {
   fs.mkdirSync(packDir);
   fs.mkdirSync(consumer);
 
-  // Until a prepack hook exists, make sure the tarball contains a fresh build.
-  npm(['run', 'build'], repo);
-
+  // `npm pack` runs the `prepack` hook (clean build), so the tarball never holds stale files.
   let tgz;
   check('npm pack', () => {
-    const info = JSON.parse(npm(['pack', '--json', '--pack-destination', packDir], repo));
+    // --silent keeps the prepack build output off stdout so only the JSON is parsed.
+    const info = JSON.parse(npm(['pack', '--silent', '--json', '--pack-destination', packDir], repo));
     tgz = path.join(packDir, info[0].filename);
     if (!fs.existsSync(tgz)) throw new Error(`tarball not found at ${tgz}`);
   });
@@ -129,7 +128,8 @@ export function classify(err: unknown): string {
   failed = true;
   console.error(`FAIL smoke script: ${err.message}`);
 } finally {
-  fs.rmSync(root, { recursive: true, force: true });
+  // Windows can briefly hold files (EBUSY/EPERM), so retry the cleanup.
+  fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }
 
 if (failed) {

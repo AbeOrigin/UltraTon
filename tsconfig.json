@@ -25,6 +25,7 @@
     /* Interoperabilidad y Resoluciones */
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "types": ["node"],
     
     /* Native ESM / TS 5.4 Support */
     "allowImportingTsExtensions": true,
