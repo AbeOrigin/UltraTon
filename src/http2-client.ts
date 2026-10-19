@@ -22,6 +22,7 @@ import {
 import { HTTP_CODES_REDIRECTS } from "./constants.ts";
 import { parseSecurePayload, secureReviver } from "./helpers/payload-parser.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
+import { parseSafeUrl } from "./helpers/url-parser.ts";
 
 const globalPool = new Http2SessionManager();
 
@@ -111,11 +112,15 @@ export class UltraTonHTTP2 {
     let reqOpts = this.#buildRequestOptions(currentOptions);
 
     while (true) {
-      const parsedUrl = new URL(currentUrl);
+      const parsedUrl = parseSafeUrl(currentUrl);
       const origin = parsedUrl.origin;
       const path = parsedUrl.pathname + parsedUrl.search;
 
-      const session = await this.#sessionManager.getSession(origin);
+      const session = await this.#sessionManager.getSession(
+        origin,
+        undefined,
+        reqOpts.permitReservedIps,
+      );
 
       // reqOpts.headers is already lowercased and CRLF/pseudo-header checked.
       const safeHeaders: Record<string, string | string[] | undefined> = {
@@ -163,7 +168,7 @@ export class UltraTonHTTP2 {
 
           redirectCount++;
 
-          const nextUrl = new URL(location, currentUrl);
+          const nextUrl = parseSafeUrl(location, currentUrl);
           const nextHeaders = { ...reqOpts.headers } as Record<
             string,
             string | string[] | undefined
