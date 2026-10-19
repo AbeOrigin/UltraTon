@@ -96,9 +96,6 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
         safeOptions.headers = sanitizeHeaders(options.headers as Record<string, unknown>);
     }
 
-    const timeout = intOption('timeout', options.timeout, -1);
-    if (timeout >= 0) safeOptions.timeout = timeout;
-
     safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024); // Strict 2MB fallback
     safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000); // Strict 10s fallback
     safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000); // Strict 30s fallback
