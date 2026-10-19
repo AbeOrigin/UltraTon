@@ -240,6 +240,7 @@ export class UltraTonClient {
                     const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
 
                     if (originalUrlObj.origin !== nextUrlObj.origin) {
+                        currentOptions = { ...currentOptions, auth: undefined };
                         for (const key of Object.keys(nextHeaders)) {
                             const lowerKey = key.toLowerCase();
                             if (lowerKey === 'authorization' || lowerKey === 'cookie' || lowerKey === 'proxy-authorization') {
