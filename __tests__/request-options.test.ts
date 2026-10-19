@@ -74,6 +74,12 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         });
     });
 
+    it('rejects pseudo-header keys', () => {
+        assert.throws(() => {
+            buildSafeRequestOptions({ headers: { ':path': '/x' } });
+        }, TypeError);
+    });
+
     it('Should correctly stringify valid numeric or boolean header values without throwing them away', () => {
         const result = buildSafeRequestOptions({
             headers: {

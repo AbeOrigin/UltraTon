@@ -31,7 +31,7 @@ function intOption(propName: string, value: unknown, fallback: number, max = INT
  * Parses and strictly sanitizes headers.
  * 
  * @param rawHeaders - User input headers.
- * @throws {TypeError} Synchronously throws if CRLF injection is detected.
+ * @throws {TypeError} Synchronously throws if CRLF injection or an HTTP/2 pseudo-header key is detected.
  */
 function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, string | string[]> {
     const sanitized: Record<string, string | string[]> = {};
@@ -46,6 +46,10 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
         const lowerKey = key.toLowerCase();
         if (crlfRegex.test(lowerKey)) {
             throw new TypeError(`UltraTon: Header key '${key}' contains invalid CRLF characters.`);
+        }
+        // HTTP/2 pseudo-headers (:authority, :path, ...) belong to the client; a caller must not be able to set them.
+        if (lowerKey.startsWith(':')) {
+            throw new TypeError(`UltraTon: Header key '${key}' is an HTTP/2 pseudo-header and cannot be set.`);
         }
 
         const value = rawHeaders[key];

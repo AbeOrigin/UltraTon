@@ -9,6 +9,7 @@ import type {
 import type { UltraTonResponse } from "./types/request-response.ts";
 import { Http2SessionManager } from "./classes/http-session-mannager.ts";
 import type {
+  SecureUltraTonRequestOptions,
   UltraTonOptionsHttp2,
   UltraTonRequestOptionsHttp2,
 } from "./types/request-options.types.ts";
@@ -18,8 +19,9 @@ import {
   UltraTonParseError,
   UltraTonRedirectError,
 } from "./errors.ts";
-import { HTTP_CODES_REDIRECTS, MAX_REDIRECTS_CEILING } from "./constants.ts";
+import { HTTP_CODES_REDIRECTS } from "./constants.ts";
 import { parseSecurePayload, secureReviver } from "./helpers/payload-parser.ts";
+import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 
 const globalPool = new Http2SessionManager();
 
@@ -105,10 +107,8 @@ export class UltraTonHTTP2 {
     let currentUrl = targetUrl;
     let currentOptions = { ...options };
     let redirectCount = 0;
-    const maxRedirects = Math.min(
-      currentOptions.maxRedirects ?? this.#globalOptions.maxRedirects ?? 0,
-      MAX_REDIRECTS_CEILING,
-    );
+    // Validate before touching the network: invalid input must fail without connecting.
+    let reqOpts = this.#buildRequestOptions(currentOptions);
 
     while (true) {
       const parsedUrl = new URL(currentUrl);
@@ -117,7 +117,10 @@ export class UltraTonHTTP2 {
 
       const session = await this.#sessionManager.getSession(origin);
 
-      const safeHeaders = this.#sanitizeHeaders(currentOptions.headers || {});
+      // reqOpts.headers is already lowercased and CRLF/pseudo-header checked.
+      const safeHeaders: Record<string, string | string[] | undefined> = {
+        ...reqOpts.headers,
+      };
 
       if (currentOptions.body) {
         safeHeaders["content-length"] = Buffer.byteLength(
@@ -125,7 +128,7 @@ export class UltraTonHTTP2 {
         ).toString();
       }
 
-      const method = (currentOptions.method || "GET").toUpperCase();
+      const method = (reqOpts.method || "GET").toUpperCase();
 
       const pseudoHeaders: OutgoingHttpHeaders = {
         ":method": method,
@@ -134,19 +137,12 @@ export class UltraTonHTTP2 {
         ...safeHeaders,
       };
 
-      const streamTimeoutMs =
-        currentOptions.timeoutMs ?? this.#globalOptions.timeoutMs ?? 30_000;
-      const maxBodySize =
-        currentOptions.maxBodySize ??
-        this.#globalOptions.maxBodySize ??
-        2_097_152;
-
       const response = await this.#executeStream<T>(
         session,
         pseudoHeaders,
         currentOptions.body,
-        streamTimeoutMs,
-        maxBodySize,
+        reqOpts.timeoutMs,
+        reqOpts.maxBodySize,
       );
 
       const statusCode = response.statusCode;
@@ -158,17 +154,17 @@ export class UltraTonHTTP2 {
         location &&
         typeof location === "string"
       ) {
-        if (maxRedirects > 0) {
-          if (redirectCount >= maxRedirects) {
+        if (reqOpts.maxRedirects > 0) {
+          if (redirectCount >= reqOpts.maxRedirects) {
             throw new UltraTonRedirectError(
-              `UltraTon: Max redirects (${maxRedirects}) exceeded.`,
+              `UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`,
             );
           }
 
           redirectCount++;
 
           const nextUrl = new URL(location, currentUrl);
-          const nextHeaders = { ...currentOptions.headers } as Record<
+          const nextHeaders = { ...reqOpts.headers } as Record<
             string,
             string | string[] | undefined
           >;
@@ -217,6 +213,7 @@ export class UltraTonHTTP2 {
             headers: nextHeaders,
             body: nextBody,
           };
+          reqOpts = this.#buildRequestOptions(currentOptions);
 
           continue;
         }
@@ -226,14 +223,22 @@ export class UltraTonHTTP2 {
     }
   }
 
-  #sanitizeHeaders(
-    headers: UltraTonRequestOptionsHttp2["headers"],
-  ): Record<string, string | string[] | undefined> {
-    const clean: Record<string, string | string[] | undefined> = {};
-    for (const [key, value] of Object.entries(headers || {})) {
-      clean[key.toLowerCase()] = value;
-    }
-    return clean;
+  /**
+   * Runs the per-request options through the same firewall as the HTTP/1 client.
+   * A per-request value wins over the client-wide one; an unset one (undefined)
+   * falls back to the client-wide value.
+   */
+  #buildRequestOptions(
+    options: UltraTonRequestOptionsHttp2,
+  ): SecureUltraTonRequestOptions {
+    const g = this.#globalOptions;
+    return buildSafeRequestOptions({
+      ...options,
+      maxRedirects: options.maxRedirects ?? g.maxRedirects,
+      timeoutMs: options.timeoutMs ?? g.timeoutMs,
+      maxBodySize: options.maxBodySize ?? g.maxBodySize,
+      permitReservedIps: options.permitReservedIps ?? g.permitReservedIps,
+    });
   }
 
   #executeStream<T = unknown>(

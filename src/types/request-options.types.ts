@@ -67,13 +67,21 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
 
 // HTTP2 Options
 
-export interface UltraTonRequestOptionsHttp2 extends RequestOptions {
+/**
+ * Deliberately a closed list: it does NOT extend node:https `RequestOptions`,
+ * which would advertise ~40 options (agent, auth, rejectUnauthorized, ...) that
+ * the HTTP/2 client ignores. Anything not listed here is dropped by the firewall.
+ */
+export interface UltraTonRequestOptionsHttp2 {
     readonly method?: string;
     readonly body?: Buffer | string;
+    /** Pseudo-headers (keys starting with ':') are rejected. */
     readonly headers?: Record<string, string | string[] | undefined>;
     readonly maxRedirects?: number;
     readonly timeoutMs?: number;
     readonly maxBodySize?: number;
+    /** Same SSRF opt-out as the HTTP/1 client. Default is false. */
+    readonly permitReservedIps?: boolean;
 }
 
 
@@ -107,4 +115,11 @@ export interface UltraTonOptionsHttp2 {
      * Default is 2MB (2,097,152 bytes).
      */
     maxBodySize?: number;
+
+    /**
+     * Allows resolution of internal/reserved IPs (like localhost or private network space).
+     * Set to true ONLY if you are building an internal API client.
+     * Default is false (Strict SSRF mitigation).
+     */
+    permitReservedIps?: boolean;
 }
