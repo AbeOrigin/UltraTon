@@ -9,11 +9,11 @@ import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
 import { assertAllowedIp, resolveAndPinHost } from "./security/dns-pinner.ts";
-import { isIP } from 'node:net';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
-import { HTTP_CODES_REDIRECTS } from "./constants/http-codes-redirects.ts";
+
+const HTTP_CODES_REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
 
 export class UltraTonClient {
@@ -126,8 +126,7 @@ export class UltraTonClient {
                 ...reqOpts,
                 timeout: reqOpts.socketTimeoutMs,
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
-                    const cleanHostname = lookupHostname.replace(/\0/g, '');
-                    resolveAndPinHost(cleanHostname, reqOpts.permitReservedIps)
+                    resolveAndPinHost(lookupHostname, reqOpts.permitReservedIps)
                         .then(ip => {
                             const family = ip.includes(':') ? 6 : 4;
                             const result = lookupOptions.all ? [{ address: ip, family }] : ip;
@@ -199,21 +198,14 @@ export class UltraTonClient {
         let currentUrl = url;
         let currentOptions = { ...options };
 
-        let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions({
-            method: currentOptions.method || 'GET',
-            headers: currentOptions.headers || {},
-            ...currentOptions
-        });
+        let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions(currentOptions);
 
         while (true) {
             const urlObj: URL = parseSafeUrl(currentUrl);
 
             // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
-            // URL.hostname keeps the brackets on IPv6 literals; strip them so isIP() recognizes them.
-            const literalHost = urlObj.hostname.replace(/^\[|\]$/g, '');
-            if (isIP(literalHost) !== 0) {
-                assertAllowedIp(literalHost, reqOpts.permitReservedIps);
-            }
+            // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
+            assertAllowedIp(urlObj.hostname.replace(/^\[|\]$/g, ''), reqOpts.permitReservedIps);
 
             let currentTimeoutMs = reqOpts.timeoutMs;
             if (reqOpts.timeoutMs > 0) {
@@ -226,54 +218,40 @@ export class UltraTonClient {
 
             const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions, currentTimeoutMs);
 
-            if (hop.isRedirect && hop.headers.location && typeof hop.headers.location === 'string') {
-                if (reqOpts.maxRedirects > 0) {
-                    if (redirectCount >= reqOpts.maxRedirects) {
-                        throw new UltraTonRedirectError(`UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`);
-                    }
-
-                    redirectCount++;
-                    const location = hop.headers.location;
-
-                    const nextUrlObj: URL = parseSafeUrl(location, currentUrl);
-                    const originalUrlObj = urlObj;
-                    const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
-
-                    if (originalUrlObj.origin !== nextUrlObj.origin) {
-                        currentOptions = { ...currentOptions, auth: undefined };
-                        for (const key of Object.keys(nextHeaders)) {
-                            const lowerKey = key.toLowerCase();
-                            if (lowerKey === 'authorization' || lowerKey === 'cookie' || lowerKey === 'proxy-authorization') {
-                                delete nextHeaders[key];
-                            }
-                        }
-                    }
-
-                    let nextMethod = reqOpts.method;
-                    let nextBody = currentOptions.body;
-
-                    if (hop.statusCode === 303 || ((hop.statusCode === 301 || hop.statusCode === 302) && nextMethod !== 'GET' && nextMethod !== 'HEAD')) {
-                        nextMethod = 'GET';
-                        nextBody = undefined;
-
-                        for (const key of Object.keys(nextHeaders)) {
-                            const lowerKey = key.toLowerCase();
-                            if (lowerKey === 'content-length' || lowerKey === 'content-type' || lowerKey === 'transfer-encoding') {
-                                delete nextHeaders[key];
-                            }
-                        }
-                    }
-
-                    currentUrl = nextUrlObj.href;
-                    currentOptions = { ...currentOptions, method: nextMethod, headers: nextHeaders, body: nextBody };
-                    reqOpts = buildSafeRequestOptions({
-                        ...currentOptions,
-                        headers: nextHeaders,
-                        method: nextMethod
-                    });
-
-                    continue;
+            if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
+                if (redirectCount >= reqOpts.maxRedirects) {
+                    throw new UltraTonRedirectError(`UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`);
                 }
+
+                redirectCount++;
+
+                const nextUrlObj: URL = parseSafeUrl(hop.headers.location, currentUrl);
+                // sanitizeHeaders already lowercased every key
+                const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
+
+                if (urlObj.origin !== nextUrlObj.origin) {
+                    currentOptions = { ...currentOptions, auth: undefined };
+                    delete nextHeaders['authorization'];
+                    delete nextHeaders['cookie'];
+                    delete nextHeaders['proxy-authorization'];
+                }
+
+                let nextMethod = reqOpts.method;
+                let nextBody = currentOptions.body;
+
+                if (hop.statusCode === 303 || ((hop.statusCode === 301 || hop.statusCode === 302) && nextMethod !== 'GET' && nextMethod !== 'HEAD')) {
+                    nextMethod = 'GET';
+                    nextBody = undefined;
+                    delete nextHeaders['content-length'];
+                    delete nextHeaders['content-type'];
+                    delete nextHeaders['transfer-encoding'];
+                }
+
+                currentUrl = nextUrlObj.href;
+                currentOptions = { ...currentOptions, method: nextMethod, headers: nextHeaders, body: nextBody };
+                reqOpts = buildSafeRequestOptions(currentOptions);
+
+                continue;
             }
 
             return {
