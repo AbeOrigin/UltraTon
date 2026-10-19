@@ -15,15 +15,18 @@ import { parseSecurePayload, secureReviver } from './helpers/payload-parser.ts';
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
 // Hence one keep-alive agent pair per policy: sockets are never shared across policies.
+// Idle pooled sockets are reaped after 5s, as with Node's global agent: without it a hostile server reached through N hostnames
+// could pin N file descriptors for as long as it keeps them open.
 // ponytail: one agent pair per distinct policy, never evicted, so the map grows with distinct allowlists; the ceiling is the
 // number of policies an app uses. Same upgrade path as the compiled-allowlist cache: bound it if lists ever come from request-time input.
+const IDLE_SOCKET_TIMEOUT_MS = 5000;
 const agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
 
 function agentFor(policy: ReservedIpPolicy, protocol: string): http.Agent {
     const key = policyKey(policy);
     let agents = agentsByPolicy.get(key);
     if (!agents) {
-        agents = { http: new http.Agent({ keepAlive: true }), https: new https.Agent({ keepAlive: true }) };
+        agents = { http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }), https: new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }) };
         agentsByPolicy.set(key, agents);
     }
     return protocol === 'http:' ? agents.http : agents.https;

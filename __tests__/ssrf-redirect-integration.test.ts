@@ -2,6 +2,9 @@ import { describe, it, before, after } from 'node:test';
 import type { TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import https from 'node:https';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
 import type { AddressInfo } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
@@ -259,5 +262,35 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
         await client.get(url, { permitReservedIps: ['127.0.0.0/8', 'Localhost'] });
         await client.get(url, { permitReservedIps: ['localhost', '127.0.0.0/8'] });
         assert.equal(connections(), 1);
+    });
+
+    // Parity with Node's global agent (keepAlive, 5s idle timeout): without the timeout an idle pooled socket lives until
+    // the server closes it, so a hostile server reached through N hostnames pins N file descriptors.
+    it('hands each protocol its own keep-alive agent with the 5s idle timeout', async () => {
+        const agents: unknown[] = [];
+        const transport = ((_url: URL, options: { agent?: unknown }) => {
+            agents.push(options.agent);
+            const req = new EventEmitter() as EventEmitter & Record<string, unknown>;
+            req.write = () => {};
+            req.destroy = () => {};
+            req.end = () => {
+                const res = Object.assign(Readable.from([Buffer.from('{}')]), { statusCode: 200, headers: {} });
+                req.emit('response', res);
+            };
+            return req;
+        }) as unknown as typeof http.request;
+        const client = new UltraTonClient(transport);
+
+        await client.get('http://localhost/');
+        await client.get('https://example.com/');
+
+        const [httpAgent, httpsAgent] = agents as [http.Agent, https.Agent];
+        assert.ok(httpAgent instanceof http.Agent && !(httpAgent instanceof https.Agent), 'http URL gets an http.Agent');
+        assert.ok(httpsAgent instanceof https.Agent, 'https URL gets an https.Agent');
+        for (const agent of [httpAgent, httpsAgent]) {
+            const { keepAlive, timeout } = (agent as unknown as { options: { keepAlive?: boolean, timeout?: number } }).options;
+            assert.equal(keepAlive, true);
+            assert.equal(timeout, 5000);
+        }
     });
 });
