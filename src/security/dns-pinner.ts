@@ -1,6 +1,6 @@
 import dnsPromises from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
-import { SecureHttpError } from '../exceptions/secure-http.error.ts';
+import { SecureHttpError } from '../errors.ts';
 
 const reservedIps = new BlockList();
 

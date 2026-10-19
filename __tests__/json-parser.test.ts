@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { UltraTonClient } from '../src/http-client.ts';
-import { UltraTonParseError } from '../src/exceptions/parse.error.ts';
+import { UltraTonParseError } from '../src/errors.ts';
 
 describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
 

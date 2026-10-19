@@ -2,9 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { UltraTonClient } from '../src/http-client.ts';
-import { UltraTonRedirectError } from '../src/exceptions/redirect.error.ts';
-import { UltraTonNetworkTimeoutError } from '../src/exceptions/network-timeout.error.ts';
-import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
+import { SecureHttpError, UltraTonNetworkTimeoutError, UltraTonRedirectError } from '../src/errors.ts';
 import https from 'node:https';
 
 describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {

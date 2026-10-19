@@ -1,9 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { UltraTonNetworkTimeoutError } from "./exceptions/network-timeout.error.ts";
-import { UltraTonMemoryError } from "./exceptions/out-of-memory.error.ts";
-import { SecureHttpError } from "./exceptions/secure-http.error.ts";
-import { UltraTonRedirectError } from "./exceptions/redirect.error.ts";
-import { UltraTonParseError } from "./exceptions/parse.error.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError } from "./errors.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";

@@ -1,4 +1,4 @@
-import { SecureHttpError } from "../exceptions/secure-http.error.ts";
+import { SecureHttpError } from "../errors.ts";
 
 /**
  * Safely parses a URL, avoids logging malformed strings,
