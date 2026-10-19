@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { isReservedIp, resolveAndPinHost } from '../src/security/dns-pinner.ts';
+import { assertAllowedIp, isReservedIp, policyKey, resolveAndPinHost } from '../src/security/dns-pinner.ts';
 import { SecureHttpError } from '../src/errors.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
@@ -119,8 +119,108 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
             () => resolveAndPinHost('ghost.domain.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
-                assert.match((err as Error).message, /ghost\.domain\.com/);
+                // S5: the message must not become an oracle for the hostname that was looked up.
                 assert.match((err as Error).message, /ENOTFOUND/);
+                assert.doesNotMatch((err as Error).message, /ghost\.domain\.com/);
+                return true;
+            }
+        );
+    });
+
+});
+
+describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
+
+    it('a CIDR entry permits a reserved IP inside it and only inside it', () => {
+        assert.doesNotThrow(() => assertAllowedIp('127.0.0.1', ['127.0.0.0/8']));
+        assert.throws(() => assertAllowedIp('127.0.0.1', ['10.0.0.0/8']), SecureHttpError);
+    });
+
+    it('a single-IP entry permits exactly that address', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['10.1.2.3']));
+        assert.throws(() => assertAllowedIp('10.1.2.4', ['10.1.2.3']), SecureHttpError);
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1']));
+    });
+
+    it('a hostname entry permits a reserved IP only for that exact hostname', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['api.internal'], 'api.internal'));
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['api.internal'], 'other.internal'), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['api.internal']), SecureHttpError, 'no hostname given');
+    });
+
+    it('hostname matching is case-insensitive and exact (no wildcards, no suffixes)', () => {
+        assert.doesNotThrow(() => assertAllowedIp('10.1.2.3', ['API.Internal'], 'api.INTERNAL'));
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['*.internal'], 'api.internal'), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.1.2.3', ['internal'], 'api.internal'), SecureHttpError);
+        // An IP literal is never matched through the hostname set.
+        assert.throws(() => assertAllowedIp('127.0.0.1', ['localhost'], '127.0.0.1'), SecureHttpError);
+    });
+
+    it('public IPs always pass, whatever the policy', () => {
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', []));
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', false));
+        assert.doesNotThrow(() => assertAllowedIp('8.8.8.8', ['10.0.0.0/8']));
+    });
+
+    it('an IPv6 CIDR entry permits a reserved IPv6 address', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1/128']));
+        assert.throws(() => assertAllowedIp('::1', ['fe80::/10']), SecureHttpError);
+    });
+
+    it('an IPv4 entry also covers the IPv4-mapped form of an address inside it', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:127.0.0.1', ['127.0.0.0/8']));
+    });
+
+    it('true permits everything; false and an empty list block every reserved IP', () => {
+        assert.doesNotThrow(() => assertAllowedIp('169.254.169.254', true));
+        assert.throws(() => assertAllowedIp('169.254.169.254', false), SecureHttpError);
+        assert.throws(() => assertAllowedIp('169.254.169.254', []), SecureHttpError);
+    });
+
+    it('the reserved-IP message names the option and leaks neither the IP nor the hostname', () => {
+        for (const policy of [false, [], ['10.0.0.0/8']] as const) {
+            assert.throws(
+                () => assertAllowedIp('127.0.0.1', policy, 'secret-host.internal'),
+                (err: unknown) => {
+                    assert.ok(err instanceof SecureHttpError);
+                    assert.match(err.message, /prohibited internal\/reserved network IP/);
+                    assert.match(err.message, /permitReservedIps/);
+                    assert.doesNotMatch(err.message, /127\.0\.0\.1/);
+                    assert.doesNotMatch(err.message, /secret-host/);
+                    return true;
+                }
+            );
+        }
+    });
+
+    it('policyKey: false and [] are deny, true is all, lists are normalized and order-independent', () => {
+        assert.equal(policyKey(false), 'deny');
+        assert.equal(policyKey([]), 'deny');
+        assert.equal(policyKey(true), 'all');
+        assert.equal(policyKey(['B.example', '10.0.0.0/8']), 'list:10.0.0.0/8,b.example');
+        assert.equal(policyKey(['B.example', '10.0.0.0/8']), policyKey(['10.0.0.0/8', 'b.example']));
+        assert.notEqual(policyKey(['10.0.0.0/8']), policyKey(['10.0.0.0/9']));
+    });
+
+    it('resolveAndPinHost hands the looked-up hostname to the policy', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '10.1.2.3', family: 4 }));
+
+        assert.equal(await resolveAndPinHost('api.internal', ['api.internal']), '10.1.2.3');
+        await assert.rejects(() => resolveAndPinHost('other.internal', ['api.internal']), SecureHttpError);
+        await assert.rejects(() => resolveAndPinHost('api.internal', []), SecureHttpError);
+        assert.equal(await resolveAndPinHost('anything.example', ['10.0.0.0/8']), '10.1.2.3');
+    });
+
+    it('a DNS failure message carries the error code but not the hostname', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => {
+            throw Object.assign(new Error('getaddrinfo EAI_AGAIN ghost.domain.com'), { code: 'EAI_AGAIN' });
+        });
+
+        await assert.rejects(
+            () => resolveAndPinHost('ghost.domain.com'),
+            (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.equal(err.message, 'UltraTon: Hostname resolution failed (EAI_AGAIN).');
                 return true;
             }
         );

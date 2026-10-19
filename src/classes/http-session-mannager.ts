@@ -11,7 +11,12 @@ import {
   MAX_SESSION_MEMORY_MB,
 } from "../constants.ts";
 import { isIP } from "node:net";
-import { assertAllowedIp, resolveAndPinHost } from "../security/dns-pinner.ts";
+import {
+  assertAllowedIp,
+  policyKey,
+  type ReservedIpPolicy,
+  resolveAndPinHost,
+} from "../security/dns-pinner.ts";
 import { SecureHttpError } from "../errors.ts";
 
 interface SessionEntry {
@@ -23,10 +28,29 @@ interface SessionEntry {
 
 /**
  * Both maps below are keyed per policy as well as per origin: a session resolved
- * with `permitReservedIps: true` must never be reachable by a caller that forbids it.
+ * under one `permitReservedIps` policy must never be reachable by a caller with another.
+ * The policy key never contains '|', so the first '|' always separates it from the origin.
  */
-const poolKey = (origin: string, permitReservedIps: boolean): string =>
-  `${permitReservedIps}|${origin}`;
+const poolKey = (origin: string, policy: ReservedIpPolicy): string =>
+  `${policyKey(policy)}|${origin}`;
+
+const originOf = (key: string): string => key.slice(key.indexOf("|") + 1);
+
+/**
+ * `hostname` may be a full origin URL (e.g. "https://example.com") because the
+ * session pool is keyed by origin. Extract the bare hostname for DNS resolution,
+ * TLS SNI and the allowlist match: all of them need a plain host, not a URL.
+ */
+const bareHostOf = (hostname: string): string => {
+  let bareHost: string;
+  try {
+    bareHost = hostname.includes("://") ? new URL(hostname).hostname : hostname;
+  } catch {
+    bareHost = hostname;
+  }
+  // URL.hostname keeps the brackets of an IPv6 literal ("[::1]"); DNS and SNI need the bare address.
+  return bareHost.replace(/^\[|\]$/g, "");
+};
 
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
@@ -43,14 +67,12 @@ export class Http2SessionManager {
   }
 
   /**
-   * Closes the sessions of a specific origin (under both reserved-IP policies)
+   * Closes the sessions of a specific origin (under every reserved-IP policy)
    * and removes them from the manager.
    */
   public closeSession(hostname: string): void {
-    for (const permitReservedIps of [false, true]) {
-      const key = poolKey(hostname, permitReservedIps);
-      const entry = this.#sessions.get(key);
-      if (entry) {
+    for (const [key, entry] of [...this.#sessions]) {
+      if (originOf(key) === hostname) {
         this.#destroySession(key, entry.session);
       }
     }
@@ -69,32 +91,32 @@ export class Http2SessionManager {
 
   /**
    * Retrieves an existing active session or creates a new one.
-   * Concurrent callers for the same origin and the same `permitReservedIps` share
-   * one connection attempt; callers of the other policy never join it (nor retry
+   * Concurrent callers for the same origin and the same `permitReservedIps` policy share
+   * one connection attempt; callers of another policy never join it (nor retry
    * after it), so a failed strict attempt cannot fail or multiply permissive ones.
    *
    * The pool is shared across callers and keyed by policy and origin, so a session
-   * opened with `permitReservedIps: true` is never handed to a caller that forbids
-   * it. The IP check still runs on every hand-out as defence in depth.
+   * opened under one policy is never handed to a caller with another. The IP check
+   * still runs on every hand-out as defence in depth.
    */
   public async getSession(
     hostname: string,
     overrideOptions?: SecureClientSessionOptions,
-    permitReservedIps = false,
+    permitReservedIps: ReservedIpPolicy = false,
   ): Promise<ClientHttp2Session> {
     const { session, ip } = await this.#acquire(
       hostname,
       overrideOptions,
       permitReservedIps,
     );
-    assertAllowedIp(ip, permitReservedIps);
+    assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
     return session;
   }
 
   async #acquire(
     hostname: string,
     overrideOptions: SecureClientSessionOptions | undefined,
-    permitReservedIps: boolean,
+    permitReservedIps: ReservedIpPolicy,
   ): Promise<SessionEntry> {
     const key = poolKey(hostname, permitReservedIps);
     const entry = this.#sessions.get(key);
@@ -150,21 +172,9 @@ export class Http2SessionManager {
     key: string,
     hostname: string,
     overrideOptions: SecureClientSessionOptions | undefined,
-    permitReservedIps: boolean,
+    permitReservedIps: ReservedIpPolicy,
   ): Promise<SessionEntry> {
-    // `hostname` may be a full origin URL (e.g. "https://example.com") because
-    // the session pool is keyed by origin. Extract the bare hostname for DNS
-    // resolution and TLS SNI — both require a plain host, not a URL.
-    let bareHost: string;
-    try {
-      bareHost = hostname.includes("://")
-        ? new URL(hostname).hostname
-        : hostname;
-    } catch {
-      bareHost = hostname;
-    }
-    // URL.hostname keeps the brackets of an IPv6 literal ("[::1]"); DNS and SNI need the bare address.
-    bareHost = bareHost.replace(/^\[|\]$/g, "");
+    const bareHost = bareHostOf(hostname);
 
     const connectionOptions: SecureClientSessionOptions & {
       maxHeaderListPairs?: number;

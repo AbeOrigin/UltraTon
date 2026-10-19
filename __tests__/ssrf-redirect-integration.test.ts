@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import dnsPromises from 'node:dns/promises';
 import type { AddressInfo } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { SecureHttpError } from '../src/errors.ts';
@@ -48,6 +49,51 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
     it('Still reaches a reserved IP literal when permitReservedIps is true', async () => {
         const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true });
         assert.equal((res.body as Buffer).toString(), 'INTERNAL');
+    });
+
+    it('permitReservedIps: a CIDR allowlist reaches a reserved IP literal inside it', async () => {
+        const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: ['127.0.0.0/8'] });
+        assert.equal((res.body as Buffer).toString(), 'INTERNAL');
+    });
+
+    it('permitReservedIps: a CIDR allowlist that excludes the target blocks it without connecting', async () => {
+        hits = 0;
+        await assert.rejects(
+            new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: ['10.0.0.0/8'] }),
+            (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message) && !err.message.includes('127.0.0.1')
+        );
+        assert.equal(hits, 0);
+    });
+
+    it('permitReservedIps: a hostname entry lets that host through, but a redirect to a reserved IP literal is still blocked', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        const other = http.createServer((_req, res) => { hits++; res.end('OTHER'); });
+        await new Promise<void>(r => other.listen(0, '127.0.0.1', r));
+        const otherPort = (other.address() as AddressInfo).port;
+        try {
+            const reached = await new UltraTonClient().get(`http://localhost:${port}/`, { permitReservedIps: ['localhost'] });
+            assert.equal((reached.body as Buffer).toString(), 'INTERNAL');
+
+            hits = 0;
+            await assert.rejects(
+                new UltraTonClient().get(`http://localhost:${port}/cross-origin/${otherPort}`, { maxRedirects: 1, permitReservedIps: ['localhost'] }),
+                (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+            );
+            // Only the first hop reached a server; the redirected-to literal was never contacted.
+            assert.equal(hits, 1);
+        } finally {
+            other.close();
+        }
+    });
+
+    it('permitReservedIps: a hostname entry does not cover a different hostname resolving to a reserved IP', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        hits = 0;
+        await assert.rejects(
+            new UltraTonClient().get(`https://rebound.example:${port}/`, { permitReservedIps: ['localhost'] }),
+            (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message) && !/rebound/.test(err.message)
+        );
+        assert.equal(hits, 0);
     });
 
     it('Keeps the auth option on a same-origin redirect', async () => {

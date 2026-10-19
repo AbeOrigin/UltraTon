@@ -51,20 +51,76 @@ export function isReservedIp(ip: string): boolean {
     return reservedIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
 }
 
-export function assertAllowedIp(ip: string, permitReservedIps: boolean): void {
-    if (!permitReservedIps && isReservedIp(ip)) {
-        throw new SecureHttpError(
-            'UltraTon: Target resolved to a strictly prohibited internal/reserved network IP.'
-        );
-    }
+/**
+ * What a caller may reach among the reserved addresses: `true` allows all of them, `false` (or `[]`) none, and a list
+ * allows only the IPs/CIDRs it names, plus any address reached through a hostname it names (exact, no wildcards).
+ */
+export type ReservedIpPolicy = boolean | readonly string[];
+
+/** Stable identity of a policy: equal for lists that differ only in order or case. Also keys the compiled cache and the HTTP/2 pool. */
+export function policyKey(policy: ReservedIpPolicy): string {
+    if (typeof policy === 'boolean') return policy ? 'all' : 'deny';
+    if (policy.length === 0) return 'deny';
+    return 'list:' + policy.map(entry => entry.toLowerCase()).sort().join(',');
 }
 
-export async function resolveAndPinHost(hostname: string, permitReservedIps: boolean = false): Promise<string> {
+interface CompiledAllowlist {
+    allowed: BlockList;
+    hostnames: Set<string>;
+}
+
+// ponytail: one entry per distinct allowlist ever used, never evicted. Fine while allowlists come from static config
+// (a handful per process). Upgrade path: bound it with a small LRU if lists are ever built from request-time input.
+const compiledAllowlists = new Map<string, CompiledAllowlist>();
+
+function compileAllowlist(entries: readonly string[], key: string): CompiledAllowlist {
+    let compiled = compiledAllowlists.get(key);
+    if (compiled) return compiled;
+
+    compiled = { allowed: new BlockList(), hostnames: new Set() };
+    for (const entry of entries) {
+        const lower = entry.toLowerCase();
+        const slash = lower.indexOf('/');
+        if (slash !== -1) {
+            const network = lower.slice(0, slash);
+            compiled.allowed.addSubnet(network, Number(lower.slice(slash + 1)), isIP(network) === 4 ? 'ipv4' : 'ipv6');
+        } else if (isIP(lower) !== 0) {
+            compiled.allowed.addAddress(lower, isIP(lower) === 4 ? 'ipv4' : 'ipv6');
+        } else {
+            compiled.hostnames.add(lower);
+        }
+    }
+    compiledAllowlists.set(key, compiled);
+    return compiled;
+}
+
+/**
+ * Throws when `ip` is reserved and `policy` does not allow it. `hostname` is the name the caller asked for (the
+ * literal itself for an IP-literal URL); only a hostname entry of the list can match it.
+ * The message names neither the IP nor the hostname, so it cannot be used to probe the internal network.
+ */
+export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?: string): void {
+    if (policy === true || !isReservedIp(ip)) return;
+
+    if (typeof policy !== 'boolean' && policy.length > 0) {
+        const { allowed, hostnames } = compileAllowlist(policy, policyKey(policy));
+        if (allowed.check(ip, isIP(ip) === 4 ? 'ipv4' : 'ipv6')) return;
+        if (hostname !== undefined && hostnames.has(hostname.toLowerCase().replace(/^\[|\]$/g, ''))) return;
+    }
+
+    throw new SecureHttpError(
+        'UltraTon: Target resolves to a prohibited internal/reserved network IP. ' +
+        'To allow internal targets set permitReservedIps (true or an allowlist of IPs, CIDRs or hostnames).'
+    );
+}
+
+export async function resolveAndPinHost(hostname: string, policy: ReservedIpPolicy = false): Promise<string> {
     // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
     const { address } = await dnsPromises.lookup(hostname, { family: 0 }).catch((err: NodeJS.ErrnoException) => {
-        throw new SecureHttpError(`UltraTon: Hostname resolution failed for ${hostname} with code ${err.code || 'UNKNOWN_DNS_ERROR'}.`);
+        // The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
+        throw new SecureHttpError(`UltraTon: Hostname resolution failed (${err.code || 'UNKNOWN_DNS_ERROR'}).`);
     });
 
-    assertAllowedIp(address, permitReservedIps);
+    assertAllowedIp(address, policy, hostname);
     return address;
 }

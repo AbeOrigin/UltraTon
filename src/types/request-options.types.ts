@@ -1,5 +1,8 @@
 import { SecureClientSessionOptions } from "node:http2";
 import { RequestOptions } from "node:https";
+import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
+
+export type { ReservedIpPolicy };
 
 type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'auth' | 'signal'>
 
@@ -47,10 +50,13 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
 
     /**
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
-     * Set to true ONLY if you are building an internal API client. 
-     * Default is false (Strict SSRF mitigation).
+     * `true` allows all of them: set it ONLY if you are building an internal API client.
+     * An array allows just what it names: IPs (`'10.0.0.5'`), CIDRs (`'10.0.0.0/8'`) and exact,
+     * case-insensitive hostnames (`'api.internal'`, no wildcards). A hostname entry allows that host to
+     * resolve to any reserved IP, so prefer IP/CIDR entries when you know the addresses.
+     * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
      */
-    readonly permitReservedIps?: boolean;
+    readonly permitReservedIps?: ReservedIpPolicy;
 }
 
 /**
@@ -62,7 +68,7 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
     readonly maxRedirects: number;
-    readonly permitReservedIps: boolean;
+    readonly permitReservedIps: ReservedIpPolicy;
 }
 
 // HTTP2 Options
@@ -80,8 +86,8 @@ export interface UltraTonRequestOptionsHttp2 {
     readonly maxRedirects?: number;
     readonly timeoutMs?: number;
     readonly maxBodySize?: number;
-    /** Same SSRF opt-out as the HTTP/1 client. Default is false. */
-    readonly permitReservedIps?: boolean;
+    /** Same SSRF opt-out (boolean or allowlist) as the HTTP/1 client. Default is false. */
+    readonly permitReservedIps?: ReservedIpPolicy;
 }
 
 
@@ -121,8 +127,9 @@ export interface UltraTonOptionsHttp2 {
 
     /**
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
-     * Set to true ONLY if you are building an internal API client.
-     * Default is false (Strict SSRF mitigation).
+     * `true` allows all of them: set it ONLY if you are building an internal API client.
+     * An array allows just what it names: IPs, CIDRs and exact, case-insensitive hostnames (no wildcards).
+     * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
      */
-    permitReservedIps?: boolean;
+    permitReservedIps?: ReservedIpPolicy;
 }

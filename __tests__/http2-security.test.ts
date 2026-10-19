@@ -225,6 +225,54 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     assert.strictEqual(String(res.body), "H2-INTERNAL");
   });
 
+  it("connects to a reserved IP covered by a CIDR allowlist", async (t) => {
+    const { client, url, connect } = await startFixture(t);
+
+    const res = await client.get(url, { permitReservedIps: ["127.0.0.0/8"] });
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("rejects a reserved IP outside the allowlist without connecting", async (t) => {
+    const { client, url, connect } = await startFixture(t);
+
+    await assert.rejects(client.get(url, { permitReservedIps: ["10.0.0.0/8"] }), (err: unknown) => {
+      assert.ok(err instanceof SecureHttpError);
+      assert.match(err.message, RESERVED);
+      assert.doesNotMatch(err.message, /127\.0\.0\.1/);
+      return true;
+    });
+    assert.strictEqual(connect.mock.callCount(), 0);
+  });
+
+  it("applies the client-wide allowlist when a request sets none", async (t) => {
+    const { manager, url, connect } = await startFixture(t);
+    const client = new UltraTonHTTP2({ permitReservedIps: ["127.0.0.0/8"] }, manager);
+
+    const res = await client.get(url);
+
+    assert.strictEqual(res.statusCode, 200);
+    assert.strictEqual(connect.mock.callCount(), 1);
+  });
+
+  it("keeps sessions of different allowlists apart in the pool", async (t) => {
+    const { manager, port, connect } = await startFixture(t);
+    const origin = `http://127.0.0.1:${port}`;
+
+    const wide = await manager.getSession(origin, undefined, ["127.0.0.0/8"]);
+    const same = await manager.getSession(origin, undefined, ["127.0.0.0/8"]);
+    const narrow = await manager.getSession(origin, undefined, ["127.0.0.1"]);
+    const all = await manager.getSession(origin, undefined, true);
+    await assert.rejects(manager.getSession(origin, undefined, ["10.0.0.0/8"]), RESERVED);
+
+    assert.strictEqual(wide, same);
+    assert.notStrictEqual(wide, narrow);
+    assert.notStrictEqual(wide, all);
+    assert.strictEqual(connect.mock.callCount(), 3);
+  });
+
   it("does not reuse a pooled session for a request that forbids reserved IPs", async (t) => {
     const { client, url, connect } = await startFixture(t);
 

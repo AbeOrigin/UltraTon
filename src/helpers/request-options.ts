@@ -1,4 +1,5 @@
-import type { UltraTonRequestOptions, SecureUltraTonRequestOptions } from "../types/request-options.types.ts";
+import { isIP } from "node:net";
+import type { UltraTonRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy } from "../types/request-options.types.ts";
 import { MAX_REDIRECTS_CEILING } from "../constants.ts";
 const INT32_MAX = 2147483647;
 
@@ -25,6 +26,39 @@ function intOption(propName: string, value: unknown, fallback: number, max = INT
     return validateType(propName, value, 'number') && Number.isInteger(value) && (value as number) >= 0 && (value as number) <= max
         ? value as number
         : fallback;
+}
+
+/** An IP, a CIDR (`ip/prefix`, prefix 0-32 for v4 and 0-128 for v6) or a hostname with no leading or trailing dot. */
+function isReservedIpEntry(entry: unknown): entry is string {
+    if (typeof entry !== 'string') return false;
+    if (isIP(entry) !== 0) return true;
+
+    const slash = entry.indexOf('/');
+    if (slash !== -1) {
+        const family = isIP(entry.slice(0, slash));
+        const prefix = entry.slice(slash + 1);
+        return family !== 0 && /^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128);
+    }
+
+    return /^[a-z0-9.-]+$/i.test(entry) && !entry.startsWith('.') && !entry.endsWith('.');
+}
+
+/**
+ * `permitReservedIps` is a boolean or an allowlist of IPs, CIDRs and hostnames. The list is copied and frozen after
+ * validation, so the caller cannot widen the policy by mutating their array afterwards.
+ * @throws {TypeError} For any other type, or for a list entry that is none of an IP, a CIDR or a hostname.
+ */
+function reservedIpPolicy(value: unknown): ReservedIpPolicy {
+    if (!Array.isArray(value)) {
+        return validateType('permitReservedIps', value, 'boolean') && value === true;
+    }
+
+    for (const entry of value) {
+        if (!isReservedIpEntry(entry)) {
+            throw new TypeError(`UltraTon: Invalid permitReservedIps entry '${String(entry)}': expected an IP, CIDR or hostname.`);
+        }
+    }
+    return Object.freeze([...value] as string[]);
 }
 
 /**
@@ -105,7 +139,7 @@ export function buildSafeRequestOptions(options: UltraTonRequestOptions): Secure
     safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000); // Strict 30s fallback
     safeOptions.maxRedirects = Math.min(intOption('maxRedirects', options.maxRedirects, 0, Infinity), MAX_REDIRECTS_CEILING);
     // Strict fallback: block SSRF
-    safeOptions.permitReservedIps = validateType('permitReservedIps', options.permitReservedIps, 'boolean') && options.permitReservedIps;
+    safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
     return safeOptions as unknown as SecureUltraTonRequestOptions;
 }

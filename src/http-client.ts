@@ -173,7 +173,9 @@ export class UltraTonClient {
 
             // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
             // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
-            assertAllowedIp(urlObj.hostname.replace(/^\[|\]$/g, ''), reqOpts.permitReservedIps);
+            // For a literal the "hostname" is the literal itself, which no hostname entry of an allowlist can match.
+            const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
+            assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
 
             let currentTimeoutMs = reqOpts.timeoutMs;
             if (reqOpts.timeoutMs > 0) {
