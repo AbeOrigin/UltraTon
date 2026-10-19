@@ -64,9 +64,9 @@ export function policyKey(policy: ReservedIpPolicy): string {
     return 'list:' + policy.map(entry => entry.toLowerCase()).sort().join(',');
 }
 
-// IPv4 and IPv6 rules live in separate lists on purpose. BlockList checks a native IPv4 address against IPv6 rules as
-// ::ffff:a.b.c.d, so one shared list would let any IPv6 rule containing ::ffff:0:0/96 (::/0 .. ::/80, or that prefix
-// itself) allow every IPv4 address. Keeping them apart makes an IPv6 entry unable to cover native IPv4.
+// IPv4 and IPv6 rules live in separate lists on purpose, and no address is ever judged by both. BlockList checks a
+// native IPv4 address against IPv6 rules as ::ffff:a.b.c.d, so one shared list would let any IPv6 rule containing
+// ::ffff:0:0/96 (::/0 .. ::/80, or that prefix itself) allow every IPv4 address. See `coveredByAllowlist`.
 interface CompiledAllowlist {
     ipv4: BlockList;
     ipv6: BlockList;
@@ -101,6 +101,54 @@ function compileAllowlist(entries: readonly string[], key: string): CompiledAllo
     return compiled;
 }
 
+/** The 8 groups of an IPv6 address in any spelling (compressed, expanded, dotted tail); `undefined` if it does not parse. */
+function ipv6Groups(ip: string): number[] | undefined {
+    let text = ip.split('%')[0];
+    const tail4 = /\d+\.\d+\.\d+\.\d+$/.exec(text)?.[0];
+    if (tail4 !== undefined) {
+        const [a, b, c, d] = tail4.split('.').map(Number);
+        if (isIP(tail4) !== 4) return undefined;
+        text = `${text.slice(0, -tail4.length)}${(a << 8 | b).toString(16)}:${(c << 8 | d).toString(16)}`;
+    }
+    const halves = text.split('::');
+    if (halves.length > 2) return undefined;
+    const head = halves[0] ? halves[0].split(':') : [];
+    const rest = halves[1] ? halves[1].split(':') : [];
+    const gap = 8 - head.length - rest.length;
+    if (halves.length === 2 ? gap < 1 : gap !== 0) return undefined;
+    const groups = [...head, ...Array<string>(halves.length === 2 ? gap : 0).fill('0'), ...rest]
+        .map(group => /^[0-9a-f]{1,4}$/i.test(group) ? parseInt(group, 16) : NaN);
+    return groups.some(Number.isNaN) ? undefined : groups;
+}
+
+/**
+ * The IPv4 an IPv6 address carries in its low 32 bits, for the four embedding forms: IPv4-mapped (::ffff:0:0/96),
+ * IPv4-compatible (::/96), NAT64 (64:ff9b::/96) and local-use NAT64 (64:ff9b:1::/48). `undefined` for any other IPv6.
+ * `::` and `::1` are the unspecified and loopback addresses, not IPv4-compatible ones, so they stay native IPv6.
+ */
+function embeddedIpv4(groups: number[]): string | undefined {
+    const zeros = (from: number, to: number) => groups.slice(from, to).every(group => group === 0);
+    const embeds =
+        (zeros(0, 5) && groups[5] === 0xffff) ||
+        (zeros(0, 6) && !(groups[6] === 0 && groups[7] <= 1)) ||
+        (groups[0] === 0x64 && groups[1] === 0xff9b && (zeros(2, 6) || groups[2] === 1));
+    return embeds ? `${groups[6] >> 8}.${groups[6] & 255}.${groups[7] >> 8}.${groups[7] & 255}` : undefined;
+}
+
+/**
+ * An address is judged by exactly one family, so a rule of one family never widens into the other: native IPv4 by the
+ * IPv4 rules, an IPv6 address that embeds an IPv4 only by that IPv4 against the IPv4 rules (an IPv6 rule such as
+ * `::/0` or `::ffff:0:0/96` does not cover it), and any other IPv6 address by the IPv6 rules. An unparsable address is
+ * never covered.
+ */
+function coveredByAllowlist(ip: string, { ipv4, ipv6 }: CompiledAllowlist): boolean {
+    if (isIP(ip) === 4) return ipv4.check(ip, 'ipv4');
+    const groups = ipv6Groups(ip);
+    if (groups === undefined) return false;
+    const embedded = embeddedIpv4(groups);
+    return embedded === undefined ? ipv6.check(ip, 'ipv6') : ipv4.check(embedded, 'ipv4');
+}
+
 /**
  * Throws when `ip` is reserved and `policy` does not allow it. `hostname` is the name the caller asked for (the
  * literal itself for an IP-literal URL); only a hostname entry of the list can match it.
@@ -110,12 +158,9 @@ export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?:
     if (policy === true || !isReservedIp(ip)) return;
 
     if (typeof policy !== 'boolean' && policy.length > 0) {
-        const { ipv4, ipv6, hostnames } = compileAllowlist(policy, policyKey(policy));
-        // A native IPv4 address is checked against IPv4 rules only (see CompiledAllowlist). An IPv6 address is checked
-        // against both, so ::ffff:10.0.0.1 stays covered by 10.0.0.0/8 and by an IPv6 rule that contains it.
-        const covered = isIP(ip) === 4 ? ipv4.check(ip, 'ipv4') : ipv4.check(ip, 'ipv6') || ipv6.check(ip, 'ipv6');
-        if (covered) return;
-        if (hostname !== undefined && hostnames.has(hostname.toLowerCase().replace(/^\[|\]$/g, ''))) return;
+        const compiled = compileAllowlist(policy, policyKey(policy));
+        if (coveredByAllowlist(ip, compiled)) return;
+        if (hostname !== undefined && compiled.hostnames.has(hostname.toLowerCase().replace(/^\[|\]$/g, ''))) return;
     }
 
     throw new SecureHttpError(

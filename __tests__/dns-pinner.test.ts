@@ -188,15 +188,66 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
         assert.doesNotThrow(() => assertAllowedIp('127.0.0.1', ['0.0.0.0/0']));
     });
 
-    it('an IPv6 entry still covers the IPv6 addresses inside it, including mapped ones it contains', () => {
+    it('an IPv6 entry still covers the native IPv6 addresses inside it', () => {
         assert.doesNotThrow(() => assertAllowedIp('fd00::1', ['::/0']));
+        assert.doesNotThrow(() => assertAllowedIp('fe80::1', ['::/0']));
+        // :: and ::1 are the unspecified and loopback addresses, not IPv4-compatible ones: they stay native IPv6.
         assert.doesNotThrow(() => assertAllowedIp('::1', ['::/0']));
+        assert.doesNotThrow(() => assertAllowedIp('::1', ['::1/128']));
         assert.throws(() => assertAllowedIp('fd00::1', ['fe80::/10']), SecureHttpError);
-        // A mapped address is an IPv6 address: an IPv6 rule that contains it covers it, as BlockList does.
-        assert.doesNotThrow(() => assertAllowedIp('::ffff:127.0.0.1', ['::ffff:0:0/96']));
-        // ...and an IPv4 rule covers its mapped form, an IPv6 rule that does not contain it does not.
+    });
+
+    // An IPv6 address that embeds an IPv4 in its low 32 bits (mapped ::ffff:0:0/96, compatible ::/96, NAT64 64:ff9b::/96
+    // and 64:ff9b:1::/48) is judged only by that IPv4 against the IPv4 entries; IPv6 entries never cover it.
+    const embeddingForms = [
+        // [address, the IPv4 it embeds]
+        ['::ffff:169.254.169.254', '169.254.169.254'],
+        ['::ffff:a9fe:a9fe', '169.254.169.254'],
+        ['0:0:0:0:0:ffff:a9fe:a9fe', '169.254.169.254'],
+        ['0000:0000:0000:0000:0000:FFFF:A9FE:A9FE', '169.254.169.254'],
+        ['::7f00:1', '127.0.0.1'],
+        ['::127.0.0.1', '127.0.0.1'],
+        ['0:0:0:0:0:0:7f00:1', '127.0.0.1'],
+        ['64:ff9b::a9fe:a9fe', '169.254.169.254'],
+        ['64:ff9b::169.254.169.254', '169.254.169.254'],
+        ['64:ff9b:0:0:0:0:a9fe:a9fe', '169.254.169.254'],
+        ['64:ff9b:1::a9fe:a9fe', '169.254.169.254'],
+        ['::ffff:10.0.0.1', '10.0.0.1'],
+        ['::ffff:a00:1', '10.0.0.1'],
+        ['64:ff9b::a00:1', '10.0.0.1'],
+        ['64:ff9b:1::a00:1', '10.0.0.1'],
+        ['::a00:1', '10.0.0.1'],
+    ] as const;
+
+    it('an IPv6 address embedding an IPv4 is not covered by IPv6 entries, not even ::/0', () => {
+        for (const [ip] of embeddingForms) {
+            for (const entry of ['::/0', '::/80', '::/96', '::ffff:0:0/96', '64:ff9b::/96', '64:ff9b:1::/48', ip]) {
+                assert.throws(() => assertAllowedIp(ip, [entry]), SecureHttpError, `${entry} must not cover ${ip}`);
+            }
+        }
+    });
+
+    it('an IPv6 address embedding an IPv4 is covered exactly when its embedded IPv4 is', () => {
+        for (const [ip, embedded] of embeddingForms) {
+            assert.doesNotThrow(() => assertAllowedIp(ip, [`${embedded}/32`]), `${embedded}/32 must cover ${ip}`);
+            assert.doesNotThrow(() => assertAllowedIp(ip, [embedded]), `${embedded} must cover ${ip}`);
+            assert.doesNotThrow(() => assertAllowedIp(ip, ['0.0.0.0/0']), `0.0.0.0/0 must cover ${ip}`);
+            assert.throws(() => assertAllowedIp(ip, ['203.0.113.0/24']), SecureHttpError, `an unrelated IPv4 entry must not cover ${ip}`);
+        }
         assert.doesNotThrow(() => assertAllowedIp('::ffff:10.0.0.1', ['10.0.0.0/8']));
-        assert.throws(() => assertAllowedIp('::ffff:10.0.0.1', ['fe80::/10']), SecureHttpError);
+        assert.doesNotThrow(() => assertAllowedIp('64:ff9b::a00:1', ['10.0.0.0/8']));
+        assert.throws(() => assertAllowedIp('::ffff:127.0.0.1', ['10.0.0.0/8']), SecureHttpError);
+        assert.throws(() => assertAllowedIp('64:ff9b::7f00:1', ['10.0.0.0/8']), SecureHttpError);
+    });
+
+    it('an IPv6 entry written in mapped form is inert: it covers neither the mapped nor the native IPv4 address', () => {
+        assert.throws(() => assertAllowedIp('::ffff:10.0.0.1', ['::ffff:0:0/96']), SecureHttpError);
+        assert.throws(() => assertAllowedIp('10.0.0.1', ['::ffff:0:0/96']), SecureHttpError);
+    });
+
+    it('a hostname entry still allows an embedding address reached through that hostname', () => {
+        assert.doesNotThrow(() => assertAllowedIp('::ffff:a9fe:a9fe', ['api.internal'], 'api.internal'));
+        assert.throws(() => assertAllowedIp('::ffff:a9fe:a9fe', ['api.internal'], 'other.internal'), SecureHttpError);
     });
 
     it('true permits everything; false and an empty list block every reserved IP', () => {

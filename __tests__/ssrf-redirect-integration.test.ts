@@ -77,6 +77,37 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         assert.equal(hits, 0);
     });
 
+    // http is only accepted for localhost/127.0.0.1, so these use https: the literal is rejected before any connection.
+    it('permitReservedIps: an IPv6 allowlist (::/0) does not reach an IPv4-embedding IPv6 literal, directly or by redirect', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        const mapped = `[::ffff:127.0.0.1]:${port}`;
+        const redirector = http.createServer((_req, res) => { res.writeHead(302, { location: `https://${mapped}/landing` }); res.end(); });
+        await new Promise<void>(r => redirector.listen(0, '127.0.0.1', r));
+        const redirectorPort = (redirector.address() as AddressInfo).port;
+        try {
+            hits = 0;
+            await assert.rejects(
+                new UltraTonClient().get(`https://${mapped}/`, { permitReservedIps: ['::/0'] }),
+                (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+            );
+            await assert.rejects(
+                new UltraTonClient().get(`http://localhost:${redirectorPort}/`, { maxRedirects: 1, permitReservedIps: ['localhost', '::/0'] }),
+                (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+            );
+            assert.equal(hits, 0);
+        } finally {
+            redirector.close();
+        }
+    });
+
+    it('permitReservedIps: an IPv4 allowlist reaches the IPv6 literal that embeds an address it covers', async () => {
+        // The literal check passes; the https handshake then fails against the plain-http fixture, which is not a policy error.
+        await assert.rejects(
+            new UltraTonClient().get(`https://[::ffff:127.0.0.1]:${port}/`, { permitReservedIps: ['127.0.0.0/8'], timeoutMs: 2000 }),
+            (err: unknown) => !(err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message))
+        );
+    });
+
     it('permitReservedIps: a hostname entry lets that host through, but a redirect to a reserved IP literal is still blocked', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
         const other = http.createServer((_req, res) => { hits++; res.end('OTHER'); });

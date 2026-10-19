@@ -52,9 +52,12 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
      * `true` allows all of them: set it ONLY if you are building an internal API client.
      * An array allows just what it names: IPs (`'10.0.0.5'`), CIDRs (`'10.0.0.0/8'`) and exact,
-     * case-insensitive hostnames (`'api.internal'`, no wildcards). IPv4 and IPv6 entries are independent:
-     * an IPv6 entry (even `'::/0'`) never covers a native IPv4 address, so list IPv4 CIDRs for those. A hostname entry allows that host to
-     * resolve to any reserved IP, so prefer IP/CIDR entries when you know the addresses.
+     * case-insensitive hostnames (`'api.internal'`, no wildcards). IPv4 and IPv6 entries never cover each other:
+     * an IPv6 entry (even `'::/0'`) does not cover a native IPv4 address, and an IPv6 address that embeds an IPv4
+     * (IPv4-mapped `::ffff:0:0/96`, IPv4-compatible `::/96`, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`) is judged
+     * only by that embedded IPv4 against your IPv4 entries (`'10.0.0.0/8'` allows `::ffff:10.0.0.1`). So list IPv4
+     * CIDRs for IPv4 targets: an IPv6 entry written in one of those forms (`'::ffff:0:0/96'`) is inert.
+     * A hostname entry allows that host to resolve to any reserved IP, so prefer IP/CIDR entries when you know the addresses.
      * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
      */
     readonly permitReservedIps?: ReservedIpPolicy;
