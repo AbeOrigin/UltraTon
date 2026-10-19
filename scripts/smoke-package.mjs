@@ -64,12 +64,23 @@ try {
   fs.mkdirSync(consumer);
 
   // `npm pack` runs the `prepack` hook (clean build), so the tarball never holds stale files.
+  // --ignore-scripts=false forces the hook even if a .npmrc or env sets ignore-scripts=true.
+  // --silent keeps the prepack build output off stdout so only the JSON is parsed.
   let tgz;
   check('npm pack', () => {
-    // --silent keeps the prepack build output off stdout so only the JSON is parsed.
-    const info = JSON.parse(npm(['pack', '--silent', '--json', '--pack-destination', packDir], repo));
+    const info = JSON.parse(npm(['pack', '--silent', '--ignore-scripts=false', '--json', '--pack-destination', packDir], repo));
     tgz = path.join(packDir, info[0].filename);
     if (!fs.existsSync(tgz)) throw new Error(`tarball not found at ${tgz}`);
+    // Only dist/ plus the four root files may ship, and the entry points must be there.
+    const paths = info[0].files.map((f) => f.path);
+    const allowed = new Set(['package.json', 'README.md', 'LICENSE', 'CHANGELOG.md']);
+    const bad = paths.filter((p) => !allowed.has(p) && !p.startsWith('dist/'));
+    const missing = ['dist/index.js', 'dist/index.d.ts'].filter((p) => !paths.includes(p));
+    if (bad.length || missing.length) {
+      throw new Error(`unexpected tarball contents
+  not allowed: ${JSON.stringify(bad)}
+  missing: ${JSON.stringify(missing)}`);
+    }
   });
   if (!tgz) throw new Error('cannot continue without a tarball');
 
