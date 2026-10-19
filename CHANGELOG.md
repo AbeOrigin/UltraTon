@@ -33,7 +33,10 @@ Everything below has been merged since 1.0.3 and is not yet published. It includ
 
 ### Changed
 
-- **Breaking: `data` is now `body`.** Responses expose `body: T | Buffer` instead of `data`. `application/json` bodies are parsed automatically, and invalid JSON with that content type rejects with `UltraTonParseError` (#3).
+- **Breaking: `data` is now `body`.** Responses expose `body: T | Buffer` instead of `data`. `application/json` bodies are parsed automatically, and invalid JSON with that content type rejects with `UltraTonParseError` (#3). This also changes JSON handling for HTTP/1 users:
+  - Both `body` and `json()` now parse with a reviver that drops `__proto__`, `constructor` and `prototype` keys at every depth, where 1.0.3's `json()` was a plain `JSON.parse`. A legitimate field named `constructor` or `prototype` silently disappears from the result.
+  - JSON bodies over 5 MB are not parsed automatically: `body` stays a `Buffer` (hence `T | Buffer`), and `json()` still parses it on demand.
+  - An empty JSON body now gives `{}`, where 1.0.3's `json()` threw `UltraTonParseError`.
 - **Breaking: loopback IP literals need a permit.** `http://127.0.0.1` and its numeric forms (such as `http://2130706433`) now require `permitReservedIps`. They used to work through the URL-parser escape hatch. `http://localhost` was already blocked via DNS before this change (#1, #3).
 - **Breaking: narrower HTTP/2 option types.** `UltraTonRequestOptionsHttp2` no longer extends `RequestOptions`, because the HTTP/2 client ignored those options (#3).
 - **Behaviour: mid-body failures.** Any failure while reading a response body (abort, premature close, socket error) now surfaces as `SecureHttpError`. A raw `'error'` event could previously leak through (#2).

@@ -30,8 +30,11 @@ const TYPES = [
 ];
 
 const q = (s) => `"${s}"`; // npm is launched through the shell (npm.cmd on Windows), so quote arguments
+// --dry-run=false: `npm publish --dry-run` exports npm_config_dry_run=true to lifecycle scripts,
+// and nested pack/install would inherit it and write nothing. Force it off for every nested call.
+// The `npm` token itself must stay unquoted: on Windows a quoted "npm" breaks npm.cmd's %~dp0.
 const npm = (args, cwd) =>
-  execSync(['npm', ...args.map(q)].join(' '), { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  execSync(['npm', ...[...args, '--dry-run=false'].map(q)].join(' '), { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ultraton-smoke-'));
 let failed = false;
@@ -69,8 +72,9 @@ try {
   let tgz;
   check('npm pack', () => {
     const info = JSON.parse(npm(['pack', '--silent', '--ignore-scripts=false', '--json', '--pack-destination', packDir], repo));
-    tgz = path.join(packDir, info[0].filename);
-    if (!fs.existsSync(tgz)) throw new Error(`tarball not found at ${tgz}`);
+    const packed = path.join(packDir, info[0].filename);
+    if (!fs.existsSync(packed)) throw new Error(`tarball not found at ${packed}`);
+    tgz = packed; // only set once the file exists, so a missing tarball stops the run
     // Only dist/ plus the four root files may ship, and the entry points must be there.
     const paths = info[0].files.map((f) => f.path);
     const allowed = new Set(['package.json', 'README.md', 'LICENSE', 'CHANGELOG.md']);
