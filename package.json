@@ -21,8 +21,11 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:strict": "tsc --noEmit --strict",
     "test": "node --test __tests__/**/*.test.ts",
     "prepublishOnly": "npm run test && npm run build",
+    "demo:http2:server": "node demo/http2.server.ts",
+    "demo:http2:client": "node demo/http2.client.ts",
     "demo:server": "node demo/server.ts",
     "demo:client": "node demo/client.ts"
   },

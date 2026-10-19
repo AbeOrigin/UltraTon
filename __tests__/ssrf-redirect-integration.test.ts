@@ -9,6 +9,7 @@ import { SecureHttpError } from '../src/errors.ts';
 describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets)', () => {
     let hits = 0;
     let lastAuth: string | undefined;
+    let lastHost: string | undefined;
     let server: http.Server;
     let port = 0;
 
@@ -16,6 +17,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         server = http.createServer((req, res) => {
             hits++;
             lastAuth = req.headers.authorization;
+            lastHost = req.headers.host;
             if (req.url === '/same-origin') {
                 res.writeHead(302, { location: '/landing' });
                 return res.end();
@@ -45,7 +47,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
 
     it('Still reaches a reserved IP literal when permitReservedIps is true', async () => {
         const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true });
-        assert.equal(res.data.toString(), 'INTERNAL');
+        assert.equal((res.body as Buffer).toString(), 'INTERNAL');
     });
 
     it('Keeps the auth option on a same-origin redirect', async () => {
@@ -60,8 +62,29 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         try {
             lastAuth = 'unset';
             const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, { auth: 'user:secret', maxRedirects: 1, permitReservedIps: true });
-            assert.equal(res.data.toString(), 'OTHER');
+            assert.equal((res.body as Buffer).toString(), 'OTHER');
             assert.equal(lastAuth, undefined);
+        } finally {
+            other.close();
+        }
+    });
+
+    it('drops a caller host header on cross-origin redirects', async () => {
+        let hostSeenByB: string | undefined;
+        const other = http.createServer((req, res) => { hostSeenByB = req.headers.host; res.end('OTHER'); });
+        await new Promise<void>(r => other.listen(0, '127.0.0.1', r));
+        const otherPort = (other.address() as AddressInfo).port;
+        try {
+            const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, {
+                headers: { Host: 'attacker.example' },
+                maxRedirects: 1,
+                permitReservedIps: true
+            });
+            assert.equal((res.body as Buffer).toString(), 'OTHER');
+            // HTTP/1 still honours a custom Host on the first hop...
+            assert.equal(lastHost, 'attacker.example');
+            // ...but it must not follow the request to another origin.
+            assert.equal(hostSeenByB, `127.0.0.1:${otherPort}`);
         } finally {
             other.close();
         }
@@ -79,7 +102,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         try {
             lastAuth = 'unset';
             const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, { auth: 'user:secret', maxRedirects: 2, permitReservedIps: true });
-            assert.equal(res.data.toString(), 'INTERNAL');
+            assert.equal((res.body as Buffer).toString(), 'INTERNAL');
             assert.deepEqual(authSeenByB, [undefined]);
             assert.equal(lastAuth, undefined);
         } finally {

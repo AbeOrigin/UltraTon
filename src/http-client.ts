@@ -8,9 +8,8 @@ import { assertAllowedIp, resolveAndPinHost } from "./security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
-
-const HTTP_CODES_REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
-
+import { HTTP_CODES_REDIRECTS } from './constants.ts';
+import { parseSecurePayload, secureReviver } from './helpers/payload-parser.ts';
 
 export class UltraTonClient {
     // Internal testing interceptor
@@ -203,6 +202,7 @@ export class UltraTonClient {
                     delete nextHeaders['authorization'];
                     delete nextHeaders['cookie'];
                     delete nextHeaders['proxy-authorization'];
+                    delete nextHeaders['host'];
                 }
 
                 let nextMethod = reqOpts.method;
@@ -223,13 +223,20 @@ export class UltraTonClient {
                 continue;
             }
 
+            const parsedBody = parseSecurePayload<T>(hop.data, hop.headers['content-type']);
             return {
                 statusCode: hop.statusCode,
                 headers: hop.headers,
-                data: hop.data,
+                body: parsedBody,
                 json(): T {
                     try {
-                        return JSON.parse(hop.data.toString('utf-8')) as T;
+                        // If body is already parsed (not a Buffer), return it as-is
+                        if (!(parsedBody instanceof Buffer)) {
+                            return parsedBody as T;
+                        }
+                        // If body is a Buffer, parse it
+                        if (hop.data.length === 0) return {} as T;
+                        return JSON.parse(parsedBody.toString('utf-8'), secureReviver) as T;
                     } catch (e: unknown) {
                         throw new UltraTonParseError(`UltraTon: Failed to parse JSON response payload.`);
                     }

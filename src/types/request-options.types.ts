@@ -1,3 +1,4 @@
+import { SecureClientSessionOptions } from "node:http2";
 import { RequestOptions } from "node:https";
 
 type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'auth' | 'signal'>
@@ -62,4 +63,66 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
     readonly timeoutMs: number;
     readonly maxRedirects: number;
     readonly permitReservedIps: boolean;
+}
+
+// HTTP2 Options
+
+/**
+ * Deliberately a closed list: it does NOT extend node:https `RequestOptions`,
+ * which would advertise ~40 options (agent, auth, rejectUnauthorized, ...) that
+ * the HTTP/2 client ignores. Anything not listed here is dropped by the firewall.
+ */
+export interface UltraTonRequestOptionsHttp2 {
+    readonly method?: string;
+    readonly body?: Buffer | string;
+    /** Pseudo-headers (keys starting with ':') and 'host' (derived from the URL) are rejected. */
+    readonly headers?: Record<string, string | string[] | undefined>;
+    readonly maxRedirects?: number;
+    readonly timeoutMs?: number;
+    readonly maxBodySize?: number;
+    /** Same SSRF opt-out as the HTTP/1 client. Default is false. */
+    readonly permitReservedIps?: boolean;
+}
+
+
+
+export interface UltraTonOptionsHttp2 {
+    /**
+     * If true, the session will be isolated to the current request.
+     * Default is false.
+     */
+    isolatePool?: boolean;
+
+    /**
+     * TLS Settings for the session.
+     */
+    tlsSettings?: SecureClientSessionOptions;
+
+    /**
+     * The maximum number of redirects to follow.
+     * Default is 0.
+     */
+    maxRedirects?: number;
+
+    /**
+     * The absolute time budget for the whole request in milliseconds, shared by every
+     * redirect hop (it is not reset per hop). DNS resolution and pool wait are charged
+     * before each hop starts; the TCP/TLS connect and the stream itself are bounded by
+     * what remains of the budget.
+     * Default is 30000ms.
+     */
+    timeoutMs?: number;
+
+    /**
+     * The maximum size of any response body in bytes.
+     * Default is 2MB (2,097,152 bytes).
+     */
+    maxBodySize?: number;
+
+    /**
+     * Allows resolution of internal/reserved IPs (like localhost or private network space).
+     * Set to true ONLY if you are building an internal API client.
+     * Default is false (Strict SSRF mitigation).
+     */
+    permitReservedIps?: boolean;
 }
