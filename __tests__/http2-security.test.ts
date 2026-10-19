@@ -18,10 +18,18 @@ import {
 import assert from "node:assert/strict";
 import EventEmitter from "node:events";
 import dnsPromises from "node:dns/promises";
-import { createServer } from "node:http2";
+import {
+  createServer,
+  type Http2Server,
+  type IncomingHttpHeaders,
+  type ServerHttp2Stream,
+} from "node:http2";
 import { type AddressInfo, isIP } from "node:net";
 import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
-import { SecureHttpError } from "../src/errors.ts";
+import {
+  SecureHttpError,
+  UltraTonNetworkTimeoutError,
+} from "../src/errors.ts";
 import { UltraTonHTTP2 } from "../src/http2-client.ts";
 
 const buildClient = (t: { mock: { method: typeof mock.method } }) => {
@@ -135,20 +143,22 @@ const fakeSession = () =>
     },
   });
 
-describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
-  // No test here may reach a real resolver: IP literals are echoed back, any
-  // other hostname fails fast instead of touching the network.
-  beforeEach(() => {
-    mock.method(dnsPromises, "lookup", async (host: string) => {
-      const family = isIP(host);
-      if (family === 0) {
-        throw Object.assign(new Error("no resolver in tests"), {
-          code: "ENOTFOUND",
-        });
-      }
-      return { address: host, family };
-    });
+// No test using this may reach a real resolver: IP literals are echoed back,
+// any other hostname fails fast instead of touching the network.
+const mockIpLiteralDns = () => {
+  mock.method(dnsPromises, "lookup", async (host: string) => {
+    const family = isIP(host);
+    if (family === 0) {
+      throw Object.assign(new Error("no resolver in tests"), {
+        code: "ENOTFOUND",
+      });
+    }
+    return { address: host, family };
   });
+};
+
+describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
+  beforeEach(mockIpLiteralDns);
   afterEach(() => mock.restoreAll());
 
   it("blocks reserved IP literals by default without opening a session", async (t) => {
@@ -253,5 +263,177 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const [url, options] = connect.mock.calls[0].arguments;
     assert.strictEqual(url, "https://[::1]:8443");
     assert.strictEqual((options as any).servername, "::1");
+  });
+});
+
+type OnStream = (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => void;
+type Echo = {
+  method: string;
+  headers: Record<string, string | undefined>;
+  body: string;
+};
+
+/** Answers 200 with the method, headers and body this server actually received. */
+const echo: OnStream = (stream, headers) => {
+  const chunks: Buffer[] = [];
+  stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+  stream.on("end", () => {
+    stream.respond({ ":status": 200, "content-type": "application/json" });
+    stream.end(
+      JSON.stringify({
+        method: headers[":method"],
+        headers,
+        body: Buffer.concat(chunks).toString(),
+      }),
+    );
+  });
+};
+
+const redirect = (stream: ServerHttp2Stream, status: number, location: string) => {
+  stream.resume();
+  stream.respond({ ":status": status, location });
+  stream.end();
+};
+
+/**
+ * Any number of h2c servers on 127.0.0.1 (one `listen` each, resolving to its
+ * port) and one client over a private session pool. Sessions are closed before
+ * the servers so the process always exits.
+ */
+const startServers = (t: TestContext) => {
+  const manager = new Http2SessionManager();
+  const servers: Http2Server[] = [];
+  t.after(async () => {
+    manager.closeAll();
+    await Promise.all(
+      servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+    );
+  });
+
+  return {
+    client: new UltraTonHTTP2({}, manager),
+    listen: async (onStream: OnStream) => {
+      const server = createServer();
+      server.on("stream", onStream);
+      servers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      return (server.address() as AddressInfo).port;
+    },
+  };
+};
+
+describe("HTTP/2 redirect hygiene and timeout budget", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  it("drops credentials on a cross-origin redirect and keeps them on same-origin", async (t) => {
+    const { client, listen } = startServers(t);
+    const portB = await listen(echo);
+    const portA = await listen((stream, headers) => {
+      switch (headers[":path"]) {
+        case "/cross":
+          return redirect(stream, 302, `http://127.0.0.1:${portB}/echo`);
+        case "/cross-303":
+          return redirect(stream, 303, `http://127.0.0.1:${portB}/echo`);
+        case "/same":
+          return redirect(stream, 302, "/echo");
+        default:
+          return echo(stream, headers);
+      }
+    });
+    // Mixed case on purpose: stripping must not depend on how the caller spelled the key.
+    const headers = {
+      Authorization: "Bearer secret",
+      Cookie: "sid=1",
+      "Proxy-Authorization": "Basic c2VjcmV0",
+      "X-Safe": "keep",
+    };
+    const options = { permitReservedIps: true, maxRedirects: 1, headers };
+
+    const cross = await client
+      .get<Echo>(`http://127.0.0.1:${portA}/cross`, options)
+      .then((res) => res.json());
+    assert.strictEqual(cross.headers[":authority"], `127.0.0.1:${portB}`);
+    assert.strictEqual(cross.headers["authorization"], undefined);
+    assert.strictEqual(cross.headers["cookie"], undefined);
+    assert.strictEqual(cross.headers["proxy-authorization"], undefined);
+    assert.strictEqual(cross.headers["x-safe"], "keep");
+
+    const same = await client
+      .get<Echo>(`http://127.0.0.1:${portA}/same`, options)
+      .then((res) => res.json());
+    assert.strictEqual(same.headers[":authority"], `127.0.0.1:${portA}`);
+    assert.strictEqual(same.headers["authorization"], "Bearer secret");
+    assert.strictEqual(same.headers["cookie"], "sid=1");
+    assert.strictEqual(same.headers["proxy-authorization"], "Basic c2VjcmV0");
+    assert.strictEqual(same.headers["x-safe"], "keep");
+
+    // A 303 turns the POST into a GET: the rebuilt method and headers are what goes on the wire.
+    const downgraded = await client
+      .post<Echo>(`http://127.0.0.1:${portA}/cross-303`, {
+        ...options,
+        body: '{"a":1}',
+        headers: { ...headers, "Content-Type": "application/json" },
+      })
+      .then((res) => res.json());
+    assert.strictEqual(downgraded.headers[":authority"], `127.0.0.1:${portB}`);
+    assert.strictEqual(downgraded.method, "GET");
+    assert.strictEqual(downgraded.body, "");
+    assert.strictEqual(downgraded.headers["content-type"], undefined);
+    assert.strictEqual(downgraded.headers["content-length"], undefined);
+    assert.strictEqual(downgraded.headers["authorization"], undefined);
+    assert.strictEqual(downgraded.headers["x-safe"], "keep");
+  });
+
+  it("shares one absolute timeout budget across redirect hops", async (t) => {
+    const { client, listen } = startServers(t);
+    // Each hop takes 150ms: 250ms is enough for either one, not for both.
+    const port = await listen((stream, headers) => {
+      const timer = setTimeout(() => {
+        if (stream.destroyed) return;
+        if (headers[":path"] === "/slow") {
+          stream.respond({ ":status": 200, "content-type": "text/plain" });
+          stream.end("done");
+        } else {
+          redirect(stream, 302, "/slow");
+        }
+      }, 150);
+      stream.on("close", () => clearTimeout(timer));
+    });
+    const url = `http://127.0.0.1:${port}/`;
+    const options = { permitReservedIps: true, maxRedirects: 1 };
+
+    const roomy = await client.get(url, { ...options, timeoutMs: 1000 });
+    assert.strictEqual(String(roomy.body), "done");
+
+    await assert.rejects(client.get(url, { ...options, timeoutMs: 250 }), (err: unknown) => {
+      assert.ok(err instanceof UltraTonNetworkTimeoutError);
+      assert.match(err.message, /Absolute execution time of 250ms exceeded/);
+      return true;
+    });
+  });
+
+  it("refuses to start a hop once the budget is spent", async (t) => {
+    const { client, listen } = startServers(t);
+    // The clock jumps 1s while the first hop is answered, so hop 2 starts with a negative budget.
+    const realNow = Date.now;
+    let skewMs = 0;
+    t.mock.method(Date, "now", () => realNow() + skewMs);
+    const paths: string[] = [];
+    const port = await listen((stream, headers) => {
+      paths.push(String(headers[":path"]));
+      skewMs = 1000;
+      redirect(stream, 302, "/second");
+    });
+
+    await assert.rejects(
+      client.get(`http://127.0.0.1:${port}/first`, {
+        permitReservedIps: true,
+        maxRedirects: 1,
+        timeoutMs: 250,
+      }),
+      UltraTonNetworkTimeoutError,
+    );
+    assert.deepStrictEqual(paths, ["/first"]);
   });
 });

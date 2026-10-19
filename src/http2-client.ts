@@ -16,6 +16,7 @@ import type {
 import {
   SecureHttpError,
   UltraTonMemoryError,
+  UltraTonNetworkTimeoutError,
   UltraTonParseError,
   UltraTonRedirectError,
 } from "./errors.ts";
@@ -105,6 +106,8 @@ export class UltraTonHTTP2 {
     targetUrl: string,
     options: UltraTonRequestOptionsHttp2 = {},
   ): Promise<UltraTonResponse<T>> {
+    // One clock for the whole redirect chain: timeoutMs is a budget shared by every hop.
+    const startTime = Date.now();
     let currentUrl = targetUrl;
     let currentOptions = { ...options };
     let redirectCount = 0;
@@ -142,10 +145,23 @@ export class UltraTonHTTP2 {
         ...safeHeaders,
       };
 
+      // Measured after getSession so the time spent connecting is charged to the budget too.
+      // A spent budget must throw here: a non-positive value would disable the stream timer.
+      let remainingMs = reqOpts.timeoutMs;
+      if (reqOpts.timeoutMs > 0) {
+        remainingMs = reqOpts.timeoutMs - (Date.now() - startTime);
+        if (remainingMs <= 0) {
+          throw new UltraTonNetworkTimeoutError(
+            `UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`,
+          );
+        }
+      }
+
       const response = await this.#executeStream<T>(
         session,
         pseudoHeaders,
         currentOptions.body,
+        remainingMs,
         reqOpts.timeoutMs,
         reqOpts.maxBodySize,
       );
@@ -169,22 +185,16 @@ export class UltraTonHTTP2 {
           redirectCount++;
 
           const nextUrl = parseSafeUrl(location, currentUrl);
+          // sanitizeHeaders already lowercased every key
           const nextHeaders = { ...reqOpts.headers } as Record<
             string,
             string | string[] | undefined
           >;
 
           if (parsedUrl.origin !== nextUrl.origin) {
-            for (const key of Object.keys(nextHeaders)) {
-              const lowerKey = key.toLowerCase();
-              if (
-                lowerKey === "authorization" ||
-                lowerKey === "cookie" ||
-                lowerKey === "proxy-authorization"
-              ) {
-                delete nextHeaders[key];
-              }
-            }
+            delete nextHeaders["authorization"];
+            delete nextHeaders["cookie"];
+            delete nextHeaders["proxy-authorization"];
           }
 
           let nextMethod = method;
@@ -198,17 +208,9 @@ export class UltraTonHTTP2 {
           ) {
             nextMethod = "GET";
             nextBody = undefined;
-
-            for (const key of Object.keys(nextHeaders)) {
-              const lowerKey = key.toLowerCase();
-              if (
-                lowerKey === "content-length" ||
-                lowerKey === "content-type" ||
-                lowerKey === "transfer-encoding"
-              ) {
-                delete nextHeaders[key];
-              }
-            }
+            delete nextHeaders["content-length"];
+            delete nextHeaders["content-type"];
+            delete nextHeaders["transfer-encoding"];
           }
 
           currentUrl = nextUrl.href;
@@ -250,7 +252,8 @@ export class UltraTonHTTP2 {
     session: ClientHttp2Session,
     pseudoHeaders: OutgoingHttpHeaders,
     body: Buffer | string | undefined,
-    streamTimeoutMs: number,
+    remainingMs: number,
+    timeoutMs: number,
     maxBodySize: number,
   ): Promise<UltraTonResponse<T>> {
     return new Promise((resolve, reject) => {
@@ -271,18 +274,19 @@ export class UltraTonHTTP2 {
         );
       }
 
+      // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
       const streamTimer =
-        streamTimeoutMs > 0
+        remainingMs > 0
           ? setTimeout(() => {
             if (settled) return;
             settled = true;
             stream.close(constants.NGHTTP2_CANCEL);
             reject(
-              new SecureHttpError(
-                "UltraTon: HTTP/2 stream execution timeout exceeded.",
+              new UltraTonNetworkTimeoutError(
+                `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
               ),
             );
-          }, streamTimeoutMs)
+          }, remainingMs)
           : undefined;
 
       stream.on("response", (headers) => {
