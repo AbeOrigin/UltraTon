@@ -1,58 +1,56 @@
 import dnsPromises from 'node:dns/promises';
+import { BlockList, isIP } from 'node:net';
 import { SecureHttpError } from '../exceptions/secure-http.error.ts';
 
+const reservedIps = new BlockList();
+
+// BlockList also matches IPv4 rules against IPv4-mapped IPv6 forms (::ffff:a.b.c.d and ::ffff:hhhh:hhhh).
+for (const [network, prefix] of [
+    ['0.0.0.0', 8],        // "This" network
+    ['10.0.0.0', 8],       // Private
+    ['100.64.0.0', 10],    // Carrier-grade NAT
+    ['127.0.0.0', 8],      // Loopback
+    ['169.254.0.0', 16],   // Link-local / cloud metadata
+    ['172.16.0.0', 12],    // Private
+    ['192.0.0.0', 24],     // IETF protocol assignments
+    ['192.0.2.0', 24],     // TEST-NET-1
+    ['192.168.0.0', 16],   // Private
+    ['198.18.0.0', 15],    // Benchmarking
+    ['198.51.100.0', 24],  // TEST-NET-2
+    ['203.0.113.0', 24],   // TEST-NET-3
+    ['224.0.0.0', 4],      // Multicast
+    ['240.0.0.0', 4]       // Reserved + limited broadcast (255.255.255.255)
+] as const) {
+    reservedIps.addSubnet(network, prefix, 'ipv4');
+}
+
+// ponytail: NAT64 (64:ff9b::/96), 6to4 (2002::/16) and Teredo (2001::/32) are not blocked because they legitimately
+// embed public IPv4 addresses. Upgrade path: decode the embedded IPv4 and validate it against the IPv4 rules above.
+for (const [network, prefix] of [
+    ['::', 96],            // Unspecified, loopback and IPv4-compatible (::7f00:1)
+    ['100::', 64],         // Discard-only
+    ['2001:db8::', 32],    // Documentation
+    ['fc00::', 7],         // Unique local
+    ['fe80::', 10],        // Link-local
+    ['fec0::', 10],        // Deprecated site-local
+    ['ff00::', 8]          // Multicast
+] as const) {
+    reservedIps.addSubnet(network, prefix, 'ipv6');
+}
+
 export function isReservedIp(ip: string): boolean {
-    const lowerIp = ip.toLowerCase();
-    
-    // IPv4-Mapped IPv6 bypass handling
-    if (lowerIp.startsWith('::ffff:')) {
-        return isReservedIp(lowerIp.substring(7));
+    const family = isIP(ip);
+    if (family === 0) return false;
+
+    return reservedIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+export function assertAllowedIp(ip: string, permitReservedIps: boolean): void {
+    if (!permitReservedIps && isReservedIp(ip)) {
+        throw new SecureHttpError(
+            'UltraTon: Target resolved to a strictly prohibited internal/reserved network IP.'
+        );
     }
-
-    if (lowerIp.includes('.')) {
-        // Fast, strictly numeric IPv4 boundary checking
-        const parts = lowerIp.split('.').map(p => parseInt(p, 10));
-        if (parts.length !== 4 || parts.some(isNaN)) return false;
-
-        const [p0, p1] = parts;
-
-        if (p0 === 127) return true; // 127.0.0.0/8 (Localhost)
-        if (p0 === 10) return true;  // 10.0.0.0/8 (Private)
-        if (p0 === 172 && p1 >= 16 && p1 <= 31) return true; // 172.16.0.0/12 (Private)
-        if (p0 === 192 && p1 === 168) return true; // 192.168.0.0/16 (Private)
-        if (p0 === 169 && p1 === 254) return true; // 169.254.0.0/16 (Link-Local / AWS Metadata)
-        if (p0 === 0) return true; // 0.0.0.0/8 (Soft Localhost / Any)
-        if (p0 === 100 && p1 >= 64 && p1 <= 127) return true; // 100.64.0.0/10 (Carrier-grade NAT)
-
-        return false;
-    }
-
-    if (lowerIp.includes(':')) {
-        // Exact checks for standard IPv6 Unspecified and Localhost bindings
-        if (lowerIp === '::' || lowerIp === '::1') return true;
-
-        const parts = lowerIp.split(':');
-        const firstSegment = parts[0] ? parts[0] : '0';
-        const firstHextet = parseInt(firstSegment, 16);
-
-        if (isNaN(firstHextet)) return false;
-
-        // Unique Local Addresses (fc00::/7) -> Ranges from fc00 to fdff
-        if (firstHextet >= 0xfc00 && firstHextet <= 0xfdff) return true;
-
-        // Link-Local Address Space (fe80::/10) -> Ranges from fe80 to febf
-        if (firstHextet >= 0xfe80 && firstHextet <= 0xfebf) return true;
-
-        // Fallback catch for fully unwound IPv6 structures like 0:0:0:0:0:0:0:1
-        if (firstHextet === 0) {
-            if (parts.every(p => p === '' || p === '0')) return true; // Unspecified
-            if (parts[parts.length - 1] === '1' && parts.slice(0, -1).every(p => p === '' || p === '0')) return true; // Localhost
-        }
-
-        return false;
-    }
-
-    return false;
 }
 
 export async function resolveAndPinHost(hostname: string, permitReservedIps: boolean = false): Promise<string> {
@@ -60,11 +58,7 @@ export async function resolveAndPinHost(hostname: string, permitReservedIps: boo
         // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
         const result = await dnsPromises.lookup(hostname, { family: 0 });
 
-        if (!permitReservedIps && isReservedIp(result.address)) {
-            throw new SecureHttpError(
-                'UltraTon: Target resolved to a strictly prohibited internal/reserved network IP.'
-            );
-        }
+        assertAllowedIp(result.address, permitReservedIps);
 
         return result.address;
     } catch (err: unknown) {
@@ -74,7 +68,7 @@ export async function resolveAndPinHost(hostname: string, permitReservedIps: boo
 
         const standardError = err as NodeJS.ErrnoException;
         const code = standardError.code || 'UNKNOWN_DNS_ERROR';
-        
+
         throw new SecureHttpError(
             `UltraTon: Hostname resolution failed for ${hostname} with code ${code}.`
         );
