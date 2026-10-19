@@ -332,10 +332,16 @@ export class UltraTonHTTP2 {
         clearTimeout(streamTimer);
 
         const data = Buffer.concat(chunks);
-        const parsedBody = parseSecurePayload<T>(
-          data,
-          responseHeaders["content-type"],
-        );
+        let parsedBody: T | Buffer;
+        try {
+          parsedBody = parseSecurePayload<T>(
+            data,
+            responseHeaders["content-type"],
+          );
+        } catch (err: unknown) {
+          // This is an event listener, not the executor: a throw here would be an uncaught exception.
+          return reject(err);
+        }
 
         resolve({
           statusCode,
