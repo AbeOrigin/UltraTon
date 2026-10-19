@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonRedirectError } from '../src/exceptions/redirect.error.ts';
 import { UltraTonNetworkTimeoutError } from '../src/exceptions/network-timeout.error.ts';
+import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
 import https from 'node:https';
 
 describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
@@ -55,6 +56,10 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
                         }
                     }
                     (res as any).headers = echoedHeaders; 
+                }
+                else if (urlObj.pathname === '/to-metadata') {
+                    (res as any).statusCode = 302;
+                    (res as any).headers = { location: 'https://169.254.169.254/latest/meta-data' };
                 }
                 else if (urlObj.pathname === '/smuggle-start') {
                     (res as any).statusCode = 303;
@@ -133,6 +138,28 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
         assert.strictEqual(res.headers['proxy-authorization'], undefined);
         // Ensure safe headers were kept
         assert.strictEqual(res.headers['x-safe-header'], 'keep-me');
+    });
+
+    it('Should block a redirect hop to a reserved IP literal', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        await assert.rejects(
+            client.get('https://example.com/to-metadata', { maxRedirects: 1 }),
+            (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+        );
+    });
+
+    it('Should block a NAT64 literal embedding a private IPv4', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        await assert.rejects(
+            client.get('https://[64:ff9b::a00:5]/'),
+            (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
+        );
+    });
+
+    it('Should not block a public IP literal', async () => {
+        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const res = await client.get('https://8.8.8.8/anything');
+        assert.strictEqual(res.statusCode, 404); // mock fallback route: reached the transport
     });
 
     it('Should downgrade POST to GET on 303 and strip smuggling headers and body', async () => {

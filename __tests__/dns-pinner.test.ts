@@ -2,8 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { resolveAndPinHost } from '../../src/security/dns-pinner.ts';
-import { SecureHttpError } from '../../src/exceptions/secure-http.error.ts';
+import { isReservedIp, resolveAndPinHost } from '../src/security/dns-pinner.ts';
+import { SecureHttpError } from '../src/exceptions/secure-http.error.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
     
@@ -83,6 +83,29 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
                 return true;
             }
         );
+    });
+
+    it('isReservedIp classifies special-purpose and public addresses', () => {
+        const reserved = [
+            '::ffff:7f00:1', '::ffff:a9fe:a9fe', '::7f00:1', '0:0:0:0:0:0:0:1',
+            '224.0.0.1', '239.255.255.250', '255.255.255.255', '198.18.0.1',
+            '192.0.0.1', '192.0.2.1', 'fec0::1', 'ff02::1', '2001:db8::1',
+            '100.64.0.1', '172.31.255.255',
+            '64:ff9b::a00:5', '64:ff9b::7f00:1', '64:ff9b::a9fe:a9fe', '64:ff9b::10.0.0.5',
+            '64:ff9b:0:0:0:0:a00:5', '64:ff9b::', '64:ff9b:1::1'
+        ];
+        const publicIps = [
+            '8.8.8.8', '172.32.0.1', '100.128.0.1', '::ffff:8.8.8.8',
+            '2001:4860:4860::8888', 'not-an-ip',
+            '64:ff9b::808:808', '64:ff9b::8.8.8.8'
+        ];
+
+        for (const ip of reserved) {
+            assert.equal(isReservedIp(ip), true, `${ip} must be classified as reserved`);
+        }
+        for (const ip of publicIps) {
+            assert.equal(isReservedIp(ip), false, `${ip} must not be classified as reserved`);
+        }
     });
 
     it('Network Failure: Mock an ENOTFOUND error and assert the error message formatting', async (t) => {
