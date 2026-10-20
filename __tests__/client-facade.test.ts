@@ -38,7 +38,7 @@ interface Fixture {
  */
 const respond = (path: string, send: () => void) => {
     const slow = /^\/slow\/(\d+)/.exec(path);
-    if (slow) setTimeout(send, Number(slow[1]));
+    if (slow) setTimeout(send, Math.min(Number(slow[1]), 60_000));
     else send();
 };
 
@@ -246,6 +246,16 @@ for (const [name, http2, start] of engines) {
             }
 
             assert.equal(f.accepted(), 0);
+        });
+
+        it('judges a path with a long inner run of controls in linear time', async (t) => {
+            const f = await start(t);
+            const client = clientFor(t, { http2, permitReservedIps: true, baseUrl: `${f.base}/api/v1/` });
+            // A trailing-whitespace regex retried from every position took ~10 s on this input.
+            const path = `//evil.com${'\u0000'.repeat(200_000)}x`;
+            const started = performance.now();
+            await assert.rejects(client.get(path), TypeError);
+            assert.ok(performance.now() - started < 1000, `took ${Math.round(performance.now() - started)} ms`);
         });
 
         it('two clients never share a socket or session, even under the same permitReservedIps policy', async (t) => {

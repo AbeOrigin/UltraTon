@@ -89,7 +89,12 @@ function resolveAgainstBase(path: unknown, base: URL): string {
     if (typeof path !== 'string') {
         throw new TypeError(`UltraTon: Expected the request URL to be a string, received ${path === null ? 'null' : typeof path}.`);
     }
-    const parsed = path.replace(/^[\u0000- ]+|[\u0000- ]+$/g, '').replace(/[\t\n\r]/g, '');
+    // Index scan, not /[\u0000- ]+$/: that regex retries from every position and goes quadratic on long control runs.
+    let start = 0;
+    let end = path.length;
+    while (start < end && path.charCodeAt(start) <= 0x20) start++;
+    while (end > start && path.charCodeAt(end - 1) <= 0x20) end--;
+    const parsed = path.slice(start, end).replace(/[\t\n\r]/g, '');
     // A scheme makes it absolute (https:, javascript:, ...); two leading slashes in any mix with backslashes make it
     // protocol-relative, since special schemes read '\' as '/'.
     if (URL.canParse(parsed) || /^[\\/]{2}/.test(parsed)) throw new TypeError(MUST_BE_RELATIVE);

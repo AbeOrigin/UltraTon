@@ -22,7 +22,7 @@ async function routedServer(t: TestContext, http2: boolean, routes: Record<strin
     let accepted = 0;
     const hits: string[] = [];
     const sockets = new Set<Socket>();
-    const answer = (path: string) => (routes[path] ?? (() => ({ status: 404, body: 'none' })))(port);
+    const answer = (path: string) => (Object.hasOwn(routes, path) ? routes[path] : () => ({ status: 404, body: 'none' }))(port);
     const server = http2
         ? createH2Server().on('stream', (stream: ServerHttp2Stream, headers: IncomingHttpHeaders) => {
             const path = String(headers[':path']);

@@ -49,7 +49,7 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         for (const [key, value] of Object.entries(malicious)) {
             assert.throws(
                 () => buildSafeRequestOptions({ method: 'GET', [key]: value } as any),
-                { name: 'TypeError', message: new RegExp(`^UltraTon: Unknown option '${key}'\.`) },
+                { name: 'TypeError', message: new RegExp(`^UltraTon: Unknown option '${key}'\\.`) },
             );
         }
     });
