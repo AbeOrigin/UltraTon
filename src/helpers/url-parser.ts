@@ -43,6 +43,8 @@ export function parseSafeUrl(url: string, base?: string): URL {
             // and every address is still judged by the reserved-IP policy: the caller must also set `permitReservedIps`
             // to allow them (true, or an allowlist such as ['127.0.0.0/8', '::1'] or ['localhost']). Redirects from
             // https to http stay rejected.
+        } else if (urlObj.protocol === 'http:') {
+            throw new SecureHttpError('UltraTon: Plain http is only allowed for loopback hosts; use https.', { code: 'ERR_ULTRATON_PLAIN_HTTP' });
         } else {
             throw new SecureHttpError(`UltraTon: Unsupported protocol "${urlObj.protocol}"`);
         }

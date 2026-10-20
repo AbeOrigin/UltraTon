@@ -1,6 +1,6 @@
 import dnsPromises from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
-import { SecureHttpError } from '../errors.ts';
+import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 
 const reservedIps = new BlockList();
 
@@ -71,7 +71,9 @@ export function isLoopbackIp(ip: string): boolean {
  * nor the hostname. It does not replace the reserved-IP policy: loopback still needs `permitReservedIps`.
  */
 export function assertLoopbackIp(ip: string): void {
-    if (!isLoopbackIp(ip)) throw new SecureHttpError('UltraTon: Plain http is only allowed to loopback addresses.');
+    if (!isLoopbackIp(ip)) {
+        throw new SecureHttpError('UltraTon: Plain http is only allowed to loopback addresses.', { code: 'ERR_ULTRATON_PLAIN_HTTP' });
+    }
 }
 
 /**
@@ -188,7 +190,8 @@ export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?:
 
     throw new SecureHttpError(
         'UltraTon: Target resolves to a prohibited internal/reserved network IP. ' +
-        'To allow internal targets set permitReservedIps (true or an allowlist of IPs, CIDRs or hostnames).'
+        'To allow internal targets set permitReservedIps (true or an allowlist of IPs, CIDRs or hostnames).',
+        { code: 'ERR_ULTRATON_RESERVED_IP' }
     );
 }
 
@@ -199,8 +202,9 @@ export interface PinnedAddress {
 }
 
 // The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
+// A network error like a refused connect: the name could not be reached, whatever the reason the resolver gave.
 const resolutionFailed = (code: string) =>
-    new SecureHttpError(`UltraTon: Hostname resolution failed (${code}).`, { code });
+    new UltraTonNetworkError(`UltraTon: Hostname resolution failed (${code}).`, { code });
 
 /**
  * Every address `hostname` resolves to, each one judged by `policy`. If any of them is reserved and not allowed, the

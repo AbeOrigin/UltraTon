@@ -8,7 +8,7 @@ export type { ReservedIpPolicy };
  */
 export interface UltraTonRequestOptions {
     /**
-     * Key-value pairs for HTTP headers.
+     * Key-value pairs for HTTP headers, as a plain object (a `Headers` or `Map` instance throws a `TypeError`).
      * Pseudo-headers (keys starting with ':') are rejected, and so is 'host' on HTTP/2 (it is derived from the URL).
      */
     readonly headers?: Record<string, string | string[] | undefined>;
@@ -34,31 +34,32 @@ export interface UltraTonRequestOptions {
      * Aborts the request when the signal fires, in any phase (before connecting, while connecting or resolving DNS,
      * waiting for the response, or mid-body). The request rejects with `signal.reason`, which is a DOMException
      * `AbortError` when `abort()` was called without a reason. A signal that is already aborted rejects without connecting.
+     * Anything that is not an `AbortSignal` throws a `TypeError`.
      */
     readonly signal?: AbortSignal;
 
     /**
-     * The maximum size of the response body in bytes.
-     * Default is 2MB.
+     * The maximum size of the response body in bytes: an integer from 0 to 2147483647 (anything else throws a
+     * `TypeError`). Default is 2MB.
      */
     readonly maxBodySize?: number;
 
     /**
      * The maximum time the connection may stay idle, in milliseconds: no bytes received for that long rejects with
      * `UltraTonNetworkTimeoutError`. On HTTP/1 it is the socket's idle time; on HTTP/2 it is per stream.
-     * `0` disables it. Default is 10000ms.
+     * `0` disables it. An integer from 0 to 2147483647 (anything else throws a `TypeError`). Default is 10000ms.
      */
     readonly socketTimeoutMs?: number;
 
     /**
-     * The maximum time to wait for the request to complete in milliseconds.
-     * Default is 30000ms.
+     * The maximum time to wait for the request to complete in milliseconds, DNS and every redirect hop included.
+     * `0` disables it. An integer from 0 to 2147483647 (anything else throws a `TypeError`). Default is 30000ms.
      */
     readonly timeoutMs?: number;
 
     /**
-     * The maximum number of redirects to follow.
-     * Default is 0.
+     * The maximum number of redirects to follow: an integer from 0 to 20 (anything else throws a `TypeError`).
+     * Default is 0 (redirects are returned, not followed).
      */
     readonly maxRedirects?: number;
 
@@ -122,7 +123,7 @@ export interface UltraTonClientOptions {
      */
     readonly baseUrl?: string;
 
-    /** Headers sent with every request. A request header with the same name (any case) replaces it. */
+    /** Headers sent with every request, as a plain object. A request header with the same name (any case) replaces it. */
     readonly headers?: Record<string, string | string[] | undefined>;
 
     /** Default `timeoutMs` for every request. See {@link UltraTonRequestOptions.timeoutMs}. */

@@ -144,7 +144,8 @@ describe('parseSafeUrl: plain http only for loopback names', () => {
         ]) {
             assert.throws(() => parseSafeUrl(url), (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError, url);
-                assert.equal(err.message, 'UltraTon: Unsupported protocol "http:"', url);
+                assert.equal(err.message, 'UltraTon: Plain http is only allowed for loopback hosts; use https.', url);
+                assert.equal(err.code, 'ERR_ULTRATON_PLAIN_HTTP', url);
                 return true;
             });
         }

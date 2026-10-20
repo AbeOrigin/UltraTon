@@ -252,7 +252,7 @@ export class Http1Engine {
 
                 // A response fetched over TLS must never steer the request onto plaintext (e.g. the http loopback escape hatch).
                 if (urlObj.protocol === 'https:' && nextUrlObj.protocol === 'http:') {
-                    throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.');
+                    throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.', { code: 'ERR_ULTRATON_DOWNGRADE' });
                 }
 
                 // sanitizeHeaders already lowercased every key

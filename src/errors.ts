@@ -9,7 +9,8 @@ export class SecureHttpError extends Error {
 }
 
 export class UltraTonNetworkError extends SecureHttpError {}
-export class UltraTonNetworkTimeoutError extends SecureHttpError {}
+/** A timeout is a network failure too: `instanceof UltraTonNetworkError` catches it along with resets and refusals. */
+export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
 export class UltraTonMemoryError extends SecureHttpError {}
 export class UltraTonParseError extends SecureHttpError {}
 export class UltraTonRedirectError extends SecureHttpError {}

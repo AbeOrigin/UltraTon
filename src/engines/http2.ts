@@ -181,6 +181,7 @@ export class Http2Engine {
           if (parsedUrl.protocol === "https:" && nextUrl.protocol === "http:") {
             throw new SecureHttpError(
               "UltraTon: Redirect from https to http is not allowed.",
+              { code: "ERR_ULTRATON_DOWNGRADE" },
             );
           }
 

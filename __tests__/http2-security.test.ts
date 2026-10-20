@@ -392,7 +392,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
         permitReservedIps: true,
         maxRedirects: 1,
       }),
-      /Unsupported protocol/,
+      { message: "UltraTon: Plain http is only allowed for loopback hosts; use https.", code: "ERR_ULTRATON_PLAIN_HTTP" },
     );
   });
 
@@ -503,7 +503,8 @@ describe("HTTP/2 redirects never downgrade from https to http", () => {
       }),
       (err: unknown) =>
         err instanceof SecureHttpError &&
-        /Redirect from https to http is not allowed/.test(err.message),
+        /Redirect from https to http is not allowed/.test(err.message) &&
+        err.code === "ERR_ULTRATON_DOWNGRADE",
     );
     // Only the original https hop ever reached a session; nothing was asked of 127.0.0.1:1.
     assert.deepStrictEqual(authorities, ["example.com"]);

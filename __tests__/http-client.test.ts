@@ -47,7 +47,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const client = new UltraTonClient();
         await assert.rejects(
             client.get(`http://example.com/json`),
-            { message: 'UltraTon: Unsupported protocol "http:"' }
+            { message: 'UltraTon: Plain http is only allowed for loopback hosts; use https.', code: 'ERR_ULTRATON_PLAIN_HTTP' }
         );
     });
 

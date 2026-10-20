@@ -575,7 +575,7 @@ describe('UltraTonClient constructor validation', () => {
                 return true;
             });
         unsafe('ftp://example.com/', /Unsupported protocol/);
-        unsafe('http://example.com/', /Unsupported protocol/);
+        unsafe('http://example.com/', /^UltraTon: Plain http is only allowed for loopback hosts; use https\.$/);
         unsafe('https://user:pw@example.com/', /Credentials in URL authority/);
         unsafe('not a url', /Invalid URL/);
         unsafe('https://example.com/v1?key=1', /^UltraTon: 'baseUrl' cannot contain a query string or fragment\.$/);

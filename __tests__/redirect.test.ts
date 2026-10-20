@@ -163,7 +163,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
 
         await assert.rejects(
             client.get('https://example.com/downgrade', { permitReservedIps: true, maxRedirects: 1 }),
-            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message)
+            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message) && err.code === 'ERR_ULTRATON_DOWNGRADE'
         );
         // Only the original https hop was ever attempted: the http://127.0.0.1 target never got a connection.
         assert.deepStrictEqual(hostsReached, ['example.com']);
@@ -180,7 +180,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
         // http://127.0.0.1:1/start -> https://example.com/mid -> http://127.0.0.1:1/end
         await assert.rejects(
             client.get('http://127.0.0.1:1/start', { permitReservedIps: true, maxRedirects: 5 }),
-            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message)
+            (err: any) => err instanceof SecureHttpError && /Redirect from https to http is not allowed/.test(err.message) && err.code === 'ERR_ULTRATON_DOWNGRADE'
         );
         // The check applies to every hop, not only to a chain that started on https: /end was never contacted.
         assert.deepStrictEqual(reached, ['http://127.0.0.1:1/start', 'https://example.com/mid']);

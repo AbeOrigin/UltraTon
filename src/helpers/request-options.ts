@@ -22,11 +22,18 @@ function validateType(propName: string, value: unknown, expectedType: 'string' |
     return true;
 }
 
-/** Non-negative integer up to `max`; a wrong type throws, an out-of-range value falls back. */
+/**
+ * A non-negative integer up to `max` (INT32_MAX by default, the most a timer accepts), or `fallback` when `undefined`.
+ * @throws {TypeError} For a wrong type, and for a negative, fractional or too large number, naming the allowed range:
+ *   an out-of-range value is a mistake to report, never something to replace silently with the default.
+ */
 function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX): number {
-    return validateType(propName, value, 'number') && Number.isInteger(value) && (value as number) >= 0 && (value as number) <= max
-        ? value as number
-        : fallback;
+    if (!validateType(propName, value, 'number')) return fallback;
+    const n = value as number;
+    if (!Number.isInteger(n) || n < 0 || n > max) {
+        throw new TypeError(`UltraTon: Expected '${propName}' to be an integer from 0 to ${max}, received ${n}.`);
+    }
+    return n;
 }
 
 /** An IP, a CIDR (`ip/prefix`, prefix 0-32 for v4 and 0-128 for v6) or a hostname with no leading or trailing dot. */
@@ -60,6 +67,18 @@ function reservedIpPolicy(value: unknown): ReservedIpPolicy {
         }
     }
     return Object.freeze([...value] as string[]);
+}
+
+/**
+ * Only a plain object is read as headers: a `Headers` or `Map` keeps its entries out of reach of `Object.keys`, so it
+ * would otherwise be sent as no headers at all (an `authorization` silently dropped).
+ * @throws {TypeError} For any object whose prototype is neither `Object.prototype` nor `null`.
+ */
+function assertPlainHeaders(headers: unknown): void {
+    if (isPlainObject(headers)) return;
+    const ctor: unknown = (Object.getPrototypeOf(headers) as { constructor?: unknown } | null)?.constructor;
+    const name = typeof ctor === 'function' && ctor.name ? ctor.name : 'non-plain';
+    throw new TypeError(`UltraTon: Expected 'headers' to be a plain object, received a ${name} instance; pass a plain object, e.g. Object.fromEntries(headers).`);
 }
 
 /**
@@ -298,15 +317,24 @@ export function buildSafeRequestOptions(options: InternalRequestOptions): Secure
 
     if (validateType('method', options.method, 'string')) safeOptions.method = options.method;
     if (validateType('auth', options.auth, 'string')) safeOptions.auth = options.auth;
-    if (validateType('signal', options.signal, 'object')) safeOptions.signal = options.signal;
+    if (options.signal !== undefined) {
+        // Anything else would only fail later, deep in the engine, with an unrelated message (or never abort).
+        if (!(options.signal instanceof AbortSignal)) {
+            const received = options.signal === null ? 'null' : typeof options.signal;
+            throw new TypeError(`UltraTon: Expected 'signal' to be an AbortSignal, received ${received}.`);
+        }
+        safeOptions.signal = options.signal;
+    }
     if (validateType('headers', options.headers, 'object')) {
+        assertPlainHeaders(options.headers);
         safeOptions.headers = sanitizeHeaders(options.headers as Record<string, unknown>);
     }
 
-    safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024); // Strict 2MB fallback
-    safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000); // Strict 10s fallback
-    safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000); // Strict 30s fallback
-    safeOptions.maxRedirects = Math.min(intOption('maxRedirects', options.maxRedirects, 0, Infinity), MAX_REDIRECTS_CEILING);
+    // Defaults when unset: 2MB body, 10s idle, 30s total, no redirects. 0 disables the two timeouts.
+    safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024);
+    safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000);
+    safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000);
+    safeOptions.maxRedirects = intOption('maxRedirects', options.maxRedirects, 0, MAX_REDIRECTS_CEILING);
     // Strict fallback: block SSRF
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
@@ -423,7 +451,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         tls,
         defaults: {
             headers,
-            // Type-checked above. Kept as given, so an out-of-range value falls back exactly as it would on a request.
+            // Validated above (type and range). Kept as given, so `undefined` still means "use the request's own default".
             timeoutMs: raw.timeoutMs as number | undefined,
             socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
             maxBodySize: raw.maxBodySize as number | undefined,
@@ -460,8 +488,9 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
 
 function mergeHeaders(defaults: ClientDefaults['headers'], own: unknown): ResolvedRequestOptions['headers'] {
     if (own === undefined) return { ...defaults };
-    // Not a plain object: leave it for buildSafeRequestOptions to reject with the usual message.
-    if (typeof own !== 'object' || own === null || Array.isArray(own)) return own as ResolvedRequestOptions['headers'];
+    // Not a plain object (a Headers or Map included, whose entries Object.keys cannot see): leave it for
+    // buildSafeRequestOptions to reject with the usual message instead of merging it as if it were empty.
+    if (!isPlainObject(own)) return own as ResolvedRequestOptions['headers'];
     const map = own as Record<string, unknown>;
     // No prototype: a '__proto__' key from the caller stays a plain key (which sanitizeHeaders then drops).
     const merged: Record<string, unknown> = Object.assign(Object.create(null), defaults);
