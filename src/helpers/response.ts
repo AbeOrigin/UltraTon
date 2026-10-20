@@ -1,7 +1,7 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Buffer } from "node:buffer";
 import { UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
-import type { UltraTonResponse } from "../types/request-response.ts";
+import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 
 export const secureReviver = (key: string, value: any) => {
   if (key === "__proto__" || key === "constructor" || key === "prototype") {
@@ -62,4 +62,15 @@ export function createResponse<T = unknown>(
       return data.toString("utf-8");
     },
   };
+}
+
+/** The stream counterpart of createResponse: same status and header rules, the body left to the caller. */
+export function createStreamResponse(
+  statusCode: number,
+  rawHeaders: IncomingHttpHeaders,
+  body: ReadableStream<Uint8Array>,
+  url: string,
+): UltraTonStreamResponse {
+  const { headers } = createResponse(statusCode, rawHeaders, Buffer.alloc(0));
+  return { statusCode, ok: statusCode >= 200 && statusCode < 300, headers, url, body };
 }

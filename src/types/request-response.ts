@@ -27,3 +27,21 @@ export interface UltraTonResponse<T = unknown> {
     /** Decodes `data` as UTF-8. */
     text(): string;
 }
+
+/** A response whose body is read as a stream: what `client.stream()` resolves with once the headers arrive. */
+export interface UltraTonStreamResponse {
+    /** The HTTP status code. Non-2xx responses resolve too. */
+    readonly statusCode: number;
+    /** True for status codes 200-299. */
+    readonly ok: boolean;
+    /** The response headers as received (no HTTP/2 pseudo-headers). */
+    readonly headers: IncomingHttpHeaders;
+    /** The final URL, after any redirect that was followed. */
+    readonly url: string;
+    /**
+     * The body, decoded when `decompress` is on. Read it to the end or `cancel()` it: until then it holds its
+     * connection (and keeps the process alive). It fails, rather than ending, when the body is cut short, too large,
+     * corrupt, idle past `socketTimeoutMs` while being read, aborted, or when the client is closed.
+     */
+    readonly body: ReadableStream<Uint8Array>;
+}

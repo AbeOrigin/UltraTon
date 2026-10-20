@@ -6,7 +6,7 @@ import type {
   IncomingHttpHeaders,
   OutgoingHttpHeaders,
 } from "node:http2";
-import type { UltraTonResponse } from "../types/request-response.ts";
+import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 import { heldStreams, holdSession } from "./http2-session-manager.ts";
 import type { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
@@ -23,6 +23,7 @@ import {
 import { HTTP_CODES_REDIRECTS } from "../constants.ts";
 import {
   createResponse,
+  createStreamResponse,
   declaredBodyLength,
   incompleteResponse,
 } from "../helpers/response.ts";
@@ -31,7 +32,7 @@ import {
   buildSafeRequestOptions,
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
-import { BodyReader } from "../helpers/body-reader.ts";
+import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
 
 /** Request bodies go out in pieces of this size so that the idle timer can tell progress from a stall. */
 const BODY_CHUNK_BYTES = 64 * 1024;
@@ -68,10 +69,13 @@ export class Http2Engine {
   /**
    * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
    */
+  public async request<T = unknown>(targetUrl: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>>;
+  public async request(targetUrl: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }): Promise<UltraTonStreamResponse>;
   public async request<T = unknown>(
     targetUrl: string,
     options: ResolvedRequestOptions,
-  ): Promise<UltraTonResponse<T>> {
+    stream?: { maxBodySize?: number },
+  ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     // One clock for the whole redirect chain: timeoutMs is a budget shared by every hop.
     const startTime = Date.now();
     let currentUrl = targetUrl;
@@ -157,6 +161,7 @@ export class Http2Engine {
         reqOpts.signal,
         reqOpts.maxRedirects > 0,
         reqOpts.decompress,
+        stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl },
       );
 
       const statusCode = response.statusCode;
@@ -316,12 +321,15 @@ export class Http2Engine {
     signal: AbortSignal | undefined,
     followRedirects: boolean,
     decompress: boolean,
-  ): Promise<UltraTonResponse<T>> {
+    streaming?: { maxBodySize: number; url: string },
+  ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     return new Promise((resolve, reject) => {
       // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
       if (signal?.aborted) return reject(signal.reason);
 
       let settled = false;
+      // A streamed body was handed to its consumer: the upload keeps going even though this promise has settled.
+      let handedOff = false;
       let statusCode: number | undefined;
       let responseHeaders: IncomingHttpHeaders = {};
       // Created with the response headers (content-encoding); collects, decodes and bounds the body.
@@ -434,7 +442,56 @@ export class Http2Engine {
           cleanup();
           stream.close();
 
+          if (streaming) {
+            const empty = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
+            return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url));
+          }
           return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+        }
+
+        // A stream hands the body over with the headers: timeoutMs covered the wait for them, and from here the body
+        // stream runs its own idle timer, only while the consumer waits for data. The session hold is still released
+        // on the stream's 'close', once the body is read, cancelled or failed.
+        if (streaming) {
+          settled = true;
+          handedOff = true;
+          cleanup();
+          const status = statusCode;
+          return resolve(createStreamResponse(status, responseHeaders, createBodyStream({
+            source: stream,
+            contentEncoding: headers["content-encoding"],
+            decompress,
+            maxBodySize: streaming.maxBodySize,
+            declaredLength: declaredBodyLength(String(pseudoHeaders[":method"]), status, responseHeaders),
+            socketTimeoutMs,
+            signal,
+            tooLarge: () =>
+              new UltraTonMemoryError(
+                `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${streaming.maxBodySize} bytes.`,
+              ),
+            idle: () => new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`),
+            mapError: (err) => {
+              const { code, cause } = err as NodeJS.ErrnoException;
+              return this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));
+            },
+            // A stream ends normally even when its connection was lost or close() ran: judged as the buffered path does.
+            verifyEnd: () => {
+              if (this.#closed) return clientClosed();
+              const reset = stream.rstCode !== undefined && stream.rstCode !== constants.NGHTTP2_NO_ERROR;
+              return stream.aborted || reset ? incompleteResponse() : undefined;
+            },
+            // The response is complete while the upload may still be open: end the half-open stream now, not when the
+            // consumer gets to the end, so a body nobody finishes reading cannot hold the session.
+            onSourceEnd: (error) => {
+              if (!stream.writableEnded && !stream.closed && !stream.destroyed) {
+                stream.close(error ? constants.NGHTTP2_CANCEL : constants.NGHTTP2_NO_ERROR);
+              }
+            },
+            onSettled: (err) => {
+              // As for a buffered response: a silent connection may be dead, so the next request gets a new one.
+              if (err instanceof UltraTonNetworkTimeoutError) this.#sessionManager.retire(session);
+            },
+          }), streaming.url));
         }
 
         reader = new BodyReader({
@@ -457,7 +514,9 @@ export class Http2Engine {
       });
 
       const wireBytes = () => reader?.wireBytes ?? 0;
-      stream.on("data", (chunk: Buffer) => {
+      // Only a buffered response is read here: a streamed one is read by its consumer, and a 'data' listener would put
+      // the stream in flowing mode and drop what nobody asked for yet.
+      if (!streaming) stream.on("data", (chunk: Buffer) => {
         if (settled || !reader) return;
         armIdleTimer();
         try {
@@ -563,8 +622,8 @@ export class Http2Engine {
           return;
         }
         stream.write(body.subarray(offset, offset + BODY_CHUNK_BYTES), (err) => {
-          if (settled || err) return;
-          armIdleTimer();
+          if ((settled && !handedOff) || err || stream.destroyed) return;
+          if (!handedOff) armIdleTimer();
           writeFrom(offset + BODY_CHUNK_BYTES);
         });
       };

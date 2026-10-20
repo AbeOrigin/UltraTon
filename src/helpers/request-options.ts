@@ -282,6 +282,27 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedReq
     return { ...rest, body: Buffer.from(serialized) };
 }
 
+const STREAM_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+
+/**
+ * Takes `method` and `maxBodySize` out of the options of `client.stream()`, validated. The rest goes through the usual
+ * request firewall; `maxBodySize` stays out of it because a stream may go past the 2 GiB a buffered body is held to.
+ * @throws {TypeError} If the method is not one of STREAM_METHODS (uppercase) or maxBodySize is not a safe integer >= 0.
+ */
+export function splitStreamOptions(options: unknown): { method: string; maxBodySize?: number; rest: unknown } {
+    // Not an object: left for withMethod to reject with its usual message.
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
+    const own = ownOptions(options as Record<string, unknown>);
+    const { method = 'GET', maxBodySize, ...rest } = own;
+    if (typeof method !== 'string' || !STREAM_METHODS.includes(method)) {
+        throw new TypeError(`UltraTon: Expected 'method' to be one of ${STREAM_METHODS.join(', ')}, received ${describeValue(method)}.`);
+    }
+    if (maxBodySize !== undefined && !(Number.isSafeInteger(maxBodySize) && (maxBodySize as number) >= 0)) {
+        throw new TypeError(`UltraTon: Expected 'maxBodySize' to be an integer from 0 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxBodySize)}.`);
+    }
+    return { method, maxBodySize: maxBodySize as number | undefined, rest };
+}
+
 /**
  * Adds the default `accept-encoding` (every coding the body reader can decode) unless `decompress` is `false` or the
  * headers already carry one. Run it on the options merged with the client defaults, like withJsonContentType.
