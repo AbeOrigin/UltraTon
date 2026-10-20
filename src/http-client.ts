@@ -144,9 +144,10 @@ export class UltraTonClient {
         const internal = (options ?? {}) as InternalClientOptions;
         const own = <K extends typeof kTransport | typeof kSessionManager>(key: K) =>
             Object.hasOwn(internal, key) ? internal[key] : undefined;
+        // An injected session manager (test seam) brings its own TLS and proxy settings; `proxy` applies to the default one.
         this.#engine = resolved.http2
-            ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls))
-            : new Http1Engine(resolved.tls, own(kTransport));
+            ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy))
+            : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy);
     }
 
     /**

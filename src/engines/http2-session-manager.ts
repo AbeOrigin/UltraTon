@@ -21,6 +21,9 @@ import {
 } from "../security/dns-pinner.ts";
 import { SecureHttpError, toNetworkError } from "../errors.ts";
 import { incompleteResponse } from "../helpers/response.ts";
+import { tunnelTo, type ProxyConfig } from "../proxy/tunnel.ts";
+import tls from "node:tls";
+import type { Duplex } from "node:stream";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -44,6 +47,8 @@ interface Attempt {
   promise: Promise<SessionEntry>;
   /** Callers still waiting for it. At zero nobody wants the result, so a late DNS answer must not open a connection. */
   waiters: number;
+  /** Aborted when the last waiter leaves: a proxy tunnel still being set up for nobody is torn down. */
+  readonly abandoned: AbortController;
 }
 
 /**
@@ -141,14 +146,19 @@ export class Http2SessionManager {
   readonly #connectFn: typeof nativeConnect;
   readonly #idleTimeoutMs: number;
   readonly #maxLifespanMs: number;
+  readonly #proxy?: ProxyConfig;
+  /** Aborted by closeAll(): a tunnel still being set up through the proxy is torn down with it. */
+  #closing = new AbortController();
 
   constructor(
     tlsConfig: SecureClientSessionOptions = {},
     connectFn: typeof nativeConnect = nativeConnect,
     timings: SessionTimings = {},
+    proxy?: ProxyConfig,
   ) {
     this.#tlsConfig = tlsConfig;
     this.#connectFn = connectFn;
+    this.#proxy = proxy;
     this.#idleTimeoutMs = timings.idleTimeoutMs ?? IDLE_TIMEOUT;
     this.#maxLifespanMs = timings.maxLifespanMs ?? MAX_SESSION_LIFESPAN;
   }
@@ -169,6 +179,8 @@ export class Http2SessionManager {
    * Closes all active sessions and clears the manager.
    */
   public closeAll(): void {
+    this.#closing.abort(new SecureHttpError("UltraTon: Client is closed."));
+    this.#closing = new AbortController();
     for (const [key, entry] of this.#sessions.entries()) {
       this.#destroySession(key, entry.session);
     }
@@ -244,8 +256,10 @@ export class Http2SessionManager {
     let forget = () => {};
 
     if (attempt === undefined) {
+      const abandoned = new AbortController();
       const created: Attempt = {
         waiters: 0,
+        abandoned,
         promise: this.#establishConnection(
           key,
           hostname,
@@ -253,6 +267,7 @@ export class Http2SessionManager {
           permitReservedIps,
           // Read after the DNS await, by which point this caller has registered as a waiter.
           () => created.waiters > 0,
+          abandoned.signal,
         ),
       };
       attempt = created;
@@ -274,6 +289,8 @@ export class Http2SessionManager {
         : attempt.promise);
     } finally {
       attempt.waiters--;
+      // After a settled attempt this changes nothing; before, it stops a tunnel nobody will use.
+      if (attempt.waiters === 0) attempt.abandoned.abort();
     }
   }
 
@@ -283,8 +300,11 @@ export class Http2SessionManager {
     overrideOptions: SecureClientSessionOptions | undefined,
     permitReservedIps: ReservedIpPolicy,
     wanted: () => boolean,
+    abandoned: AbortSignal,
   ): Promise<SessionEntry> {
     const bareHost = bareHostOf(hostname);
+    // Taken now: a closeAll() during the DNS lookup below aborts this one, and replaces #closing for later attempts.
+    const closing = this.#closing.signal;
 
     // ponytail: getaddrinfo cannot be cancelled. A caller that gives up stops waiting, but its threadpool thread stays
     // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
@@ -292,12 +312,37 @@ export class Http2SessionManager {
     // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
     // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback.
     const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
+    const target = new URL(connectUrl);
+    // Plain http goes to loopback only and never through the proxy. With resolve: 'proxy' the proxy resolves the name,
+    // so nothing is looked up here; an IP literal is still judged as itself.
+    const proxy = target.protocol === "https:" ? this.#proxy : undefined;
+    const resolveHere = proxy?.resolve !== "proxy" || isIP(bareHost) !== 0;
     // Parsed, not compared as text: a scheme in any case ("HTTP://") is still plain http.
-    const addresses = await resolveAndPinAll(
-      bareHost,
-      permitReservedIps,
-      new URL(connectUrl).protocol === "http:",
-    );
+    const addresses = resolveHere
+      ? await resolveAndPinAll(bareHost, permitReservedIps, target.protocol === "http:")
+      : [];
+
+    // Through the proxy: a CONNECT tunnel to the validated addresses in order (or the name), then TLS to the target
+    // over it, with ALPN h2 and the certificate checked against the name, as on a direct connection.
+    let tunnelled: Duplex | undefined;
+    if (proxy) {
+      const raw = await tunnelTo(
+        proxy,
+        resolveHere ? addresses.map(({ address }) => address) : [bareHost],
+        Number(target.port) || 443,
+        AbortSignal.any([closing, abandoned]),
+      );
+      const { ca, cert, key } = this.#tlsConfig ?? {};
+      tunnelled = tls.connect({
+        socket: raw,
+        ca, cert, key,
+        // The certificate is checked against `host` when there is no SNI (an IP literal): without it Node would fall
+        // back to the name of the socket it wraps, the proxy's, and accept the proxy's own certificate.
+        host: bareHost,
+        ...(isIP(bareHost) === 0 ? { servername: bareHost } : {}),
+        ALPNProtocols: ["h2"],
+      });
+    }
 
     const {
       // Each of these would let the socket go somewhere other than the validated addresses.
@@ -333,6 +378,7 @@ export class Http2SessionManager {
 
     // Every caller timed out while the lookup hung: do not open a connection nobody will use.
     if (!wanted()) {
+      tunnelled?.destroy();
       throw new SecureHttpError(
         "UltraTon: Connection attempt was abandoned before it connected.",
       );
@@ -348,6 +394,7 @@ export class Http2SessionManager {
       !pooled.session.destroyed &&
       Date.now() - pooled.createdAt <= this.#maxLifespanMs
     ) {
+      tunnelled?.destroy();
       return pooled;
     }
 
@@ -356,8 +403,12 @@ export class Http2SessionManager {
 
     let newSession: ClientHttp2Session;
     try {
-      newSession = this.#connectFn(connectUrl, connectionOptions);
+      newSession = this.#connectFn(
+        connectUrl,
+        tunnelled ? { ...connectionOptions, createConnection: () => tunnelled } : connectionOptions,
+      );
     } catch (err: unknown) {
+      tunnelled?.destroy();
       throw toNetworkError(err);
     }
 

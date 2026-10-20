@@ -12,6 +12,10 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
+import { kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
+import { isIP } from 'node:net';
+import tls from 'node:tls';
+import type { Duplex } from 'node:stream';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -25,26 +29,76 @@ const IDLE_SOCKET_TIMEOUT_MS = 5000;
 
 const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
 
+/** Every validated address of `host`, through the request's own pinning `lookup` (see _executeSingleNetworkHop). */
+const lookupAll = (lookup: (host: string, options: LookupOptions, callback: (err: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void) => void, host: string) =>
+    new Promise<string[]>((resolve, reject) =>
+        lookup(host, { all: true }, (err, addresses) => (err ? reject(err) : resolve(addresses.map(a => a.address)))));
+
+/**
+ * An HTTPS agent whose sockets are TLS over a CONNECT tunnel through the proxy. The tunnel goes to an address the
+ * request's own `lookup` resolved and validated (all of them, tried in order), or with `resolve: 'proxy'` to the name;
+ * TLS then runs to the target with its SNI and certificate check on the hostname, exactly as on a direct socket. Keep-alive
+ * pools the tunnelled sockets like any others, per policy (one agent per policy, see Http1Engine).
+ */
+class TunnelAgent extends https.Agent {
+    readonly #proxy: ProxyConfig;
+    readonly #signal: AbortSignal;
+
+    constructor(options: https.AgentOptions, proxy: ProxyConfig, signal: AbortSignal) {
+        super(options);
+        this.#proxy = proxy;
+        this.#signal = signal;
+    }
+
+    override createConnection(options: any, callback: (err: Error | null, socket?: Duplex) => void): undefined {
+        const host = String(options.host);
+        const port = Number(options.port) || 443;
+        // An IP literal was judged by request() already, and has nothing to resolve.
+        const hosts = this.#proxy.resolve === 'proxy' || isIP(host) !== 0 ? Promise.resolve([host]) : lookupAll(options.lookup, host);
+        // close() or this request giving up (abort, timeout) tears down a tunnel still being set up.
+        const hop: unknown = options[kTunnelSignal];
+        const signal = hop instanceof AbortSignal ? AbortSignal.any([this.#signal, hop]) : this.#signal;
+        hosts
+            .then(list => tunnelTo(this.#proxy, list, port, signal))
+            .then(raw => {
+                // Only TLS material and the target: nothing from the request options can point the socket elsewhere.
+                // `host` is what the certificate is checked against when there is no SNI (an IP literal): without it
+                // Node would fall back to the name of the socket it wraps, the proxy's, and accept the proxy's own cert.
+                // ponytail: no TLS session resumption through the proxy (https.Agent's session cache lives in the
+                // createConnection this replaces); a full handshake per new tunnel, add the cache if that ever costs.
+                const { ca, cert, key, servername } = options;
+                callback(null, tls.connect({ socket: raw, host, ca, cert, key, servername, ALPNProtocols: ['http/1.1'] }));
+            }, (err: Error) => callback(err));
+        return undefined;
+    }
+}
+
 /** The HTTP/1.1 engine behind `UltraTonClient`. Not public: the client validates and merges the options it receives. */
 export class Http1Engine {
     readonly #agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
     readonly #tls: TlsOptions;
     // Internal testing interceptor (kTransport)
     readonly #transport?: typeof https.request | typeof http.request;
+    readonly #proxy?: ProxyConfig;
+    /** Aborted by close(): a tunnel still being set up through the proxy is torn down with it. */
+    readonly #closing = new AbortController();
     #closed = false;
 
     /**
      * @param tls - The client's validated `ca`/`cert`/`key`, applied to its HTTPS agents.
      * @param transport - Replacement for `http.request`/`https.request`, used strictly for internal testing.
+     * @param proxy - The client's validated `proxy`: every `https:` request is tunnelled through it.
      */
-    constructor(tls: TlsOptions = {}, transport?: typeof https.request | typeof http.request) {
+    constructor(tls: TlsOptions = {}, transport?: typeof https.request | typeof http.request, proxy?: ProxyConfig) {
         this.#tls = tls;
         this.#transport = transport;
+        this.#proxy = proxy;
     }
 
     /** Destroys every pooled socket (in-flight requests on them fail) and refuses any later request. */
     public close(): void {
         this.#closed = true;
+        this.#closing.abort(clientClosed());
         for (const agents of this.#agentsByPolicy.values()) {
             agents.http.destroy();
             agents.https.destroy();
@@ -58,7 +112,9 @@ export class Http1Engine {
         if (!agents) {
             agents = {
                 http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }),
-                https: new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
+                https: this.#proxy
+                    ? new TunnelAgent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }, this.#proxy, this.#closing.signal)
+                    : new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
             };
             this.#agentsByPolicy.set(key, agents);
         }
@@ -137,8 +193,13 @@ export class Http1Engine {
                 delete headers['content-length'];
             }
 
+            // Ends a proxy tunnel still being set up for this hop when the hop gives up: abort, timeout (see TunnelAgent).
+            const hop = new AbortController();
+            const tunnelSignal = this.#proxy && reqOpts.signal ? AbortSignal.any([hop.signal, reqOpts.signal]) : hop.signal;
+
             const req = transport(urlObj, {
                 ...reqOpts,
+                ...(this.#proxy ? { [kTunnelSignal]: tunnelSignal } : {}),
                 headers,
                 timeout: reqOpts.socketTimeoutMs,
                 agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
@@ -162,6 +223,7 @@ export class Http1Engine {
 
             if (currentTimeoutMs > 0) {
                 executionTimer = setTimeout(() => {
+                    hop.abort();
                     req.destroy();
                     reject(absoluteTimeout(reqOpts.timeoutMs));
                 }, currentTimeoutMs);
@@ -230,6 +292,7 @@ export class Http1Engine {
             });
 
             const onSocketTimeout = () => {
+                hop.abort();
                 req.destroy();
                 clearTimeout(executionTimer);
                 reject(idleTimeout(reqOpts.socketTimeoutMs));

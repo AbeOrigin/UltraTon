@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
+import type { ProxyConfig } from "../proxy/tunnel.ts";
 const INT32_MAX = 2147483647;
 
 /**
@@ -145,7 +146,7 @@ const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs',
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -173,6 +174,7 @@ const OPTION_HINTS = new Map<string, string>([
     ['rejectUnauthorized', `${NO_VERIFY_OFF} the 'tls' option of the client constructor.`],
     ['http2', " 'http2' is an option of the client constructor, not of a request."],
     ['userAgent', " Set a 'user-agent' header, or 'userAgent' in the client constructor."],
+    ['proxy', " 'proxy' is an option of the client constructor, not of a request."],
 ]);
 const perRequestOnly = (key: string) => ` '${key}' is a per-request option, not a client option.`;
 const CLIENT_OPTION_HINTS = new Map<string, string>([
@@ -557,6 +559,7 @@ export interface ResolvedClientOptions {
     readonly baseUrl?: URL;
     readonly http2: boolean;
     readonly tls: TlsOptions;
+    readonly proxy?: ProxyConfig;
     readonly defaults: ClientDefaults;
 }
 
@@ -586,6 +589,55 @@ function tlsOptions(value: unknown): TlsOptions {
         if (material !== undefined) tls[key] = material;
     }
     return tls;
+}
+
+const PROXY_OPTION_KEYS = ['url', 'auth', 'ca', 'resolve'];
+
+/**
+ * `proxy` of the client: a URL string or { url, auth, ca, resolve }. The URL is operator configuration, so its host is
+ * not held to `permitReservedIps` (a proxy is usually internal), but it must be a bare http(s) origin: credentials go
+ * in `auth`, never in a URL that ends up in logs.
+ * @throws {TypeError} On any other type, an unknown field, a URL that is not a bare http(s) origin, or a field of the wrong type.
+ */
+function proxyOption(value: unknown): ProxyConfig | undefined {
+    if (value === undefined) return undefined;
+    let raw: Record<string, unknown>;
+    if (typeof value === 'string') {
+        raw = { url: value };
+    } else if (isPlainObject(value)) {
+        raw = ownOptions(value);
+        for (const key of Object.keys(raw)) {
+            if (!PROXY_OPTION_KEYS.includes(key)) {
+                throw new TypeError(`UltraTon: Unknown proxy option '${key}'. Valid proxy options: ${PROXY_OPTION_KEYS.join(', ')}.`);
+            }
+        }
+        validateType('proxy.url', raw.url ?? null, 'string');
+    } else {
+        throw new TypeError(`UltraTon: Expected 'proxy' to be a URL string or a plain object, received ${describeValue(value)}.`);
+    }
+
+    const url = URL.canParse(raw.url as string) ? new URL(raw.url as string) : undefined;
+    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname === '') {
+        throw new TypeError("UltraTon: Expected 'proxy' to be an http: or https: URL, such as 'http://egress.corp:3128'.");
+    }
+    if (url.username !== '' || url.password !== '') {
+        throw new TypeError("UltraTon: 'proxy' cannot contain credentials; pass them as proxy: { url, auth }.");
+    }
+    if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || (raw.url as string).includes('?') || (raw.url as string).includes('#')) {
+        throw new TypeError("UltraTon: 'proxy' must be an origin only (no path, query or fragment).");
+    }
+    if (raw.resolve !== undefined && raw.resolve !== 'local' && raw.resolve !== 'proxy') {
+        const received = typeof raw.resolve === 'string' ? `'${raw.resolve}'` : describeValue(raw.resolve);
+        throw new TypeError(`UltraTon: Expected 'proxy.resolve' to be 'local' or 'proxy', received ${received}.`);
+    }
+    validateType('proxy.auth', raw.auth, 'string');
+    const ca = tlsMaterial('proxy.ca', raw.ca);
+    return Object.freeze({
+        url,
+        resolve: (raw.resolve ?? 'local') as ProxyConfig['resolve'],
+        ...(raw.auth !== undefined ? { auth: raw.auth as string } : {}),
+        ...(ca !== undefined ? { ca } : {}),
+    });
 }
 
 /**
@@ -632,6 +684,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
 
     const http2 = validateType('http2', raw.http2, 'boolean') && raw.http2 === true;
     const tls = tlsOptions(raw.tls);
+    const proxy = proxyOption(raw.proxy);
 
     let baseUrl: URL | undefined;
     if (validateType('baseUrl', raw.baseUrl, 'string')) {
@@ -650,6 +703,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         baseUrl,
         http2,
         tls,
+        proxy,
         defaults: {
             headers,
             // Validated above (type and range). Kept as given, so `undefined` still means "use the request's own default".

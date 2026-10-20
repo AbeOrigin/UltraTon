@@ -17,6 +17,7 @@ export type {
   UltraTonStreamMethod,
   UltraTonRetryOptions,
   UltraTonRetryInfo,
+  UltraTonProxyOptions,
   QueryValue,
 } from './types/request-options.types.ts';
 export type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';

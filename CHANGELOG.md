@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Outbound proxy: the `proxy` client option**, a URL (`'http://egress.corp:3128'`) or `{ url, auth, ca, resolve }`, on both engines.
+  - Every `https:` request is tunnelled with CONNECT **to the IP UltraTon resolved and validated**, never to a name the proxy could resolve elsewhere, so DNS pinning holds through the proxy. If the proxy cannot reach one address, the next validated one is tried. TLS runs to the target over the tunnel, with SNI and the certificate checked against the hostname.
+  - SSRF checks run before the proxy is contacted. Redirects go through the tunnel again, validated again.
+  - `auth` (`user:password`) is sent as `proxy-authorization` on the CONNECT only, never to a target; credentials in the proxy URL are rejected. The URL must be a bare `http:` or `https:` origin.
+  - An `https:` proxy is checked against the system CAs or `proxy.ca`, which is kept apart from the `tls.ca` trusted for targets.
+  - A refused CONNECT rejects with `UltraTonNetworkError` code `ERR_ULTRATON_PROXY` and the status in the message, never the proxy address, and is not retried. A malformed or oversized proxy response, or one with bytes past its headers, is refused too.
+  - The CONNECT handshake has a 10 s deadline per address, and the request's `timeoutMs`, `signal` and `close()` end it sooner.
+  - `resolve: 'proxy'` sends the hostname instead, for proxies that filter by name (Squid, Smokescreen). DNS pinning is then up to the proxy; reserved IP literals are still rejected.
+  - Plain `http:` targets (loopback) never use the proxy. Proxies are never read from the environment. `close()` closes the tunnels.
+  - New public type `UltraTonProxyOptions`. SOCKS5 is not supported yet.
 - **Retries: the `retry` option**, on the client and per request, off by default.
   - `retry: n` retries up to `n` times (0 to 10). An object sets `limit`, `methods`, `statusCodes`, `maxDelayMs` and `onRetry`, and a request's `retry` merges over the client's field by field.
   - Defaults: the methods GET, PUT, DELETE, HEAD and OPTIONS (never POST or PATCH unless listed) and the statuses 408, 429, 502, 503 and 504. The network failures `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN` and `EPIPE` are retried, and so is the idle timeout. When the retries run out on a status, the last response is returned.
