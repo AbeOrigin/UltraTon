@@ -230,20 +230,10 @@ export class Http2SessionManager {
       }
 
       if (isExpired) {
-        // Graceful shutdown: close prevents new streams but allows existing ones to finish.
-        try {
-          if (!session.closed && !session.destroyed) {
-            session.close();
-          }
-        } catch {
-          /* Session might have already transitioned state */
-        }
-        // Eagerly evict from the pool so concurrent callers arriving before the
-        // async 'close' event fires correctly hit the #pendingConnections
-        // deduplication gate instead of spawning a duplicate TCP connection.
-        if (this.#sessions.get(key)?.session === session) {
-          this.#sessions.delete(key);
-        }
+        // Graceful shutdown, like a GOAWAY: out of the pool at once (so concurrent callers arriving before the async
+        // 'close' event hit the #pendingConnections deduplication gate instead of spawning a duplicate connection),
+        // existing streams finish, and closeAll() still destroys it while they do.
+        this.#retireSession(key, session);
       }
     }
 

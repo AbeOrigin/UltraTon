@@ -105,7 +105,8 @@ export class Http1Engine {
         urlObj: URL,
         reqOpts: SecureUltraTonRequestOptions,
         body: Buffer | undefined,
-        currentTimeoutMs: number
+        currentTimeoutMs: number,
+        followRedirects: boolean
     ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean }> {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
@@ -157,7 +158,9 @@ export class Http1Engine {
                 const isRedirect = res.statusCode !== undefined && HTTP_CODES_REDIRECTS.has(res.statusCode);
                 const location = res.headers.location;
 
-                if (isRedirect && location) {
+                // Only a redirect that will be followed skips its body (never buffered, so never held to maxBodySize);
+                // one that will not be followed is an ordinary response, body included, as on HTTP/2.
+                if (isRedirect && location && followRedirects) {
                     res.destroy(); // Dump incoming V8 buffers natively before recurse
                     req.destroy(); // Kill socket cleanly
                     clearTimeout(executionTimer);
@@ -236,7 +239,7 @@ export class Http1Engine {
                 }
             }
 
-            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs);
+            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0);
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 if (redirectCount >= reqOpts.maxRedirects) {

@@ -11,17 +11,25 @@ import type { AddressInfo, Socket } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { Http2SessionManager, type SessionTimings } from '../src/engines/http2-session-manager.ts';
 import { kSessionManager } from '../src/internal.ts';
+import { SecureHttpError } from '../src/errors.ts';
 
-/** An h2c server that answers `/slow/<ms>` after that long and anything else at once. Counts closed connections. */
-async function slowServer(t: TestContext) {
+/**
+ * An h2c server that answers `/slow/<ms>` after that long and anything else at once. Counts closed connections.
+ * With `quietOnGoaway`, it does not answer the client's GOAWAY with its own (Node's server does by default), the way a
+ * peer still finishing streams may keep the connection open.
+ */
+async function slowServer(t: TestContext, { quietOnGoaway = false } = {}) {
     let closed = 0;
+    let streams = 0;
     const sockets = new Set<Socket>();
     const server = createH2Server();
     server.on('connection', (socket: Socket) => {
         sockets.add(socket);
         socket.on('close', () => closed++);
     });
+    if (quietOnGoaway) server.on('session', session => { session.close = () => {}; });
     server.on('stream', (stream: ServerHttp2Stream, headers) => {
+        streams++;
         const delay = Number(/^\/slow\/(\d+)$/.exec(String(headers[':path']))?.[1] ?? 0);
         const timer = setTimeout(() => {
             if (stream.destroyed) return;
@@ -36,7 +44,7 @@ async function slowServer(t: TestContext) {
         await new Promise<void>(r => server.close(() => r()));
     });
     const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    return { origin, closedConnections: () => closed };
+    return { origin, closedConnections: () => closed, streams: () => streams };
 }
 
 function clientWith(t: TestContext, timings: SessionTimings) {
@@ -87,5 +95,32 @@ describe('HTTP/2 session idle timeout', () => {
         assert.equal((await client.get(`${origin}/`)).statusCode, 200);
         const session = await pooled(origin);
         await within(once(session, 'close'), 2000, 'idle session reaped');
+    });
+});
+
+describe('HTTP/2 session maximum lifespan', () => {
+    it('an expired session still finishing a stream is destroyed by close()', async (t) => {
+        // A server that answers GOAWAY with GOAWAY would put the session in the draining set through the 'goaway' event.
+        const { origin, streams } = await slowServer(t, { quietOnGoaway: true });
+        const { client, pooled } = clientWith(t, { maxLifespanMs: 200 });
+
+        const inFlight = client.get(`${origin}/slow/5000`, { timeoutMs: 0, socketTimeoutMs: 0 });
+        inFlight.catch(() => {});
+        await within((async () => { while (streams() < 1) await new Promise(r => setTimeout(r, 5)); })(), 2000, 'stream reached the server');
+        const expired = await pooled(origin);
+
+        await new Promise(r => setTimeout(r, 300));
+        // The next request finds the session expired: it leaves the pool and a new one serves this request.
+        assert.equal((await client.get(`${origin}/`)).statusCode, 200);
+        assert.notEqual(await pooled(origin), expired, 'replaced in the pool');
+        assert.equal(expired.destroyed, false, 'retired gracefully: its stream may finish');
+
+        await client.close();
+        assert.equal(expired.destroyed, true, 'close() reaches the retired session');
+        await assert.rejects(within(inFlight, 1000, 'in-flight request settled by close()'), (err: Error) => {
+            assert.ok(err instanceof SecureHttpError);
+            assert.equal(err.message, 'UltraTon: Client is closed.');
+            return true;
+        });
     });
 });

@@ -154,6 +154,7 @@ export class Http2Engine {
         reqOpts.maxBodySize,
         reqOpts.socketTimeoutMs,
         reqOpts.signal,
+        reqOpts.maxRedirects > 0,
       );
 
       const statusCode = response.statusCode;
@@ -310,6 +311,7 @@ export class Http2Engine {
     maxBodySize: number,
     socketTimeoutMs: number,
     signal: AbortSignal | undefined,
+    followRedirects: boolean,
   ): Promise<UltraTonResponse<T>> {
     return new Promise((resolve, reject) => {
       // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
@@ -402,6 +404,18 @@ export class Http2Engine {
         armIdleTimer();
         statusCode = Number(headers[":status"]);
         responseHeaders = headers;
+
+        // A redirect that will be followed: its body is never read (a large one must not hit maxBodySize, nor be
+        // buffered for nothing). End the stream at once, cleanly if the server sent no body, else cancelled.
+        const location = headers.location;
+        if (followRedirects && HTTP_CODES_REDIRECTS.has(statusCode) && typeof location === "string" && location) {
+          settled = true;
+          cleanup();
+          if (!stream.closed && !stream.destroyed) {
+            stream.close(stream.endAfterHeaders ? constants.NGHTTP2_NO_ERROR : constants.NGHTTP2_CANCEL);
+          }
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+        }
 
         if (pseudoHeaders[":method"] === "HEAD") {
           settled = true;
