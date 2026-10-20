@@ -17,6 +17,7 @@ const VALUES = [
   'UltraTonClient',
   'UltraTonHTTP2',
   'UltraTonMemoryError',
+  'UltraTonNetworkError',
   'UltraTonNetworkTimeoutError',
   'UltraTonParseError',
   'UltraTonRedirectError',
@@ -93,10 +94,10 @@ try {
     npm(['install', tgz, '--no-audit', '--no-fund'], consumer);
   });
 
-  check('ESM import() exposes exactly the 7 value exports', () =>
+  check('ESM import() exposes exactly the 8 value exports', () =>
     keysCheck('import', "import('ultraton').then(m => console.log(JSON.stringify(Object.keys(m).sort())))", consumer));
 
-  check('CJS require() exposes exactly the 7 value exports', () =>
+  check('CJS require() exposes exactly the 8 value exports', () =>
     keysCheck('require', "console.log(JSON.stringify(Object.keys(require('ultraton')).sort()))", consumer));
 
   check('TypeScript (nodenext, strict) resolves values and types', () => {

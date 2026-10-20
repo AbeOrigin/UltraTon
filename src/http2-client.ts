@@ -19,6 +19,7 @@ import {
   UltraTonNetworkTimeoutError,
   UltraTonParseError,
   UltraTonRedirectError,
+  toNetworkError,
 } from "./errors.ts";
 import { HTTP_CODES_REDIRECTS } from "./constants.ts";
 import { parseSecurePayload, secureReviver } from "./helpers/payload-parser.ts";
@@ -330,11 +331,7 @@ export class UltraTonHTTP2 {
       try {
         stream = session.request(pseudoHeaders);
       } catch (err: unknown) {
-        return reject(
-          new SecureHttpError(
-            `UltraTon: Failed to initialize HTTP/2 stream: ${err instanceof Error ? err.message : String(err)}`,
-          ),
-        );
+        return reject(toNetworkError(err));
       }
 
       // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
@@ -432,7 +429,22 @@ export class UltraTonHTTP2 {
         if (settled) return;
         settled = true;
         clearTimeout(streamTimer);
-        reject(new SecureHttpError(`UltraTon stream error: ${err.message}`));
+        if (!session.destroyed) {
+          // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
+          return reject(toNetworkError(err));
+        }
+        // A session that dies (e.g. ECONNREFUSED while connecting) cancels its streams with a generic
+        // ERR_HTTP2_STREAM_CANCEL one event BEFORE the session emits the error that holds the real cause.
+        // Wait one turn for that error so the caller gets the actionable code.
+        let sessionError: unknown;
+        const onSessionError = (e: unknown) => {
+          sessionError = e;
+        };
+        session.once("error", onSessionError);
+        setImmediate(() => {
+          session.off("error", onSessionError);
+          reject(toNetworkError(sessionError ?? err));
+        });
       });
 
       if (body) {

@@ -27,10 +27,12 @@ import {
   type IncomingHttpHeaders,
   type ServerHttp2Stream,
 } from "node:http2";
-import { type AddressInfo, isIP } from "node:net";
+import http from "node:http";
+import net, { type AddressInfo, isIP } from "node:net";
 import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
 import {
   SecureHttpError,
+  UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
 } from "../src/errors.ts";
 import { UltraTonHTTP2 } from "../src/http2-client.ts";
@@ -726,8 +728,8 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     await assert.rejects(
       client.get("https://hang.test/", { timeoutMs: 2000 }),
       (err: unknown) => {
-        assert.ok(err instanceof SecureHttpError);
-        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /Connection failed/);
         assert.doesNotMatch(err.message, /hang\.test/, "the hostname must not be echoed into the message");
         return true;
       },
@@ -786,8 +788,8 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
       client.get("https://slow.test/", { timeoutMs: 0 }),
       (err: unknown) => {
         // Reaching the connect step proves the slow lookup was waited for, not timed out.
-        assert.ok(err instanceof SecureHttpError);
-        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /Connection failed/);
         return true;
       },
     );
@@ -911,5 +913,75 @@ describe("HTTP/2 concurrent connection attempts for one pool key", () => {
     manager.closeAll();
     await until(() => openSessions() === 0);
     assert.strictEqual(openSessions(), 0, "a session survived closeAll()");
+  });
+});
+
+/**
+ * Real sockets: a refused connection or a failed TLS handshake must reach the caller as UltraTonNetworkError with the
+ * original code and cause, and a message that names neither the pinned IP nor the port.
+ */
+describe("HTTP/2 network errors are actionable and never echo addresses", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  const freshClient = (t: TestContext) => {
+    const manager = new Http2SessionManager();
+    t.after(() => manager.closeAll());
+    return new UltraTonHTTP2({}, manager);
+  };
+
+  const assertNoAddress = (message: string, port: number) => {
+    assert.ok(!message.includes("127.0.0.1"), `message leaks the IP: ${message}`);
+    assert.ok(!message.includes(String(port)), `message leaks the port: ${message}`);
+  };
+
+  it("ECONNREFUSED on a closed port becomes UltraTonNetworkError with code and cause", async (t) => {
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    await assert.rejects(
+      freshClient(t).get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.ok(err instanceof SecureHttpError);
+        assert.strictEqual(err.code, "ECONNREFUSED");
+        assert.strictEqual((err.cause as NodeJS.ErrnoException).code, "ECONNREFUSED");
+        assert.strictEqual(err.message, "UltraTon: Connection failed (ECONNREFUSED).");
+        assertNoAddress(err.message, port);
+        return true;
+      },
+    );
+  });
+
+  it("a TLS handshake against a plain server becomes UltraTonNetworkError with a TLS message and no IP", async (t) => {
+    const server = http.createServer((_req, res) => res.end("plain"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    await assert.rejects(
+      freshClient(t).get(`https://127.0.0.1:${port}/`, { permitReservedIps: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /^UltraTon: TLS handshake failed \(.+\)\.$/);
+        assert.ok(err.code, "keeps the original code");
+        assert.ok(err.cause instanceof Error, "keeps the original error as cause");
+        assertNoAddress(err.message, port);
+        return true;
+      },
+    );
+  });
+
+  it("does not wrap the reserved-IP rejection", async (t) => {
+    await assert.rejects(freshClient(t).get("http://127.0.0.1:1/"), (err: unknown) => {
+      assert.ok(err instanceof SecureHttpError);
+      assert.ok(!(err instanceof UltraTonNetworkError));
+      return true;
+    });
   });
 });

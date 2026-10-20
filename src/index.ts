@@ -4,6 +4,7 @@ export { UltraTonClient } from './http-client.ts';
 export { UltraTonHTTP2 } from './http2-client.ts';
 export {
   SecureHttpError,
+  UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
   UltraTonMemoryError,
   UltraTonParseError,

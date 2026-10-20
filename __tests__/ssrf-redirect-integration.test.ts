@@ -6,9 +6,10 @@ import https from 'node:https';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
+import net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
-import { SecureHttpError } from '../src/errors.ts';
+import { SecureHttpError, UltraTonNetworkError } from '../src/errors.ts';
 
 // Real sockets on purpose: Node skips the custom `lookup` for IP literals, so mocks cannot catch this class of bug.
 describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets)', () => {
@@ -291,6 +292,105 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
             const { keepAlive, timeout } = (agent as unknown as { options: { keepAlive?: boolean, timeout?: number } }).options;
             assert.equal(keepAlive, true);
             assert.equal(timeout, 5000);
+        }
+    });
+});
+
+// Real sockets: the point is what Node itself reports (ECONNREFUSED, ECONNRESET, OpenSSL errors), and that none of it leaks.
+describe('UltraTonClient - network errors are actionable and never echo addresses (real sockets)', () => {
+    /** A port nothing listens on: bind an ephemeral one, then release it. */
+    const closedPort = async (): Promise<number> => {
+        const probe = net.createServer();
+        await new Promise<void>(r => probe.listen(0, '127.0.0.1', r));
+        const { port } = probe.address() as AddressInfo;
+        await new Promise<void>(r => probe.close(() => r()));
+        return port;
+    };
+
+    const assertNoAddress = (message: string, port: number) => {
+        assert.ok(!message.includes('127.0.0.1'), `message leaks the IP: ${message}`);
+        assert.ok(!message.includes(String(port)), `message leaks the port: ${message}`);
+    };
+
+    it('ECONNREFUSED on a closed port becomes UltraTonNetworkError with code and cause, without IP or port', async () => {
+        const port = await closedPort();
+        await assert.rejects(
+            new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+            (err: unknown) => {
+                assert.ok(err instanceof UltraTonNetworkError);
+                assert.ok(err instanceof SecureHttpError);
+                assert.equal(err.name, 'UltraTonNetworkError');
+                assert.equal(err.code, 'ECONNREFUSED');
+                assert.equal((err.cause as NodeJS.ErrnoException).code, 'ECONNREFUSED');
+                assert.equal(err.message, 'UltraTon: Connection failed (ECONNREFUSED).');
+                assertNoAddress(err.message, port);
+                return true;
+            }
+        );
+    });
+
+    it('ECONNRESET becomes UltraTonNetworkError carrying the original code', async () => {
+        const server = net.createServer(socket => socket.destroy());
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        const { port } = server.address() as AddressInfo;
+        try {
+            await assert.rejects(
+                new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+                (err: unknown) => {
+                    assert.ok(err instanceof UltraTonNetworkError);
+                    assert.equal(err.code, 'ECONNRESET');
+                    assert.equal((err.cause as NodeJS.ErrnoException).code, 'ECONNRESET');
+                    assertNoAddress(err.message, port);
+                    return true;
+                }
+            );
+        } finally {
+            server.close();
+        }
+    });
+
+    it('a TLS handshake against a plain-HTTP server becomes UltraTonNetworkError with a TLS message and no IP', async () => {
+        const server = http.createServer((_req, res) => res.end('plain'));
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        const { port } = server.address() as AddressInfo;
+        try {
+            await assert.rejects(
+                new UltraTonClient().get(`https://127.0.0.1:${port}/`, { permitReservedIps: true }),
+                (err: unknown) => {
+                    assert.ok(err instanceof UltraTonNetworkError);
+                    assert.match(err.message, /^UltraTon: TLS handshake failed \(.+\)\.$/);
+                    assert.ok(err.code, 'keeps the original code');
+                    assert.ok(err.cause instanceof Error, 'keeps the original error as cause');
+                    assertNoAddress(err.message, port);
+                    return true;
+                }
+            );
+        } finally {
+            server.close();
+        }
+    });
+
+    it('does not wrap errors that are already SecureHttpError (reserved IP) nor a caller abort', async () => {
+        await assert.rejects(
+            new UltraTonClient().get('http://127.0.0.1:1/'),
+            (err: unknown) => err instanceof SecureHttpError && !(err instanceof UltraTonNetworkError) && /prohibited internal\/reserved/.test(err.message)
+        );
+
+        const hanging = http.createServer(() => { /* never answers */ });
+        await new Promise<void>(r => hanging.listen(0, '127.0.0.1', r));
+        const { port } = hanging.address() as AddressInfo;
+        try {
+            const controller = new AbortController();
+            const pending = new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true, signal: controller.signal });
+            setTimeout(() => controller.abort(), 50);
+            await assert.rejects(pending, (err: unknown) => {
+                assert.ok(!(err instanceof UltraTonNetworkError), 'abort must stay an AbortError');
+                assert.equal((err as Error).name, 'AbortError');
+                return true;
+            });
+        } finally {
+            hanging.closeAllConnections();
+            hanging.close();
         }
     });
 });

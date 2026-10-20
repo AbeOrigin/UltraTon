@@ -17,7 +17,7 @@ import {
   type ReservedIpPolicy,
   resolveAndPinHost,
 } from "../security/dns-pinner.ts";
-import { SecureHttpError } from "../errors.ts";
+import { SecureHttpError, toNetworkError } from "../errors.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -294,11 +294,7 @@ export class Http2SessionManager {
     try {
       newSession = this.#connectFn(connectUrl, connectionOptions);
     } catch (err: unknown) {
-      throw new SecureHttpError(
-        `UltraTon: Failed to establish HTTP/2 connection: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      throw toNetworkError(err);
     }
 
     // Attach 'error' FIRST — before setTimeout or any other logic — to eliminate

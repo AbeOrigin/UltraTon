@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError } from "./errors.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
@@ -173,7 +173,8 @@ export class UltraTonClient {
             req.on('error', (err: Error) => {
                 req.destroy();
                 clearTimeout(executionTimer);
-                reject(err);
+                // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
+                reject(toNetworkError(err));
             });
 
             if (options.body) req.write(options.body);
