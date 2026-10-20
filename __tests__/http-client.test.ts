@@ -7,7 +7,7 @@ import { kTransport } from '../src/internal.ts';
 import https from 'node:https';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError } from '../src/errors.ts';
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError } from '../src/errors.ts';
 
 describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
@@ -154,7 +154,8 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
     it('Rejects with UltraTonNetworkError when the server cuts the body short', async () => {
         await assert.rejects(
             new UltraTonClient().get(`${base}/truncated`, { permitReservedIps: true }),
-            (err: unknown) => err instanceof UltraTonNetworkError && !(err instanceof UltraTonMemoryError)
+            // Not a timeout either: since 2.0 UltraTonNetworkTimeoutError is an UltraTonNetworkError too.
+            (err: unknown) => err instanceof UltraTonNetworkError && !(err instanceof UltraTonNetworkTimeoutError) && !(err instanceof UltraTonMemoryError)
         );
     });
 });
