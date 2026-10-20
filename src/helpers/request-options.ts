@@ -1,3 +1,4 @@
+import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
 import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions } from "../types/request-options.types.ts";
 import { MAX_REDIRECTS_CEILING } from "../constants.ts";
@@ -139,12 +140,12 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'http2', 'tls', 'userAgent'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'http2', 'tls', 'userAgent'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -282,6 +283,19 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedReq
 }
 
 /**
+ * Adds the default `accept-encoding` (every coding the body reader can decode) unless `decompress` is `false` or the
+ * headers already carry one. Run it on the options merged with the client defaults, like withJsonContentType.
+ */
+export function withAcceptEncoding(options: ResolvedRequestOptions): ResolvedRequestOptions {
+    if (options.decompress === false) return options;
+    const headers: unknown = options.headers;
+    if (headers !== undefined && !isPlainObject(headers)) return options;
+    const map = (headers ?? {}) as Record<string, unknown>;
+    if (Object.keys(map).some(key => key.toLowerCase() === 'accept-encoding' && map[key] !== undefined)) return options;
+    return { ...options, headers: { ...map, 'accept-encoding': ACCEPT_ENCODING } as ResolvedRequestOptions['headers'] };
+}
+
+/**
  * Adds `content-type: application/json` for a `json` body, unless the headers already carry a content-type. Run it on
  * the options merged with the client defaults, so a client default content-type (`application/vnd.api+json`) is kept
  * and a request's own one wins over both. Headers that are not a plain object are left for buildSafeRequestOptions to reject.
@@ -379,6 +393,7 @@ export function buildSafeRequestOptions(options: InternalRequestOptions): Secure
     }
 
     // Defaults when unset: 2MB body, 10s idle, 30s total, no redirects. 0 disables the two timeouts.
+    safeOptions.decompress = validateType('decompress', options.decompress, 'boolean') ? options.decompress : true;
     safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024);
     safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000);
     safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000);
@@ -397,6 +412,7 @@ export interface ClientDefaults {
     readonly maxBodySize?: number;
     readonly maxRedirects?: number;
     readonly permitReservedIps?: ReservedIpPolicy;
+    readonly decompress?: boolean;
 }
 
 /** `new UltraTonClient(options)` once validated. */
@@ -464,6 +480,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         maxBodySize: raw.maxBodySize as number | undefined,
         maxRedirects: raw.maxRedirects as number | undefined,
         permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
+        decompress: raw.decompress as boolean | undefined,
     });
 
     // sanitizeHeaders never keeps an undefined value.
@@ -505,6 +522,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             maxBodySize: raw.maxBodySize as number | undefined,
             maxRedirects: raw.maxRedirects as number | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
+            decompress: raw.decompress as boolean | undefined,
         },
     };
 }
@@ -528,6 +546,7 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         maxBodySize: or(own.maxBodySize, defaults.maxBodySize),
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
+        decompress: or(own.decompress, defaults.decompress),
         signal: own.signal,
         auth: own.auth,
         body: own.body,

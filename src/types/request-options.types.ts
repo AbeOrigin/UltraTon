@@ -49,6 +49,13 @@ export interface UltraTonRequestOptions {
     readonly signal?: AbortSignal;
 
     /**
+     * Decode gzip, deflate and br (and zstd when this Node has it) response bodies, and ask for them with an
+     * `accept-encoding` header unless the request sets its own. `maxBodySize` then bounds the decoded bytes too, so a
+     * decompression bomb stops at the limit. `false` sends no `accept-encoding` and leaves `data` as received. Default true.
+     */
+    readonly decompress?: boolean;
+
+    /**
      * The maximum size of the response body in bytes: an integer from 0 to 2147483647 (anything else throws a
      * `TypeError`). Default is 2MB.
      */
@@ -101,6 +108,7 @@ export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'body
  * Enforces that critical execution constraints are mathematically guaranteed.
  */
 export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
+    readonly decompress: boolean;
     readonly maxBodySize: number;
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
@@ -141,6 +149,9 @@ export interface UltraTonClientOptions {
 
     /** Default `socketTimeoutMs` for every request. See {@link UltraTonRequestOptions.socketTimeoutMs}. */
     readonly socketTimeoutMs?: number;
+
+    /** Default `decompress` for every request. See {@link UltraTonRequestOptions.decompress}. */
+    readonly decompress?: boolean;
 
     /** Default `maxBodySize` for every request. See {@link UltraTonRequestOptions.maxBodySize}. */
     readonly maxBodySize?: number;

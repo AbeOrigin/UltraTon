@@ -5,7 +5,7 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withAcceptEncoding, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions } from './types/request-options.types.ts';
@@ -201,7 +201,7 @@ export class UltraTonClient {
         const requested = withMethod(method, options);
         const target = withQuery(resolved, requested.query);
         Reflect.deleteProperty(requested, 'query');
-        const merged = mergeClientDefaults(resolveRequestBody(requested), this.#defaults);
+        const merged = withAcceptEncoding(mergeClientDefaults(resolveRequestBody(requested), this.#defaults));
         return this.#engine.request<T>(target, requested.json === undefined ? merged : withJsonContentType(merged));
     }
 }
