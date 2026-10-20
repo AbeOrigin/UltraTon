@@ -123,7 +123,8 @@ export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' |
  * timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`) and the statuses in `statusCodes`. Never retried: policy errors
  * (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`, ...), `TypeError`,
  * `UltraTonMemoryError`, `UltraTonRedirectError`, the absolute timeout (`ERR_ULTRATON_TIMEOUT`) and an abort.
- * On HTTP/2, a stream the server refused or a GOAWAY fails with an `ERR_HTTP2_*` code, which is not retried.
+ * On HTTP/2, a stream the server never processed (a REFUSED_STREAM reset, or above the last stream a GOAWAY
+ * processed) fails with code `NGHTTP2_REFUSED_STREAM` and is retried; any other reset is not.
  * When the retries run out on a status, the last response is returned.
  */
 export interface UltraTonRetryOptions {

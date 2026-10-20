@@ -20,6 +20,7 @@ import {
   UltraTonRedirectError,
   absoluteTimeout,
   idleTimeout,
+  refusedStream,
   toNetworkError,
 } from "../errors.ts";
 import { HTTP_CODES_REDIRECTS } from "../constants.ts";
@@ -35,6 +36,28 @@ import {
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
+
+/** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
+const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
+
+/**
+ * Calls `onGoaway(lastStreamID)` if the session gets a GOAWAY while the request is in flight. One 'goaway' listener per
+ * session, whatever the number of streams on it, so a busy session never trips the max-listeners warning.
+ * @returns A function that stops watching; call it when the request settles.
+ */
+function watchGoaway(session: ClientHttp2Session, onGoaway: (lastStreamID: number) => void): () => void {
+  let watchers = goawayWatchers.get(session);
+  if (!watchers) {
+    const set = new Set<(lastStreamID: number) => void>();
+    goawayWatchers.set(session, set);
+    session.on("goaway", (_code: number, lastStreamID: number) => {
+      for (const watch of [...set]) watch(lastStreamID);
+    });
+    watchers = set;
+  }
+  watchers.add(onGoaway);
+  return () => watchers.delete(onGoaway);
+}
 
 /** Request bodies go out in pieces of this size so that the idle timer can tell progress from a stall. */
 const BODY_CHUNK_BYTES = 64 * 1024;
@@ -403,11 +426,26 @@ export class Http2Engine {
         reject(signal!.reason);
       };
 
+      // A GOAWAY whose last processed stream is below this one (or this one was not even sent yet): the server never
+      // processed it (RFC 9113 6.8), so it is failed as refused, which is safe to retry. Node emits 'goaway' before
+      // nghttp2 resets such streams, and on a GOAWAY with an error code it then destroys the session, failing every
+      // stream alike with ERR_HTTP2_SESSION_ERROR: hence a watcher, not the stream's own error. A covered stream goes
+      // on, and so does one already answered: a server that answers and then disowns the stream is not believed.
+      const onGoaway = (lastStreamID: number) => {
+        if (settled || statusCode !== undefined || (stream.id !== undefined && stream.id <= lastStreamID)) return;
+        settled = true;
+        cleanup();
+        abandon();
+        reject(this.#orClosed(refusedStream()));
+      };
+      const unwatchGoaway = watchGoaway(session, onGoaway);
+
       // Stops every timer and listener this stream armed; runs on every path that settles the promise.
       const cleanup = () => {
         clearTimeout(streamTimer);
         clearTimeout(idleTimer);
         signal?.removeEventListener("abort", onAbort);
+        unwatchGoaway();
       };
 
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -592,6 +630,10 @@ export class Http2Engine {
         const expected = declared();
         if (expected !== undefined && wireBytes() < expected) {
           return reject(this.#orClosed(lostResponse(err)));
+        }
+        // Reset with RST_STREAM REFUSED_STREAM before any answer: the server never processed it (RFC 9113 8.7).
+        if (statusCode === undefined && stream.rstCode === constants.NGHTTP2_REFUSED_STREAM) {
+          return reject(this.#orClosed(refusedStream(err)));
         }
         // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
         reject(this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err)));
