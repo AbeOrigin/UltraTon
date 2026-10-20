@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>UltraTon - Secure Node.js HTTP Client</title>
-    <meta name="description" content="UltraTon is a zero-dependency HTTP/1.1 and HTTP/2 client for Node.js that blocks SSRF (including DNS rebinding) and caps memory and time by default.">
+    <meta name="description" content="UltraTon is a zero-dependency HTTP/1.1 and HTTP/2 client for Node.js that blocks SSRF (including DNS rebinding) and caps memory and time by default, with streaming, fetch(), retries and HTTP/SOCKS5 proxies that keep the same protections.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;600;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
@@ -20,7 +20,8 @@
             UltraTon
         </div>
         <div class="nav-links">
-            <a href="#features">Features</a>
+            <a href="#features">Security</a>
+            <a href="#everyday">Features</a>
             <a href="#in-action">Demo</a>
             <a href="#installation">Usage</a>
             <a href="#limits" class="highlight-link">Limits</a>
@@ -58,7 +59,7 @@
                 <div class="card glass">
                     <div class="card-icon secure-icon">📦</div>
                     <h3>Zero Runtime Dependencies</h3>
-                    <p>Built only on Node's own <code>node:https</code>, <code>node:http2</code> and <code>node:dns</code>. Proxies and <code>http.globalAgent</code> are not used: each client has its own connection pool.</p>
+                    <p>Built only on Node's own modules: <code>node:https</code>, <code>node:http2</code>, <code>node:dns</code>, <code>node:net</code>, <code>node:tls</code> and <code>node:zlib</code>. <code>HTTP_PROXY</code> and <code>http.globalAgent</code> are never used: each client has its own connection pool.</p>
                 </div>
 
                 <div class="card glass">
@@ -77,6 +78,51 @@
                     <div class="card-icon secure-icon">🛡️</div>
                     <h3>Strict Protocol Handling</h3>
                     <p>Redirects are not followed unless you set <code>maxRedirects</code>; https → http is rejected, and credentials are dropped on a cross-origin hop. TLS verification is always on. CRLF/NUL in headers, and unknown or mistyped options, throw before connecting.</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="everyday" class="features">
+            <div class="section-header">
+                <h2>Everything Else You Need</h2>
+                <p>An everyday client, not just a guard. Every feature goes through the same checks and limits.</p>
+            </div>
+
+            <div class="grid">
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🧾</div>
+                    <h3>Queries, Forms &amp; Uploads</h3>
+                    <p><code>query</code> builds the query string, <code>json</code> serializes, <code>form</code> sends urlencoded fields for OAuth and older APIs, and a <code>FormData</code> body goes as multipart with its boundary set for you. Values that cannot be encoded throw instead of being dropped.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🗜️</div>
+                    <h3>Safe Decompression</h3>
+                    <p>gzip, deflate and brotli are decoded by default, with <code>maxBodySize</code> applied to the decoded bytes too, so a decompression bomb stops at the limit. A corrupt or cut-short body is an error, never a short success.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🌊</div>
+                    <h3>Bounded Streaming</h3>
+                    <p><code>client.stream()</code> resolves on the headers and hands you a <code>ReadableStream</code>. The size limit, content-length check, decoding and idle timeout keep applying as you read, so large downloads never sit in memory.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🔌</div>
+                    <h3>Drop-in <code>fetch()</code></h3>
+                    <p><code>client.fetch</code> takes the same arguments as <code>fetch</code> and returns a standard <code>Response</code>. Hand it to any SDK that accepts a custom fetch, and its requests get the SSRF policy and limits without code changes.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🔁</div>
+                    <h3>Opt-in Retries</h3>
+                    <p><code>retry: 2</code> retries 408, 429 and 5xx gateway errors and transient network failures, with jittered backoff and <code>Retry-After</code> respected. Only idempotent methods, one <code>timeoutMs</code> budget for every attempt, and DNS validated again each time.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon">🧭</div>
+                    <h3>HTTP &amp; SOCKS5 Proxies</h3>
+                    <p><code>proxy: 'http://egress:3128'</code> or <code>'socks5://bastion:1080'</code>. UltraTon validates the target first and sends the proxy the <strong>IP</strong>, never a name it could resolve elsewhere. TLS runs to the target through the tunnel, with its certificate checked.</p>
                 </div>
             </div>
         </section>
@@ -134,6 +180,7 @@
   baseUrl: <span class="string">'https://api.example.com/v1/'</span>,
   headers: { authorization: <span class="string">`Bearer ${</span><span class="built_in">process</span>.env.API_TOKEN<span class="string">}`</span> },
   timeoutMs: <span class="number">5000</span>,
+  retry: <span class="number">2</span>, <span class="comment">// idempotent methods only, Retry-After respected</span>
 });
 
 <span class="keyword">try</span> {
@@ -145,7 +192,9 @@
   }
 
   <span class="comment">// Every method is (url, options).</span>
+  <span class="keyword">await</span> api.<span class="method">get</span>(<span class="string">'users'</span>, { query: { page: <span class="number">2</span> } });
   <span class="keyword">await</span> api.<span class="method">post</span>(<span class="string">'users'</span>, { json: { name: <span class="string">'Ada'</span> } });
+  <span class="keyword">await</span> api.<span class="method">post</span>(<span class="string">'oauth/token'</span>, { form: { grant_type: <span class="string">'client_credentials'</span> } });
 } <span class="keyword">catch</span> (err) {
   <span class="keyword">if</span> (err <span class="keyword">instanceof</span> <span class="class">UltraTonNetworkTimeoutError</span>) { <span class="comment">/* retry later */</span> }
   <span class="keyword">else</span> <span class="keyword">if</span> (err <span class="keyword">instanceof</span> <span class="class">SecureHttpError</span> &amp;&amp;
@@ -160,9 +209,10 @@
                 <h2>One client.<br>One call shape.</h2>
                 <p>Create one client and reuse it. A non-2xx response resolves; the promise only rejects when no complete response arrives, or when a policy or a limit stops the request. Works from ESM, CommonJS and TypeScript.</p>
                 <ul class="check-list">
-                    <li><code>new UltraTonClient({ baseUrl, headers, http2, tls, … })</code>, with <code>close()</code> when you are done</li>
-                    <li><code>get</code>, <code>post</code>, <code>put</code>, <code>patch</code>, <code>delete</code>, <code>head</code>, <code>options</code>: all <code>(url, { json | body | headers | auth | signal | … })</code></li>
+                    <li><code>new UltraTonClient({ baseUrl, headers, http2, tls, retry, proxy, … })</code>, with <code>close()</code> when you are done</li>
+                    <li><code>get</code>, <code>post</code>, <code>put</code>, <code>patch</code>, <code>delete</code>, <code>head</code>, <code>options</code>: all <code>(url, { query | json | form | body | headers | auth | signal | retry | … })</code></li>
                     <li>Response <code>{ statusCode, ok, headers, data, json&lt;T&gt;(), text() }</code>. The body is never parsed automatically.</li>
+                    <li><code>stream(url, { method, … })</code> for a <code>ReadableStream</code> body, and <code>client.fetch</code> for a standard <code>Response</code></li>
                     <li>Policy errors carry a stable <code>ERR_ULTRATON_*</code> code; network errors carry Node's code</li>
                 </ul>
                 <p>Full options, errors and recipes are in the <a href="https://github.com/AbeOrigin/UltraTon#readme" target="_blank" rel="noopener noreferrer">README</a>, including a guide for <a href="https://github.com/AbeOrigin/UltraTon#migrating-from-1x" target="_blank" rel="noopener noreferrer">migrating from 1.x</a>.</p>
@@ -173,10 +223,10 @@
             <div class="pitch-content">
                 <h2>Limits and Things to Know</h2>
                 <h3 class="highlight-text">What it does not do</h3>
-                <p><strong>No proxies.</strong> UltraTon does not read <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code>, <code>NODE_USE_ENV_PROXY</code> or <code>http.globalAgent</code>, so the SSRF policy cannot be bypassed through a shared pool. <strong>No streaming.</strong> Responses are buffered in memory up to <code>maxBodySize</code>; for large downloads, use a streaming client.</p>
+                <p><strong>No environment proxies.</strong> UltraTon never reads <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code>, <code>NODE_USE_ENV_PROXY</code> or <code>http.globalAgent</code>: a proxy is used only when you pass <code>proxy</code>, so the SSRF policy cannot be bypassed through a shared pool. HTTP CONNECT and SOCKS5 are supported, not SOCKS4. <strong>No upload streaming.</strong> Request bodies are buffered whole, a large <code>File</code> included; responses can be streamed with <code>stream()</code>. Plain <code>http:</code> only reaches loopback, and never through a proxy.</p>
 
                 <h3 class="highlight-text">Where the policy ends</h3>
-                <p>Redirects into ranges your <code>permitReservedIps</code> allows are followed, so keep allowlists narrow, or keep <code>maxRedirects: 0</code> on clients that allow private ranges. A hostname in the allowlist trusts whatever that name resolves to. DNS lookups cannot be cancelled: <code>timeoutMs</code> and <code>signal</code> reject the request on time, but the lookup keeps running until the resolver answers. <code>json()</code> strips <code>__proto__</code>, <code>constructor</code> and <code>prototype</code> keys, so a legitimate field with one of those names disappears.</p>
+                <p>Redirects into ranges your <code>permitReservedIps</code> allows are followed, so keep allowlists narrow, or keep <code>maxRedirects: 0</code> on clients that allow private ranges. A hostname in the allowlist trusts whatever that name resolves to. With <code>resolve: 'proxy'</code> (or a <code>socks5h:</code> URL) the proxy resolves names, so SSRF protection for hostnames depends on the proxy, and SOCKS5 credentials cross the network to the proxy in cleartext. DNS lookups cannot be cancelled: <code>timeoutMs</code> and <code>signal</code> reject the request on time, but the lookup keeps running until the resolver answers. <code>json()</code> strips <code>__proto__</code>, <code>constructor</code> and <code>prototype</code> keys, so a legitimate field with one of those names disappears.</p>
             </div>
         </section>
     </main>

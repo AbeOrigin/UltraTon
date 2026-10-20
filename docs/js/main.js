@@ -190,6 +190,27 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             },
         },
         {
+            label: 'Through a proxy',
+            call: "new UltraTonClient({ proxy: 'http://egress.corp:3128' }).get('https://api.example.com/')",
+            dns: 'DNS → 93.184.216.34 · CONNECT 93.184.216.34:443 (the IP, never the name)',
+            server: 'proxy → 200 Connection established · api.example.com → 200',
+            result: {
+                title: '200 OK',
+                detail: 'Tunnelled through the proxy, certificate checked for api.example.com',
+                note: 'The proxy gets the IP UltraTon validated, so it cannot resolve the name to an internal address. SOCKS5 proxies work the same way.',
+            },
+        },
+        {
+            label: 'Flaky upstream',
+            call: "await api.get('reports', { retry: 2 })",
+            server: 'server → 503 Retry-After: 1 · after 1 s → 200',
+            result: {
+                title: '200 OK',
+                detail: 'Second attempt succeeded, after the 1 s the server asked for',
+                note: 'Opt-in, idempotent methods only, and all attempts share one timeoutMs budget. Each attempt is a full request, with DNS validated again.',
+            },
+        },
+        {
             label: 'Prototype pollution',
             call: "await client.get('https://api.example/profile')",
             server: 'server → 200, {"__proto__":{"isAdmin":true}}',
