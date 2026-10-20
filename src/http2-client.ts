@@ -151,8 +151,10 @@ export class UltraTonHTTP2 {
       };
 
       // Always present with a body, and the real byte length wins over anything the caller put in the header.
+      // HTTP/2 does its own framing: a caller transfer-encoding is a connection-specific header node rejects.
       if (currentOptions.body !== undefined) {
         safeHeaders["content-length"] = String(currentOptions.body.length);
+        delete safeHeaders["transfer-encoding"];
       }
 
       const method = (reqOpts.method || "GET").toUpperCase();
@@ -345,7 +347,11 @@ export class UltraTonHTTP2 {
       let stream: ClientHttp2Stream;
 
       try {
-        stream = session.request(pseudoHeaders);
+        // node ends the stream by itself for GET, HEAD and DELETE: keep it open when there is a body to write.
+        stream = session.request(
+          pseudoHeaders,
+          body && body.length > 0 ? { endStream: false } : undefined,
+        );
       } catch (err: unknown) {
         return reject(toNetworkError(err));
       }

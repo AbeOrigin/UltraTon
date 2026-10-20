@@ -184,6 +184,9 @@ export function withMethod(method: string, options: unknown): InternalRequestOpt
 export function resolveRequestBody(options: InternalRequestOptions): ResolvedRequestOptions {
     assertKnownOptions(options);
     assertBodyOptions(options);
+    if ((options.json !== undefined || options.body !== undefined) && (options.method === 'GET' || options.method === 'HEAD')) {
+        throw new TypeError('UltraTon: GET and HEAD requests cannot have a body.');
+    }
 
     const { json, body, ...rest } = options;
     if (json === undefined) {
@@ -195,7 +198,7 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedReq
     try {
         serialized = JSON.stringify(json);
     } catch (err: unknown) {
-        throw new TypeError(`UltraTon: 'json' could not be serialized: ${err instanceof Error ? err.message : 'unknown error'}.`);
+        throw new TypeError(`UltraTon: 'json' could not be serialized: ${err instanceof Error ? err.message : 'unknown error'}.`, { cause: err });
     }
     if (serialized === undefined) {
         throw new TypeError("UltraTon: 'json' could not be serialized: functions and symbols have no JSON representation.");

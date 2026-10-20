@@ -22,6 +22,9 @@ interface Engine {
     put(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
     patch(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
     get(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
+    head(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
+    delete(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
+    options(url: string, options?: any): Promise<{ statusCode: number; json<T>(): T }>;
     /** Number of sockets the client opened, so "throws before connecting" can be proven. */
     connections(): number;
 }
@@ -49,6 +52,9 @@ async function startHttp1(t: TestContext): Promise<Engine> {
         put: (u, o) => client.put(u, opts(o)),
         patch: (u, o) => client.patch(u, opts(o)),
         get: (u, o) => client.get(u, opts(o)),
+        head: (u, o) => client.head(u, opts(o)),
+        delete: (u, o) => client.delete(u, opts(o)),
+        options: (u, o) => client.options(u, opts(o)),
         connections: () => connections,
     };
 }
@@ -83,6 +89,9 @@ async function startHttp2(t: TestContext, onStream = h2echo): Promise<Engine & {
         put: (u, o) => client.put(u, opts(o)),
         patch: (u, o) => client.patch(u, opts(o)),
         get: (u, o) => client.get(u, opts(o)),
+        head: (u, o) => client.head(u, opts(o)),
+        delete: (u, o) => client.delete(u, opts(o)),
+        options: (u, o) => client.options(u, opts(o)),
         connections: () => connections,
     };
 }
@@ -191,6 +200,57 @@ describe('Unified API: json option and content-length (real servers)', () => {
                     await assert.rejects(e.post(`${e.base}/x`, { json }), TypeError);
                 }
                 assert.strictEqual(e.connections(), 0);
+            });
+
+            it('a json serialization failure keeps the original error as cause', async (t) => {
+                const e = await start(t);
+                const cyclic: any = {}; cyclic.self = cyclic;
+                for (const json of [cyclic, 10n]) {
+                    await assert.rejects(e.post(`${e.base}/x`, { json }), (err: unknown) => err instanceof TypeError && (err as Error).cause instanceof TypeError);
+                }
+            });
+
+            it('get and head with json or body throw a TypeError before connecting', async (t) => {
+                const e = await start(t);
+                for (const verb of ['get', 'head'] as const) {
+                    for (const options of [{ json: { a: 1 } }, { body: 'x' }]) {
+                        await assert.rejects(
+                            e[verb](`${e.base}/x`, options),
+                            (err: unknown) => err instanceof TypeError && err.message === 'UltraTon: GET and HEAD requests cannot have a body.',
+                            `${verb} ${Object.keys(options)}`,
+                        );
+                    }
+                }
+                assert.strictEqual(e.connections(), 0);
+            });
+
+            it('delete and options deliver a json body with content-type and content-length', async (t) => {
+                const e = await start(t);
+                const expected = JSON.stringify({ a: 'é' });
+                for (const verb of ['delete', 'options'] as const) {
+                    const echo = (await e[verb](`${e.base}/x`, { json: { a: 'é' } })).json<Echo>();
+                    assert.strictEqual(echo.method, verb.toUpperCase());
+                    assert.strictEqual(echo.body, expected);
+                    assert.strictEqual(echo.headers['content-type'], 'application/json');
+                    assert.strictEqual(echo.headers['content-length'], String(Buffer.byteLength(expected)));
+                }
+            });
+
+            it('delete and options without a body still work', async (t) => {
+                const e = await start(t);
+                for (const verb of ['delete', 'options'] as const) {
+                    const echo = (await e[verb](`${e.base}/x`)).json<Echo>();
+                    assert.strictEqual(echo.method, verb.toUpperCase());
+                    assert.strictEqual(echo.body, '');
+                }
+            });
+
+            it('a caller transfer-encoding never reaches the wire when a body is sent', async (t) => {
+                const e = await start(t);
+                const echo = (await e.post(`${e.base}/x`, { body: 'abcd', headers: { 'Transfer-Encoding': 'chunked' } })).json<Echo>();
+                assert.strictEqual(echo.body, 'abcd');
+                assert.strictEqual(echo.headers['content-length'], '4');
+                assert.strictEqual(echo.headers['transfer-encoding'], undefined);
             });
 
             it('a body that is not string, Buffer or Uint8Array throws before connecting', async (t) => {
