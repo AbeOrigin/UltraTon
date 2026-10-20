@@ -216,6 +216,32 @@ describe('HTTP/2 held sessions are checked for liveness', () => {
         assert.equal(await pooled(origin), session, 'still the pooled session');
     });
 
+    it('a slow live stream on a session retired by its lifespan still completes (a closing session is never liveness-killed)', async (t) => {
+        const { origin } = await slowServer(t);
+        const { client } = clientWith(t, { idleTimeoutMs: 100, maxLifespanMs: 250 });
+        const slow = client.get(`${origin}/slow/1500`, { timeoutMs: 0, socketTimeoutMs: 0 });
+        slow.catch(() => {});
+        await new Promise(r => setTimeout(r, 400));
+        // Finds the session expired: it is retired (closed, draining) while the slow stream still holds it.
+        assert.equal((await client.get(`${origin}/`)).statusCode, 200);
+        const res = await slow;
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.text(), 'late');
+    });
+
+    it("a slow live stream on a session retired by another stream's timeout still completes", async (t) => {
+        const { origin } = await slowServer(t);
+        const { client } = clientWith(t, { idleTimeoutMs: 100 });
+        const slow = client.get(`${origin}/slow/1500`, { timeoutMs: 0, socketTimeoutMs: 0 });
+        slow.catch(() => {});
+        await new Promise(r => setTimeout(r, 50));
+        // Same session; given up by socketTimeoutMs, which retires the session.
+        await assert.rejects(client.get(`${origin}/never`, { socketTimeoutMs: 200, timeoutMs: 0 }), UltraTonNetworkTimeoutError);
+        const res = await slow;
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.text(), 'late');
+    });
+
     for (const [label, options] of [
         ['socketTimeoutMs', { socketTimeoutMs: 300, timeoutMs: 0 }],
         ['timeoutMs', { socketTimeoutMs: 0, timeoutMs: 300 }],

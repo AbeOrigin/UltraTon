@@ -385,20 +385,25 @@ export class Http2SessionManager {
     // peer that vanished without FIN or RST): the session is destroyed and its streams fail as a reset connection,
     // so it never pins the pool. The timer is re-armed by hand because Node only refreshes it on the next frame, and a
     // stream that is given up may never be followed by one.
+    // A closing session (GOAWAY, lifespan expiry, retire()) is out of the pool, so it cannot pin it, and Node cancels
+    // every PING on it: it is never pinged nor killed here. Its streams keep their own timeouts, and closeAll() still
+    // destroys it. A cancelled PING (ERR_HTTP2_PING_CANCEL, or a ping() that throws) proves nothing either way.
     let pingUnanswered = false;
     newSession.on("timeout", () => {
       if (heldStreams(newSession) === 0) return this.#destroySession(key, newSession);
-      if (pingUnanswered) {
-        if (!newSession.destroyed) newSession.destroy(incompleteResponse());
-        return;
-      }
-      pingUnanswered = true;
-      try {
-        newSession.ping((err) => {
-          if (!err) pingUnanswered = false;
-        });
-      } catch {
-        /* Closing, or too many PINGs outstanding: left unanswered, so the next check decides. */
+      if (!newSession.closed) {
+        if (pingUnanswered) {
+          if (!newSession.destroyed) newSession.destroy(incompleteResponse());
+          return;
+        }
+        pingUnanswered = true;
+        try {
+          newSession.ping((err) => {
+            if (!err || (err as NodeJS.ErrnoException).code === "ERR_HTTP2_PING_CANCEL") pingUnanswered = false;
+          });
+        } catch {
+          pingUnanswered = false;
+        }
       }
       newSession.setTimeout(this.#idleTimeoutMs);
     });
