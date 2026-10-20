@@ -166,11 +166,16 @@ for (const http2 of [false, true]) {
             assert.deepEqual(res.headers.getSetCookie(), ['a=1', 'b=2']);
         });
 
-        it('json() strips __proto__ and constructor keys', async (t) => {
+        it('json() strips __proto__ and constructor keys, and clone() keeps that, url and redirected', async (t) => {
             const base = await server(t, http2);
-            const parsed = await (await clientOf(t, http2).fetch(`${base}/proto`)).json() as Record<string, unknown>;
+            const res = await clientOf(t, http2).fetch(`${base}/proto`);
+            const copy = res.clone();
+            const parsed = await res.json() as Record<string, unknown>;
             assert.deepEqual(Object.keys(parsed), ['a']);
             assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+            assert.equal(copy.url, `${base}/proto`);
+            assert.equal(copy.redirected, false);
+            assert.deepEqual(Object.keys(await copy.json() as object), ['a']);
         });
 
         it('rejects with the signal reason on abort', async (t) => {
@@ -212,6 +217,16 @@ describe('client.fetch() errors and init validation', () => {
             await assert.rejects(client.fetch('https://example.com/', { [key]: {} } as any),
                 { name: 'TypeError', message: new RegExp(`^UltraTon: Unsupported fetch option '${key}'`) });
         }
+    });
+
+    it('validates the redirect mode, and signal: null means no signal', async (t) => {
+        const client = new UltraTonClient();
+        await assert.rejects(client.fetch('https://example.com/', { redirect: 'Follow' as RequestRedirect }), TypeError);
+        const base = await server(t, false);
+        const aborted = new Request(`${base}/echo`, { signal: AbortSignal.abort(new Error('request reason')) });
+        const res = await clientOf(t, false).fetch(aborted, { signal: null });
+        assert.equal(res.status, 200);
+        await res.body?.cancel();
     });
 
     it('accepts and ignores the browser-only RequestInit fields', async (t) => {

@@ -190,7 +190,8 @@ Differences from the platform's `fetch`:
 - **Redirects** follow the client's `maxRedirects`, which defaults to 0. With the default, a 3xx comes back as the `Response`; `redirect: 'manual'` and `'error'` work as usual.
 - **Failures:** network and policy failures reject as `TypeError('fetch failed')` with the UltraTon error as `cause`, as undici does. An abort rejects with the signal's reason.
 - **`json()`** strips `__proto__`, `constructor` and `prototype` keys.
-- **Request bodies** are buffered: a `ReadableStream` body throws.
+- **Request bodies** are buffered. A `ReadableStream` body in `init` throws, and the body of a `Request` input is read whole.
+- **`baseUrl`** applies to string paths. A `Request` or `URL` input is absolute, so on a client with `baseUrl` it is rejected as not relative: use a client without `baseUrl` for libraries.
 - **Options:** browser-only options (`mode`, `credentials`, `cache`, …) are ignored. Options that would change the connection (`dispatcher`, `agent`) throw: configure the client instead.
 
 **Stream a large download.** `stream()` resolves on the headers and hands you the body as a `ReadableStream`. Its limits still apply as it is read, and `maxBodySize` may go up to `Number.MAX_SAFE_INTEGER` here:

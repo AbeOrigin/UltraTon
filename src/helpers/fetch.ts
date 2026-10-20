@@ -12,15 +12,33 @@ const SUPPORTED = new Set(['method', 'headers', 'body', 'signal', 'redirect']);
  * timeout...) throws: ignoring it would let the caller believe it changed the connection.
  */
 const IGNORED = new Set(['mode', 'credentials', 'cache', 'referrer', 'referrerPolicy', 'integrity', 'keepalive', 'priority', 'window', 'duplex']);
-/** Statuses whose Response must have a null body (Fetch standard). */
-const NULL_BODY_STATUS = new Set([101, 103, 204, 205, 304]);
+/** Statuses whose Response must have a null body (Fetch standard; 1xx never reach a Response). */
+const NULL_BODY_STATUS = new Set([204, 205, 304]);
 
-/** A Response whose json() strips `__proto__`, `constructor` and `prototype` keys at every depth, like UltraTon's own. */
+/**
+ * A Response whose json() strips `__proto__`, `constructor` and `prototype` keys at every depth, like UltraTon's own,
+ * with the `url` and `redirected` only the platform's fetch can otherwise set. clone() keeps all three.
+ */
 class UltraTonFetchResponse extends Response {
+    constructor(body: ReadableStream<Uint8Array> | null, init: ResponseInit, url: string, redirected: boolean) {
+        super(body, init);
+        // Read-only getters on Response: shadowed on the instance.
+        Object.defineProperty(this, 'url', { value: url, enumerable: true });
+        Object.defineProperty(this, 'redirected', { value: redirected, enumerable: true });
+    }
+
     override async json(): Promise<any> {
         return JSON.parse(await this.text(), secureReviver);
     }
+
+    override clone(): UltraTonFetchResponse {
+        const copy = super.clone();
+        return new UltraTonFetchResponse(copy.body, { status: this.status, statusText: this.statusText, headers: this.headers }, this.url, this.redirected);
+    }
 }
+
+/** Gives a body up without letting its own error (the connection may have dropped) replace the one being reported. */
+const discard = (body: ReadableStream<Uint8Array>) => body.cancel().catch(() => {});
 
 const failed = (cause: unknown) => new TypeError('fetch failed', { cause });
 
@@ -51,21 +69,24 @@ export async function fetchWith(
 
     const base = input instanceof Request ? input : undefined;
     const url = base ? base.url : input instanceof URL ? input.href : String(input);
-    const signal = init.signal ?? base?.signal ?? undefined;
-    const redirect = init.redirect ?? base?.redirect ?? 'follow';
+    // An explicit `signal: null` means no signal, as in fetch: only `undefined` falls back to the Request's.
+    const signal = init.signal !== undefined ? init.signal ?? undefined : base?.signal;
     // Upper-cased like the other client methods (the platform would keep 'patch' as is, and warn about it).
     const method = String(init.method ?? base?.method ?? 'GET').toUpperCase();
 
     // The platform's Request does the WHATWG work: header normalization, and every body type with its content-type
-    // (a FormData's multipart boundary included). A GET or HEAD with a body throws here, as fetch does.
+    // (a FormData's multipart boundary included), and the redirect mode is validated. A GET or HEAD with a body throws
+    // here, as fetch does.
     const normalized = new Request('http://ultraton.invalid/', {
         method,
+        redirect: init.redirect ?? base?.redirect,
         headers: init.headers ?? base?.headers,
         body: init.body !== undefined ? init.body : base?.body ? await base.arrayBuffer() : undefined,
     });
     const headers: Record<string, string> = {};
     normalized.headers.forEach((value, name) => { headers[name] = value; });
     const body = normalized.body ? Buffer.from(await normalized.arrayBuffer()) : undefined;
+    const redirect = normalized.redirect;
 
     let res: UltraTonStreamResponse;
     try {
@@ -83,28 +104,22 @@ export async function fetchWith(
     }
 
     if (redirect === 'error' && HTTP_CODES_REDIRECTS.has(res.statusCode) && res.headers.location) {
-        await res.body.cancel();
+        await discard(res.body);
         throw failed(new UltraTonRedirectError('UltraTon: Redirect not allowed (redirect: "error").'));
     }
 
-    const responseHeaders = new Headers();
-    for (const [name, value] of Object.entries(res.headers)) {
-        if (value === undefined) continue;
-        for (const item of Array.isArray(value) ? value : [value]) responseHeaders.append(name, item);
-    }
     const nullBody = NULL_BODY_STATUS.has(res.statusCode) || method === 'HEAD';
-    if (nullBody) await res.body.cancel();
-
-    let response: Response;
     try {
-        response = new UltraTonFetchResponse(nullBody ? null : res.body, { status: res.statusCode, headers: responseHeaders });
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(res.headers)) {
+            if (value === undefined) continue;
+            for (const item of Array.isArray(value) ? value : [value]) responseHeaders.append(name, item);
+        }
+        if (nullBody) await discard(res.body);
+        return new UltraTonFetchResponse(nullBody ? null : res.body, { status: res.statusCode, headers: responseHeaders }, res.url, res.redirected);
     } catch (err: unknown) {
-        // A status Response cannot represent (below 200 or above 599).
-        await res.body.cancel();
+        // A header value or a status (below 200, above 599) a Response cannot represent.
+        await discard(res.body);
         throw failed(err);
     }
-    // Read-only getters on Response that only the platform's fetch fills in.
-    Object.defineProperty(response, 'url', { value: res.url, enumerable: true });
-    Object.defineProperty(response, 'redirected', { value: res.redirected, enumerable: true });
-    return response;
 }
