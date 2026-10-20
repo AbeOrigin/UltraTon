@@ -37,8 +37,8 @@ interface Fixture {
  * declaring content-length 20 with no body, as HTTP allows.
  */
 const respond = (path: string, send: () => void) => {
-    const slow = /^\/slow\/(\d+)/.exec(path);
-    if (slow) setTimeout(send, Math.min(Number(slow[1]), 60_000));
+    const ms = Number(/^\/slow\/(\d+)/.exec(path)?.[1] ?? 0);
+    if (ms > 0 && ms <= 60_000) setTimeout(send, ms);
     else send();
 };
 
