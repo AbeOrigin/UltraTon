@@ -5,8 +5,8 @@ import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
-import { UltraTonHTTP2 } from '../src/engines/http2.ts';
-import { UltraTonClient } from '../src/engines/http1.ts';
+import { kSessionManager } from '../src/internal.ts';
+import { UltraTonClient } from '../src/http-client.ts';
 
 const MULTIBYTE = 'héllo wörld ✓ 日本語 🚀';
 const BIG_BYTES = 5 * 1024 * 1024 + 1024; // over the old 5 MB auto-parse threshold
@@ -60,7 +60,7 @@ const startHttp2 = async (): Promise<Api> => {
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const manager = new Http2SessionManager();
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
     const o = { permitReservedIps: true, maxBodySize: 20 * 1024 * 1024 };
     return {
         get: (p) => client.get(base + p, o),

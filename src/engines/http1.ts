@@ -1,8 +1,8 @@
 import { IncomingMessage, ClientRequest } from "node:http";
 import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "../errors.ts";
-import { buildSafeRequestOptions, resolveRequestBody, withMethod } from "../helpers/request-options.ts";
+import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
-import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, UltraTonRequestOptions } from "../types/request-options.types.ts";
+import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
 import type { UltraTonResponse } from "../types/request-response.ts";
 import { assertAllowedIp, policyKey, resolveAndPinHost } from "../security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
@@ -14,61 +14,54 @@ import { createResponse } from '../helpers/response.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
-// Hence one keep-alive agent pair per policy: sockets are never shared across policies.
+// Hence one keep-alive agent pair per policy: sockets are never shared across policies. The map belongs to one engine (one
+// client), so two clients never share a socket either, whatever their policies or TLS settings.
 // Idle pooled sockets are reaped after 5s, as with Node's global agent: without it a hostile server reached through N hostnames
 // could pin N file descriptors for as long as it keeps them open.
 // ponytail: one agent pair per distinct policy, never evicted, so the map grows with distinct allowlists; the ceiling is the
 // number of policies an app uses. Same upgrade path as the compiled-allowlist cache: bound it if lists ever come from request-time input.
 const IDLE_SOCKET_TIMEOUT_MS = 5000;
-const agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
 
-function agentFor(policy: ReservedIpPolicy, protocol: string): http.Agent {
-    const key = policyKey(policy);
-    let agents = agentsByPolicy.get(key);
-    if (!agents) {
-        agents = { http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }), https: new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }) };
-        agentsByPolicy.set(key, agents);
-    }
-    return protocol === 'http:' ? agents.http : agents.https;
-}
+const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
 
-export class UltraTonClient {
-    // Internal testing interceptor
-    #transport?: typeof https.request | typeof http.request;
+/** The HTTP/1.1 engine behind `UltraTonClient`. Not public: the client validates and merges the options it receives. */
+export class Http1Engine {
+    readonly #agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
+    readonly #tls: TlsOptions;
+    // Internal testing interceptor (kTransport)
+    readonly #transport?: typeof https.request | typeof http.request;
+    #closed = false;
 
     /**
-     * @param transportInterceptor - Optional transport layer interceptor used strictly for internal testing.
+     * @param tls - The client's validated `ca`/`cert`/`key`, applied to its HTTPS agents.
+     * @param transport - Replacement for `http.request`/`https.request`, used strictly for internal testing.
      */
-    constructor(transportInterceptor?: typeof https.request | typeof http.request) {
-        this.#transport = transportInterceptor;
+    constructor(tls: TlsOptions = {}, transport?: typeof https.request | typeof http.request) {
+        this.#tls = tls;
+        this.#transport = transport;
     }
 
-    public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('GET', options));
+    /** Destroys every pooled socket (in-flight requests on them fail) and refuses any later request. */
+    public close(): void {
+        this.#closed = true;
+        for (const agents of this.#agentsByPolicy.values()) {
+            agents.http.destroy();
+            agents.https.destroy();
+        }
+        this.#agentsByPolicy.clear();
     }
 
-    public async post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('POST', options));
-    }
-
-    public async put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('PUT', options));
-    }
-
-    public async patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('PATCH', options));
-    }
-
-    public async delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('DELETE', options));
-    }
-
-    public async head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('HEAD', options));
-    }
-
-    public async options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, withMethod('OPTIONS', options));
+    #agentFor(policy: ReservedIpPolicy, protocol: string): http.Agent {
+        const key = policyKey(policy);
+        let agents = this.#agentsByPolicy.get(key);
+        if (!agents) {
+            agents = {
+                http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }),
+                https: new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
+            };
+            this.#agentsByPolicy.set(key, agents);
+        }
+        return protocol === 'http:' ? agents.http : agents.https;
     }
 
     private async _consumeResponseBuffer(
@@ -131,10 +124,12 @@ export class UltraTonClient {
                 ...reqOpts,
                 headers,
                 timeout: reqOpts.socketTimeoutMs,
-                agent: agentFor(reqOpts.permitReservedIps, urlObj.protocol),
+                agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
                     resolveAndPinHost(lookupHostname, reqOpts.permitReservedIps)
                         .then(ip => {
+                            // close() ran while DNS was pending: a socket opened now would outlive it, unpooled and unreachable.
+                            if (this.#closed) throw clientClosed();
                             const family = ip.includes(':') ? 6 : 4;
                             const result = lookupOptions.all ? [{ address: ip, family }] : ip;
                             callback(null, result, family);
@@ -198,16 +193,19 @@ export class UltraTonClient {
         });
     }
 
-    private async _request<T = unknown>(url: string, options: InternalRequestOptions): Promise<UltraTonResponse<T>> {
+    /**
+     * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
+     */
+    public async request<T = unknown>(url: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>> {
         const startTime = Date.now();
         let redirectCount = 0;
         let currentUrl = url;
-        // Validates the caller's options (unknown keys, json/body, body type) and serializes `json` before anything else.
-        let currentOptions: ResolvedRequestOptions = resolveRequestBody(options);
+        let currentOptions: ResolvedRequestOptions = options;
 
         let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions(currentOptions);
 
         while (true) {
+            if (this.#closed) throw clientClosed();
             const urlObj: URL = parseSafeUrl(currentUrl);
 
             // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.

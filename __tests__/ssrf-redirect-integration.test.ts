@@ -8,7 +8,8 @@ import { Readable } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { UltraTonClient } from '../src/engines/http1.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kTransport } from '../src/internal.ts';
 import { SecureHttpError, UltraTonNetworkError } from '../src/errors.ts';
 
 // Real sockets on purpose: Node skips the custom `lookup` for IP literals, so mocks cannot catch this class of bug.
@@ -280,7 +281,7 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
             };
             return req;
         }) as unknown as typeof http.request;
-        const client = new UltraTonClient(transport);
+        const client = new UltraTonClient({ [kTransport]: transport } as any);
 
         await client.get('http://localhost/');
         await client.get('https://example.com/');

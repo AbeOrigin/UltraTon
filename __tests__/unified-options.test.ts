@@ -8,8 +8,8 @@ import dnsPromises from 'node:dns/promises';
 import http from 'node:http';
 import { createServer as createH2Server, type Http2Server, type IncomingHttpHeaders, type ServerHttp2Stream } from 'node:http2';
 import { type AddressInfo, isIP } from 'node:net';
-import { UltraTonClient } from '../src/engines/http1.ts';
-import { UltraTonHTTP2 } from '../src/engines/http2.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kSessionManager } from '../src/internal.ts';
 import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { buildSafeRequestOptions } from '../src/helpers/request-options.ts';
 
@@ -79,7 +79,7 @@ async function startHttp2(t: TestContext, onStream = h2echo): Promise<Engine & {
         manager.closeAll();
         await new Promise<void>(r => server.close(() => r()));
     });
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
     const opts = (o?: any) => (typeof o === 'string' ? o : { permitReservedIps: true, ...o });
     return {
         server,

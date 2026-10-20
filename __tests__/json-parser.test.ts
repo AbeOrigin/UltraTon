@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { UltraTonClient } from '../src/engines/http1.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kTransport } from '../src/internal.ts';
 import { UltraTonParseError } from '../src/errors.ts';
 
 describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
@@ -28,7 +29,7 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
     };
 
     it('Should cleanly parse JSON and explicitly map it to the requested interface synchronously', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         
         interface UserShape {
             user: string;
@@ -48,7 +49,7 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
     });
 
     it('Should cleanly trap native SyntaxError and throw UltraTonParseError upon malformed payload from json()', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         
         // The request itself resolves: parsing is lazy
         const res = await client.get('https://example.com/invalid-json');

@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
-import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy } from "../types/request-options.types.ts";
+import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions } from "../types/request-options.types.ts";
 import { MAX_REDIRECTS_CEILING } from "../constants.ts";
+import { parseSafeUrl } from "./url-parser.ts";
 const INT32_MAX = 2147483647;
 
 /**
@@ -123,21 +124,49 @@ const REQUEST_OPTION_KEYS = ['headers', 'timeoutMs', 'socketTimeoutMs', 'maxBody
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
+/** The options of `new UltraTonClient(options)`. */
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'http2', 'tls', 'userAgent'];
+const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
+const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
+
 const QUERY_HINT = " Put the query string in the URL.";
 const TLS_HINT = " TLS is configured with the 'tls' option of the client constructor.";
 const BASE_URL_HINT = " 'baseUrl' is an option of the client constructor, not of a request.";
-// A Map, not an object: an option named 'constructor' or '__proto__' must not find a hint through the prototype chain.
+const TIMEOUT_HINT = " Use 'timeoutMs' (milliseconds).";
+const NO_VERIFY_OFF = " Disabling certificate verification is not supported; to trust a private CA use";
+// Maps, not objects: an option named 'constructor' or '__proto__' must not find a hint through the prototype chain.
 const OPTION_HINTS = new Map<string, string>([
-    ['timeout', " Use 'timeoutMs' (milliseconds)."],
+    ['timeout', TIMEOUT_HINT],
     ['baseURL', BASE_URL_HINT],
     ['prefixUrl', BASE_URL_HINT],
+    ['baseUrl', BASE_URL_HINT],
     ['data', " Use 'json' for a JSON payload or 'body' for a string or Buffer."],
     ['params', QUERY_HINT],
     ['query', QUERY_HINT],
     ['searchParams', QUERY_HINT],
     ['agent', TLS_HINT],
     ['ca', TLS_HINT],
-    ['rejectUnauthorized', " Disabling certificate verification is not supported; to trust a private CA use the 'tls' option of the client constructor."],
+    ['tls', TLS_HINT],
+    ['rejectUnauthorized', `${NO_VERIFY_OFF} the 'tls' option of the client constructor.`],
+    ['http2', " 'http2' is an option of the client constructor, not of a request."],
+    ['userAgent', " Set a 'user-agent' header, or 'userAgent' in the client constructor."],
+]);
+const perRequestOnly = (key: string) => ` '${key}' is a per-request option, not a client option.`;
+const CLIENT_OPTION_HINTS = new Map<string, string>([
+    ['timeout', TIMEOUT_HINT],
+    ['baseURL', " Use 'baseUrl'."],
+    ['prefixUrl', " Use 'baseUrl'."],
+    ['rejectUnauthorized', `${NO_VERIFY_OFF} tls: { ca }.`],
+    ['ca', " Pass it as tls: { ca }."],
+    ['cert', " Pass it as tls: { cert }."],
+    ['key', " Pass it as tls: { key }."],
+    ['agent', " Every client has its own connection pool; TLS is configured with the 'tls' option."],
+    ['isolatePool', " Every client has its own connection pool."],
+    ['tlsSettings', " Use 'tls' ({ ca, cert, key })."],
+    ['signal', perRequestOnly('signal')],
+    ['auth', perRequestOnly('auth')],
+    ['json', perRequestOnly('json')],
+    ['body', perRequestOnly('body')],
 ]);
 
 /** @throws {TypeError} For any own key outside the allowlist, whatever its value (`undefined` included). */
@@ -250,4 +279,157 @@ export function buildSafeRequestOptions(options: InternalRequestOptions): Secure
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
     return safeOptions as unknown as SecureUltraTonRequestOptions;
+}
+
+/** The request options a client supplies when a request leaves them `undefined`. Headers are already sanitized (lowercase keys). */
+export interface ClientDefaults {
+    readonly headers: Readonly<Record<string, string | string[]>>;
+    readonly timeoutMs?: number;
+    readonly socketTimeoutMs?: number;
+    readonly maxBodySize?: number;
+    readonly maxRedirects?: number;
+    readonly permitReservedIps?: ReservedIpPolicy;
+}
+
+/** `new UltraTonClient(options)` once validated. */
+export interface ResolvedClientOptions {
+    /** Normalized: no query or fragment, and the path ends with '/'. */
+    readonly baseUrl?: URL;
+    readonly http2: boolean;
+    readonly tls: TlsOptions;
+    readonly defaults: ClientDefaults;
+}
+
+function tlsMaterial(propName: string, value: unknown): TlsMaterial | undefined {
+    if (value === undefined) return undefined;
+    const isPem = (v: unknown) => typeof v === 'string' || Buffer.isBuffer(v);
+    if (isPem(value)) return value as string | Buffer;
+    if (Array.isArray(value) && value.every(isPem)) return [...value] as Array<string | Buffer>;
+    throw new TypeError(`UltraTon: Expected '${propName}' to be a string, Buffer or an array of them, received ${value === null ? 'null' : typeof value}.`);
+}
+
+/**
+ * Only `ca`, `cert` and `key` can ever reach the TLS layer: anything else (`rejectUnauthorized`, `servername`,
+ * `checkServerIdentity`, ...) could weaken certificate verification, so it throws.
+ */
+function tlsOptions(value: unknown): TlsOptions {
+    if (!validateType('tls', value, 'object')) return {};
+    const raw = value as Record<string, unknown>;
+    for (const key of Object.keys(raw)) {
+        if ((TLS_OPTION_KEYS as readonly string[]).includes(key)) continue;
+        const hint = key === 'rejectUnauthorized' ? `${NO_VERIFY_OFF} tls: { ca }.` : ` Valid tls options: ${TLS_OPTION_KEYS.join(', ')}.`;
+        throw new TypeError(`UltraTon: Unknown tls option '${key}'.${hint}`);
+    }
+    const tls: { ca?: TlsMaterial; cert?: TlsMaterial; key?: TlsMaterial } = {};
+    for (const key of TLS_OPTION_KEYS) {
+        const material = tlsMaterial(`tls.${key}`, raw[key]);
+        if (material !== undefined) tls[key] = material;
+    }
+    return tls;
+}
+
+/**
+ * Validates `new UltraTonClient(options)` with the same rules as a request: unknown keys throw (with hints), and so do
+ * values of the wrong type. The defaults go through the request firewall once here, so a bad header or allowlist fails
+ * at construction, and an allowlist is copied and frozen so the caller cannot widen it later.
+ * Symbol keys (the internal test seams) are not options: `Object.keys` skips them and the client reads them itself.
+ * @param defaultUserAgent - Sent as `user-agent` unless `userAgent` or a `user-agent` header is given.
+ * @throws {TypeError} On an unknown key, a value of the wrong type, CRLF in a header, or a `tls` key other than ca/cert/key.
+ * @throws {SecureHttpError} When `baseUrl` fails `parseSafeUrl` (protocol, credentials, malformed).
+ */
+export function resolveClientOptions(options: unknown, defaultUserAgent: string): ResolvedClientOptions {
+    if (options === undefined) options = {};
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+        throw new TypeError('UltraTon: Client options must be an object.');
+    }
+    const raw = options as Record<string, unknown>;
+    for (const key of Object.keys(raw)) {
+        if (CLIENT_KEYS.has(key)) continue;
+        const hint = CLIENT_OPTION_HINTS.get(key) ?? ` Valid options: ${CLIENT_OPTION_KEYS.join(', ')}.`;
+        throw new TypeError(`UltraTon: Unknown option '${key}'.${hint}`);
+    }
+
+    const safe = buildSafeRequestOptions({
+        headers: raw.headers as InternalRequestOptions['headers'],
+        timeoutMs: raw.timeoutMs as number | undefined,
+        socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
+        maxBodySize: raw.maxBodySize as number | undefined,
+        maxRedirects: raw.maxRedirects as number | undefined,
+        permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
+    });
+
+    // sanitizeHeaders never keeps an undefined value.
+    const headers = { ...safe.headers } as Record<string, string | string[]>;
+    validateType('userAgent', raw.userAgent, 'string');
+    if (Object.hasOwn(headers, 'user-agent')) {
+        if (raw.userAgent !== undefined) {
+            throw new TypeError("UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.");
+        }
+    } else {
+        Object.assign(headers, sanitizeHeaders({ 'user-agent': raw.userAgent ?? defaultUserAgent }));
+    }
+
+    const http2 = validateType('http2', raw.http2, 'boolean') && raw.http2 === true;
+    const tls = tlsOptions(raw.tls);
+
+    let baseUrl: URL | undefined;
+    if (validateType('baseUrl', raw.baseUrl, 'string')) {
+        baseUrl = parseSafeUrl(raw.baseUrl as string);
+        if (baseUrl.search !== '' || baseUrl.hash !== '') {
+            throw new TypeError("UltraTon: 'baseUrl' cannot contain a query string or fragment.");
+        }
+        // An empty '?' or '#' parses to '' but stays in href: clear both so href is exactly origin + path.
+        baseUrl.search = '';
+        baseUrl.hash = '';
+        // With the trailing slash, href is a prefix only of URLs inside the base path ('/v1/' never matches '/v1-admin').
+        if (!baseUrl.pathname.endsWith('/')) baseUrl.pathname += '/';
+    }
+
+    return {
+        baseUrl,
+        http2,
+        tls,
+        defaults: {
+            headers,
+            // Type-checked above. Kept as given, so an out-of-range value falls back exactly as it would on a request.
+            timeoutMs: raw.timeoutMs as number | undefined,
+            socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
+            maxBodySize: raw.maxBodySize as number | undefined,
+            maxRedirects: raw.maxRedirects as number | undefined,
+            permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
+        },
+    };
+}
+
+/**
+ * Fills in what a request left `undefined` from the client defaults, key by key. Headers merge case-insensitively and
+ * the request wins; a request header set to `undefined` keeps the default, like any other option. Run it after
+ * `resolveRequestBody`, so the caller's own options are what gets checked for unknown keys and `json`/`body`.
+ */
+export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: ClientDefaults): ResolvedRequestOptions {
+    return {
+        ...options,
+        headers: mergeHeaders(defaults.headers, options.headers),
+        timeoutMs: options.timeoutMs ?? defaults.timeoutMs,
+        socketTimeoutMs: options.socketTimeoutMs ?? defaults.socketTimeoutMs,
+        maxBodySize: options.maxBodySize ?? defaults.maxBodySize,
+        maxRedirects: options.maxRedirects ?? defaults.maxRedirects,
+        permitReservedIps: options.permitReservedIps ?? defaults.permitReservedIps,
+    };
+}
+
+function mergeHeaders(defaults: ClientDefaults['headers'], own: unknown): ResolvedRequestOptions['headers'] {
+    if (own === undefined) return { ...defaults };
+    // Not a plain object: leave it for buildSafeRequestOptions to reject with the usual message.
+    if (typeof own !== 'object' || own === null || Array.isArray(own)) return own as ResolvedRequestOptions['headers'];
+    const map = own as Record<string, unknown>;
+    // No prototype: a '__proto__' key from the caller stays a plain key (which sanitizeHeaders then drops).
+    const merged: Record<string, unknown> = Object.assign(Object.create(null), defaults);
+    for (const key of Object.keys(map)) {
+        if (map[key] === undefined) continue;
+        // Default keys are lowercase; the request's own key keeps its case so error messages name it as written.
+        delete merged[key.toLowerCase()];
+        merged[key] = map[key];
+    }
+    return merged as ResolvedRequestOptions['headers'];
 }

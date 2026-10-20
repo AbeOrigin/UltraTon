@@ -4,7 +4,8 @@ import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
-import { UltraTonHTTP2 } from '../src/engines/http2.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kSessionManager } from '../src/internal.ts';
 
 /**
  * Real h2c server on 127.0.0.1 that answers every request with `application/json`
@@ -27,12 +28,12 @@ const serveJson = async (t: TestContext, body: string) => {
   });
 
   return {
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     url: `http://127.0.0.1:${port}/`,
   };
 };
 
-describe('UltraTonHTTP2 - JSON Parsing Fix Validation', () => {
+describe('UltraTonClient (http2) - JSON Parsing Fix Validation', () => {
   it('resolves a malformed application/json body and json() throws UltraTonParseError instead of crashing', { timeout: 5000 }, async (t) => {
     const { client, url } = await serveJson(t, '{not json');
 

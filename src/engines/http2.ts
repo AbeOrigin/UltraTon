@@ -7,13 +7,10 @@ import type {
   OutgoingHttpHeaders,
 } from "node:http2";
 import type { UltraTonResponse } from "../types/request-response.ts";
-import { Http2SessionManager } from "./http2-session-manager.ts";
+import type { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
-  InternalRequestOptions,
   ResolvedRequestOptions,
   SecureUltraTonRequestOptions,
-  UltraTonOptionsHttp2,
-  UltraTonRequestOptionsHttp2,
 } from "../types/request-options.types.ts";
 import {
   SecureHttpError,
@@ -28,98 +25,42 @@ import { createResponse } from "../helpers/response.ts";
 import {
   basicAuthorization,
   buildSafeRequestOptions,
-  resolveRequestBody,
-  withMethod,
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 
-const globalPool = new Http2SessionManager();
+const clientClosed = () => new SecureHttpError("UltraTon: Client is closed.");
 
-export class UltraTonHTTP2 {
+/** The HTTP/2 engine behind `UltraTonClient({ http2: true })`. Not public: the client validates and merges the options. */
+export class Http2Engine {
   readonly #sessionManager: Http2SessionManager;
-  readonly #globalOptions: UltraTonOptionsHttp2;
+  #closed = false;
 
   /**
-   * @param options - Public configuration options.
-   * @param _sessionManager - Internal DI seam for unit testing. Allows injecting
-   *   a pre-wired Http2SessionManager (with a mock connectFn) so tests never
-   *   touch the network. Do NOT use in production code.
+   * @param sessionManager - The client's own session pool (built with its `tls`), or the one injected by tests
+   *   through `kSessionManager`. Never shared between clients.
    */
-  constructor(
-    options: UltraTonOptionsHttp2 = {},
-    _sessionManager?: Http2SessionManager,
-  ) {
-    this.#globalOptions = options;
-    if (_sessionManager) {
-      this.#sessionManager = _sessionManager;
-      return;
-    }
-    if (options.isolatePool) {
-      this.#sessionManager = new Http2SessionManager(options.tlsSettings);
-      return;
-    }
-    this.#sessionManager = globalPool;
+  constructor(sessionManager: Http2SessionManager) {
+    this.#sessionManager = sessionManager;
   }
 
-  public async get<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("GET", options));
+  /** Closes every pooled session (in-flight streams on them fail) and refuses any later request. */
+  public close(): void {
+    this.#closed = true;
+    this.#sessionManager.closeAll();
   }
 
-  public async post<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("POST", options));
-  }
-
-  public async put<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("PUT", options));
-  }
-
-  public async patch<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("PATCH", options));
-  }
-
-  public async delete<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("DELETE", options));
-  }
-
-  public async head<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("HEAD", options));
-  }
-
-  public async options<T = unknown>(
-    url: string,
-    options?: UltraTonRequestOptionsHttp2,
-  ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, withMethod("OPTIONS", options));
-  }
-
-  private async _request<T = unknown>(
+  /**
+   * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
+   */
+  public async request<T = unknown>(
     targetUrl: string,
-    options: InternalRequestOptions,
+    options: ResolvedRequestOptions,
   ): Promise<UltraTonResponse<T>> {
     // One clock for the whole redirect chain: timeoutMs is a budget shared by every hop.
     const startTime = Date.now();
     let currentUrl = targetUrl;
-    // Validate before touching the network: invalid input must fail without connecting. The caller's own options are
-    // checked (unknown keys, json/body, body type) and `json` is serialized before any client-wide default is merged in.
-    let currentOptions: ResolvedRequestOptions = resolveRequestBody(options);
+    // Validate before touching the network: invalid input must fail without connecting.
+    let currentOptions: ResolvedRequestOptions = options;
     let redirectCount = 0;
     let reqOpts = this.#buildRequestOptions(currentOptions);
 
@@ -133,6 +74,7 @@ export class UltraTonHTTP2 {
     }
 
     while (true) {
+      if (this.#closed) throw clientClosed();
       const parsedUrl = parseSafeUrl(currentUrl);
       const origin = parsedUrl.origin;
       const path = parsedUrl.pathname + parsedUrl.search;
@@ -144,6 +86,11 @@ export class UltraTonHTTP2 {
         reqOpts,
         this.#remainingBudget(reqOpts.timeoutMs, startTime),
       );
+      // close() ran while DNS or the connect was pending: the session just pooled would outlive it.
+      if (this.#closed) {
+        this.#sessionManager.closeAll();
+        throw clientClosed();
+      }
 
       // reqOpts.headers is already lowercased and CRLF/pseudo-header checked.
       const safeHeaders: Record<string, string | string[] | undefined> = {
@@ -305,22 +252,11 @@ export class UltraTonHTTP2 {
     }
   }
 
-  /**
-   * Runs the per-request options through the same firewall as the HTTP/1 client.
-   * A per-request value wins over the client-wide one; an unset one (undefined)
-   * falls back to the client-wide value.
-   */
+  /** Runs the request options through the same firewall as the HTTP/1 engine, plus the HTTP/2-only `host` rule. */
   #buildRequestOptions(
     options: ResolvedRequestOptions,
   ): SecureUltraTonRequestOptions {
-    const g = this.#globalOptions;
-    const safe = buildSafeRequestOptions({
-      ...options,
-      maxRedirects: options.maxRedirects ?? g.maxRedirects,
-      timeoutMs: options.timeoutMs ?? g.timeoutMs,
-      maxBodySize: options.maxBodySize ?? g.maxBodySize,
-      permitReservedIps: options.permitReservedIps ?? g.permitReservedIps,
-    });
+    const safe = buildSafeRequestOptions(options);
     // RFC 9113 8.3.1: a host header must not differ from :authority, which comes from the URL.
     if (safe.headers && Object.hasOwn(safe.headers, "host")) {
       throw new TypeError(

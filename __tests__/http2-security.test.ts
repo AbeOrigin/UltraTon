@@ -35,7 +35,8 @@ import {
   UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
 } from "../src/errors.ts";
-import { UltraTonHTTP2 } from "../src/engines/http2.ts";
+import { UltraTonClient } from "../src/http-client.ts";
+import { kSessionManager } from "../src/internal.ts";
 
 const buildClient = (t: { mock: { method: typeof mock.method } }) => {
   t.mock.method(dnsPromises, "lookup", async () => ({
@@ -48,7 +49,7 @@ const buildClient = (t: { mock: { method: typeof mock.method } }) => {
   });
   const manager = new Http2SessionManager({}, connect as any);
 
-  return { client: new UltraTonHTTP2({}, manager), connect };
+  return { client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any), connect };
 };
 
 describe("HTTP/2 validation firewall", () => {
@@ -165,7 +166,7 @@ const startFixture = async (t: TestContext) => {
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     manager,
     connect,
     accepted: () => accepted,
@@ -256,7 +257,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
 
   it("applies the client-wide allowlist when a request sets none", async (t) => {
     const { manager, url, connect } = await startFixture(t);
-    const client = new UltraTonHTTP2({ permitReservedIps: ["127.0.0.0/8"] }, manager);
+    const client = new UltraTonClient({ http2: true, permitReservedIps: ["127.0.0.0/8"], [kSessionManager]: manager } as any);
 
     const res = await client.get(url);
 
@@ -482,7 +483,7 @@ describe("HTTP/2 redirects never downgrade from https to http", () => {
     const connect = t.mock.fn(() => session);
     const manager = new Http2SessionManager({}, connect as any);
     t.after(() => manager.closeAll());
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
 
     await assert.rejects(
       client.get("https://example.com/downgrade", {
@@ -544,7 +545,7 @@ const startServers = (t: TestContext) => {
   });
 
   return {
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     listen: async (onStream: OnStream) => {
       const server = createServer();
       server.on("stream", onStream);
@@ -687,7 +688,7 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
       throw new Error("connect refused on purpose");
     });
     const manager = new Http2SessionManager({}, connect as any);
-    return { lookup, connect, manager, client: new UltraTonHTTP2({}, manager) };
+    return { lookup, connect, manager, client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any) };
   };
 
   /** Rejects with the error and when it did, so a request that wrongly succeeds fails the test. */
@@ -856,7 +857,7 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     const connect = t.mock.fn(() => session);
     const manager = new Http2SessionManager({}, connect as any);
     t.after(() => manager.closeAll());
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
     const start = Date.now();
 
     // 150ms of the 400ms budget is left for hop 2. A hop that got the full budget again would wait until ~650ms.
@@ -927,7 +928,7 @@ describe("HTTP/2 network errors are actionable and never echo addresses", () => 
   const freshClient = (t: TestContext) => {
     const manager = new Http2SessionManager();
     t.after(() => manager.closeAll());
-    return new UltraTonHTTP2({}, manager);
+    return new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
   };
 
   const assertNoAddress = (message: string, port: number) => {
@@ -1011,7 +1012,7 @@ describe("HTTP/2 never resolves a status-less or truncated response", () => {
       server.closeAllConnections?.();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     });
-    return { url: `http://127.0.0.1:${port}/`, client: new UltraTonHTTP2({}, manager), port };
+    return { url: `http://127.0.0.1:${port}/`, client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any), port };
   };
 
   const rejectsAsNetworkError = (promise: Promise<unknown>, port: number) =>
@@ -1065,7 +1066,7 @@ describe("HTTP/2 never resolves a status-less or truncated response", () => {
 
     const manager = new Http2SessionManager();
     t.after(() => manager.closeAll());
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
     const warnings: string[] = [];
     const onWarning = (w: Error) => warnings.push(w.name);
     process.on("warning", onWarning);

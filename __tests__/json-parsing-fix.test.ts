@@ -2,7 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { UltraTonClient } from "../src/engines/http1.ts";
+import { UltraTonClient } from "../src/http-client.ts";
+import { kTransport } from "../src/internal.ts";
 import { UltraTonParseError } from "../src/errors.ts";
 
 describe("UltraTonClient - JSON Parsing Fix Validation", () => {
@@ -57,7 +58,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       { user: "abe", role: "architect" },
       "GET",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface UserShape {
       user: string;
@@ -81,7 +82,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       { message: "hello world" },
       "GET",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface MessageShape {
       message: string;
@@ -101,7 +102,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       200,
       "text/plain",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     const res = await client.get<string>("https://example.com/text");
 
@@ -131,7 +132,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       204,
       "application/json",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface EmptyResponse {
       // Empty interface for testing
@@ -147,7 +148,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
   it("Should correctly handle mixed content scenarios", async () => {
     const fakeTransport = createMockTransport({ data: [1, 2, 3] }, "GET");
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface DataShape {
       data: number[];
@@ -170,7 +171,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       200,
       "text/plain",
     ); // Use text/plain to force raw Buffer body
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     const res = await client.get<any>("https://example.com/malicious");
 

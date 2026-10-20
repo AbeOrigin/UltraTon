@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { UltraTonClient } from '../src/engines/http1.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kTransport } from '../src/internal.ts';
 import { SecureHttpError, UltraTonNetworkTimeoutError, UltraTonRedirectError } from '../src/errors.ts';
 import https from 'node:https';
 
@@ -102,14 +103,14 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     };
 
     it('Should cleanly return 3xx when maxRedirects is 0 (Default Deny)', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         const res = await client.get('https://example.com/default-deny'); // Implicitly maxRedirects: 0
         assert.strictEqual(res.statusCode, 302);
         assert.strictEqual(res.headers.location, 'https://example.com/target');
     });
 
     it('Should throw UltraTonNetworkTimeoutError if absolute timeout is hit during a tarpit redirect', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         await assert.rejects(
             client.get('https://example.com/tarpit-step1', { maxRedirects: 5, timeoutMs: 50 }),
             (err: any) => err instanceof UltraTonNetworkTimeoutError && err.message.includes('exceeded')
@@ -117,7 +118,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should throw UltraTonRedirectError on infinite local loopback', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         await assert.rejects(
             client.get('https://example.com/infinite', { maxRedirects: 3 }),
             (err: any) => err instanceof UltraTonRedirectError && err.message.includes('Max redirects (3) exceeded')
@@ -125,7 +126,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should case-insensitively strip credentials upon domain hopping', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         const res = await client.get('https://domaina.com/hop', {
             maxRedirects: 1,
             headers: {
@@ -145,7 +146,7 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should block a redirect hop to a reserved IP literal', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         await assert.rejects(
             client.get('https://example.com/to-metadata', { maxRedirects: 1 }),
             (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
@@ -155,10 +156,10 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     it('Should reject an https to http redirect downgrade even with permitReservedIps, before connecting to the target', async () => {
         const inner = createSmartMockTransport();
         const hostsReached: string[] = [];
-        const client = new UltraTonClient(((urlObj: URL, options: any, callback?: any) => {
+        const client = new UltraTonClient({ [kTransport]: (urlObj: URL, options: any, callback?: any) => {
             hostsReached.push(urlObj.host);
             return inner(urlObj, options, callback);
-        }) as any);
+        } } as any);
 
         await assert.rejects(
             client.get('https://example.com/downgrade', { permitReservedIps: true, maxRedirects: 1 }),
@@ -171,10 +172,10 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     it('Should reject an https to http downgrade in the middle of a chain that started on http', async () => {
         const inner = createSmartMockTransport();
         const reached: string[] = [];
-        const client = new UltraTonClient(((urlObj: URL, options: any, callback?: any) => {
+        const client = new UltraTonClient({ [kTransport]: (urlObj: URL, options: any, callback?: any) => {
             reached.push(urlObj.href);
             return inner(urlObj, options, callback);
-        }) as any);
+        } } as any);
 
         // http://127.0.0.1:1/start -> https://example.com/mid -> http://127.0.0.1:1/end
         await assert.rejects(
@@ -186,14 +187,14 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should still follow a redirect that upgrades from http to https', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         // /default-deny redirects to https://example.com/target, which the mock answers with its 404 fallback.
         const res = await client.get('http://127.0.0.1:1/default-deny', { permitReservedIps: true, maxRedirects: 1 });
         assert.strictEqual(res.statusCode, 404);
     });
 
     it('Should block a NAT64 literal embedding a private IPv4', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         await assert.rejects(
             client.get('https://[64:ff9b::a00:5]/'),
             (err: any) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message)
@@ -201,13 +202,13 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
     });
 
     it('Should not block a public IP literal', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         const res = await client.get('https://8.8.8.8/anything');
         assert.strictEqual(res.statusCode, 404); // mock fallback route: reached the transport
     });
 
     it('Should downgrade POST to GET on 303 and strip smuggling headers and body', async () => {
-        const client = new UltraTonClient(createSmartMockTransport() as any);
+        const client = new UltraTonClient({ [kTransport]: createSmartMockTransport() } as any);
         const res = await client.post('https://example.com/smuggle-start', {
             body: 'massive-payload',
             maxRedirects: 1,
