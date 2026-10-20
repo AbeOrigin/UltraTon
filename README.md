@@ -18,6 +18,8 @@ npm install ultraton
 
 Requires Node.js **22.12** or later. Works from ESM (`import`), CommonJS (`require`) and TypeScript.
 
+**Zero dependencies:** `npm install ultraton` installs exactly one package, with no runtime, peer or optional dependencies. The [`compat/`](compat/) folder of this repository holds axios, got and node-fetch only to test [`createSecureAgents()`](#protect-the-client-you-already-use) against them. It is a separate workspace that is never part of the published package, so a dependency scanner reading this repository may list those libraries; they are not dependencies of `ultraton`.
+
 ## Quickstart
 
 ```ts
@@ -316,9 +318,9 @@ agents.http.destroy();
 agents.https.destroy();
 ```
 
-Every new socket resolves its host and validates **every** address, then connects only to those addresses: a DNS rebinding between connections is blocked. Redirects the library follows open their own sockets through the agent, so each hop is checked. IP literals are judged in every spelling, TLS is always verified (a library's `rejectUnauthorized: false` is ignored), and plain `http:` only reaches loopback unless you pass `allowPlainHttp: true`, which lifts the scheme rule but never the address policy. A blocked connection fails with the usual `SecureHttpError` (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`); libraries that wrap errors keep it as the cause. A failure to reach an *allowed* address is Node's own error, and its message may name that address.
+Every new socket resolves its host and validates **every** address, then connects only to those addresses: a DNS rebinding between connections is blocked. Redirects the library follows open their own sockets through the agent, so each hop is checked. IP literals are judged in every spelling, TLS is always verified (a library's `rejectUnauthorized: false` is ignored), and plain `http:` only reaches loopback unless you pass `allowPlainHttp: true`, which lifts the scheme rule but never the address policy. A blocked connection fails with the usual `SecureHttpError` (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`). axios, got and node-fetch all expose its code as `err.code`; axios and got also keep the original error as `err.cause`. A failure to reach an *allowed* address is Node's own error, and its message may name that address.
 
-> ⚠️ **Turn the library's proxy off.** Through a forward proxy, the agent only sees the proxy's address and the proxy picks the real target, so the agents refuse such requests with `ERR_ULTRATON_AGENT_PROXY` instead of letting them through unchecked. axios uses `HTTP_PROXY`/`HTTPS_PROXY` by default: pass `proxy: false` (`axios.create({ httpAgent, httpsAgent, proxy: false })`). If you need a proxy, use `UltraTonClient`'s `proxy` option, which keeps the target pinned.
+> ⚠️ **With axios, `proxy: false` is mandatory, and `httpVersion: 2` is not allowed.** axios reads `HTTP_PROXY`/`HTTPS_PROXY` by default. For an `https:` URL it then **replaces your `httpsAgent`** with its own tunnelling agent, which sends the proxy the hostname: the secure agents never see the request, and no check runs. For an `http:` URL it sends the proxy an absolute URL through your agent, which the agents refuse with `ERR_ULTRATON_AGENT_PROXY`. Always create the instance with `proxy: false`, and never pass `proxy` on a single request (it overrides the instance's). axios with `httpVersion: 2` opens its own HTTP/2 connection without any agent, so never use it with the secure agents. If you need a proxy or HTTP/2, use `UltraTonClient`, whose `proxy` and `http2` keep the target pinned. got and node-fetch do not read proxy variables; got with `http2: true` uses the agent, but not when you also pass `createConnection` or `h2session`. The compat tests in this repository check all three, including this axios behaviour.
 
 The agents protect the **connection**. The rest stays with the library you plug them into:
 
@@ -332,7 +334,7 @@ The agents protect the **connection**. The rest stays with the library you plug 
 | Body size limit, decompression bombs, truncated bodies | ❌ | ✅ |
 | Total and idle timeouts | ❌ | ✅ |
 | Header injection, unknown options, `baseUrl` traversal | ❌ | ✅ |
-| A library's own proxy (axios reads `HTTP_PROXY`) | Refused (`ERR_ULTRATON_AGENT_PROXY`) | — |
+| A library's own proxy (axios reads `HTTP_PROXY`) | ⚠️ `http:` refused (`ERR_ULTRATON_AGENT_PROXY`); axios bypasses the agents for `https:`, so pass `proxy: false` | — |
 | Proxies with the target still pinned (CONNECT, SOCKS5) | ❌ | ✅ (`proxy`) |
 | Error messages without addresses | Blocked connections only | ✅ |
 

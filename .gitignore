@@ -16,3 +16,6 @@ _agent/
 .gemini/
 .cursor/
 .vscode/
+
+# compat/ installs the packed tarball
+compat/*.tgz

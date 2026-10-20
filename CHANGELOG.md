@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - IP literals are judged as themselves. The library's own `lookup` is ignored and a `socketPath` throws.
   - TLS is always verified: a library's `rejectUnauthorized: false` or no-op `checkServerIdentity` is ignored.
   - Plain `http:` only reaches loopback names and addresses unless `allowPlainHttp: true`, which never lifts the address policy.
-  - A forward-proxy request through the agents (CONNECT, or an absolute URL as with axios and `HTTP_PROXY`) is refused with `ERR_ULTRATON_AGENT_PROXY`. The proxy would pick the target unchecked, so turn the library's proxy off (axios: `proxy: false`).
+  - A forward-proxy request through the agents (CONNECT, or an absolute URL as axios sends for `http:` URLs with `HTTP_PROXY`) is refused with `ERR_ULTRATON_AGENT_PROXY`, since the proxy would pick the target unchecked. With axios, `proxy: false` is mandatory (never overridden per request), and `httpVersion: 2` must not be used: for `https:` URLs, axios with a proxy set replaces the `httpsAgent` with its own tunnelling agent, and with `httpVersion: 2` it opens HTTP/2 connections itself. Either way the secure agents are bypassed entirely. Both behaviours are pinned by characterization tests.
+  - Integration tests with axios 1.20.0, got 16.1.0 and node-fetch 3.3.2 run against the packed tarball in a separate `compat/` workspace, as their own CI job. Their dependencies are never part of the package.
   - The options are a closed list (`permitReservedIps`, `tls`, `allowPlainHttp`), validated like the client's.
   - New public types `UltraTonSecureAgentOptions` and `UltraTonSecureAgents`. The README lists what the agents cover and what only the full client does (body limits, timeouts, header validation, redirect policy, proxies).
 
