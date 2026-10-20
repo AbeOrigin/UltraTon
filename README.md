@@ -231,7 +231,7 @@ Off by default. `retry: n` retries up to `n` times (at most 10) with these rules
 - **Network failures:** `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE` and the idle timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`). Policy errors, `maxBodySize`, `maxRedirects`, invalid input, the `timeoutMs` timeout and an abort are never retried.
 - **Waits:** exponential backoff with full jitter (300 ms base, at most `maxDelayMs`, default 30 s). A `Retry-After` (seconds or an HTTP date) is waited exactly; if it asks for more than `maxDelayMs` or than what is left of `timeoutMs`, that response is returned instead.
 - **Budget:** `timeoutMs` covers every attempt and wait together, and `signal` also cancels a wait.
-- **HTTP/2:** a stream the server refused (`REFUSED_STREAM`) or a GOAWAY fails with an `ERR_HTTP2_*` code, which is not retried for now.
+- **HTTP/2:** a stream the server never processed fails with `NGHTTP2_REFUSED_STREAM` and is retried, on a new connection after a GOAWAY. That covers a `REFUSED_STREAM` reset and a stream above the last one a GOAWAY processed. Any other reset is not retried.
 
 ```ts
 const api = new UltraTonClient({

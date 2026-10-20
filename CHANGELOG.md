@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `onRetry({ attempt, delayMs, statusCode?, error? })` is called before each wait; if it throws, the request ends with that error.
   - `stream()` retries until the headers arrive. `client.fetch()` never retries.
   - New public types: `UltraTonRetryOptions` and `UltraTonRetryInfo`.
+- **HTTP/2 streams the server never processed** fail with `UltraTonNetworkError` code `NGHTTP2_REFUSED_STREAM` (`UltraTon: The server did not process the request (REFUSED_STREAM).`), which `retry` retries, as RFC 9113 allows. This covers a stream reset with REFUSED_STREAM before any answer, and a stream above the last one a GOAWAY processed. Before, the first failed as `ERR_HTTP2_STREAM_ERROR`, and the second as `ERR_HTTP2_SESSION_ERROR` when the GOAWAY carried an error code. Other resets keep their `ERR_HTTP2_*` code and are not retried.
 - **Timeout codes.** `UltraTonNetworkTimeoutError` now has a `code`: `ERR_ULTRATON_TIMEOUT` when `timeoutMs` ran out, and `ERR_ULTRATON_SOCKET_TIMEOUT` when the connection sat idle for `socketTimeoutMs`. Before, it had none.
 - **Form bodies.**
   - New `form` request option: a plain object or `URLSearchParams`, sent urlencoded (`application/x-www-form-urlencoded;charset=UTF-8`) with the same encoding rules and validation as `query`.
