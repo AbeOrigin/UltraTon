@@ -441,6 +441,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md).
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for it.
 
+The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, what `UltraTonClient` and `createSecureAgents()` block next to axios, got, node-fetch and Node's `fetch` on their own: IP spellings, cloud metadata, DNS and redirects. The corpus runs in CI, and a case UltraTon stops blocking fails the build.
+
 [THREAT_MODEL.md](THREAT_MODEL.md) explains what UltraTon defends, against whom, where each defense lives in the code, and the risks it deliberately leaves to you. Releases carry npm provenance, so you can check that a version was built by this repository's CI with `npm audit signatures`.
 
 ## License
