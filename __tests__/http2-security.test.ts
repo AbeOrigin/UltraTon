@@ -985,3 +985,104 @@ describe("HTTP/2 network errors are actionable and never echo addresses", () => 
     });
   });
 });
+
+/**
+ * A response that was lost or cut short must never resolve as if it were whole: no status means no response,
+ * and a stream that closes before a clean end holds a truncated body.
+ */
+describe("HTTP/2 never resolves a status-less or truncated response", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  /** h2c server on 127.0.0.1 whose stream handler is supplied by the test. */
+  const serve = async (t: TestContext, onStream: (stream: ServerHttp2Stream, killSocket: () => void) => void) => {
+    const server = createServer();
+    // Raw sockets: the http2 session refuses direct socket access, and a destroyed socket sends no GOAWAY or RST_STREAM.
+    const sockets = new Set<net.Socket>();
+    server.on("connection", (socket) => sockets.add(socket));
+    const killSocket = () => sockets.forEach((socket) => socket.destroy());
+    server.on("stream", (stream) => onStream(stream, killSocket));
+    server.on("session", (session) => session.on("error", () => {}));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const manager = new Http2SessionManager();
+    t.after(async () => {
+      manager.closeAll();
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    return { url: `http://127.0.0.1:${port}/`, client: new UltraTonHTTP2({}, manager), port };
+  };
+
+  const rejectsAsNetworkError = (promise: Promise<unknown>, port: number) =>
+    assert.rejects(promise, (err: unknown) => {
+      assert.ok(err instanceof UltraTonNetworkError, `got ${String(err)}`);
+      assert.ok(err.code, "has a code");
+      assert.ok(!err.message.includes("127.0.0.1") && !err.message.includes(String(port)), err.message);
+      return true;
+    });
+
+  it("rejects when the socket is destroyed after the request but before any response", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (_stream, killSocket) => {
+      killSocket();
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("rejects when the socket is destroyed after part of the body (no truncated 200)", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (stream, killSocket) => {
+      stream.respond({ ":status": 200, "content-type": "text/plain" });
+      stream.write("partial", () => killSocket());
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("rejects when the server resets the stream mid-body", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (stream) => {
+      stream.respond({ ":status": 200, "content-type": "text/plain" });
+      stream.on("error", () => {});
+      stream.write("partial", () => stream.destroy(new Error("reset"))); // RST_STREAM(INTERNAL_ERROR) with no END_STREAM
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("still resolves normal responses, including HEAD and empty bodies", { timeout: 5000 }, async (t) => {
+    const { client, url } = await serve(t, (stream) => {
+      stream.respond({ ":status": 204 });
+      stream.end();
+    });
+    const empty = await client.get(url, { permitReservedIps: true });
+    assert.strictEqual(empty.statusCode, 204);
+    const head = await client.head(url, { permitReservedIps: true });
+    assert.strictEqual(head.statusCode, 204);
+  });
+
+  it("maps 15 concurrent requests to a refused port without MaxListenersExceededWarning", { timeout: 5000 }, async (t) => {
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    const manager = new Http2SessionManager();
+    t.after(() => manager.closeAll());
+    const client = new UltraTonHTTP2({}, manager);
+    const warnings: string[] = [];
+    const onWarning = (w: Error) => warnings.push(w.name);
+    process.on("warning", onWarning);
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 15 }, () => client.get(`http://127.0.0.1:${port}/`, { permitReservedIps: true })),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve)); // warnings are emitted on nextTick
+      for (const r of results) {
+        assert.strictEqual(r.status, "rejected");
+        const err = (r as PromiseRejectedResult).reason;
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.strictEqual(err.code, "ECONNREFUSED");
+      }
+      assert.ok(!warnings.includes("MaxListenersExceededWarning"), warnings.join(","));
+    } finally {
+      process.off("warning", onWarning);
+    }
+  });
+});

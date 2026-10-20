@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
@@ -92,7 +92,15 @@ export class UltraTonClient {
             }
         } catch (err: unknown) {
             if (err instanceof UltraTonMemoryError) throw err;
-            throw new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.');
+            const code = (err as NodeJS.ErrnoException | undefined)?.code;
+            // A caller abort is not a network fault: keep it a plain SecureHttpError, as before.
+            if ((err as Error | undefined)?.name === 'AbortError') {
+                throw new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.', { cause: err, code: typeof code === 'string' ? code : undefined });
+            }
+            // A socket error with a code (ECONNRESET, ERR_STREAM_PREMATURE_CLOSE, ...) maps like any other network error;
+            // a stream that just ends early has none, which is a reset connection as far as the caller is concerned.
+            if (typeof code === 'string') throw toNetworkError(err);
+            throw new UltraTonNetworkError('UltraTon: Connection failed (ECONNRESET).', { cause: err, code: 'ECONNRESET' });
         } finally {
             clearTimeout(executionTimer);
         }

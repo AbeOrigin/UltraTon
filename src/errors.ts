@@ -21,14 +21,14 @@ const TLS_CODES = new Set(['DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_C
 // OpenSSL formats its failures as "<hex>:error:<hex>:SSL routines:<function>:<reason>:<file>:<line>".
 const OPENSSL_MESSAGE = /error:[0-9A-Fa-f]{8}:|SSL routines/;
 
-function isTlsError(err: { code?: unknown; library?: unknown; reason?: unknown; message?: unknown }): boolean {
+function isTlsError(err: { code?: unknown; library?: unknown; message?: unknown }): boolean {
     const { code } = err;
     if (typeof code === 'string' && (TLS_CODES.has(code) || TLS_CODE_PREFIXES.some(p => code.startsWith(p)))) return true;
-    // Older OpenSSL bindings expose the library and reason as properties.
-    if (typeof err.library === 'string' || typeof err.reason === 'string') return true;
+    // Older OpenSSL bindings expose the library as a property. A `reason` property is deliberately not checked: llhttp (HTTP parse) errors carry one too.
+    if (typeof err.library === 'string') return true;
     // Newer ones report a handshake failure (e.g. a plain server answering a ClientHello) as a bare EPROTO whose
     // only TLS marker is the OpenSSL text in the message. The message is only inspected here, never copied out.
-    return code === 'EPROTO' || (typeof err.message === 'string' && OPENSSL_MESSAGE.test(err.message));
+    return typeof err.message === 'string' && OPENSSL_MESSAGE.test(err.message);
 }
 
 /**
@@ -41,7 +41,7 @@ export function toNetworkError(err: unknown): unknown {
     if (err instanceof SecureHttpError) return err;
     if (err instanceof Error && err.name === 'AbortError') return err;
 
-    const raw = (typeof err === 'object' && err !== null ? err : {}) as { code?: unknown; library?: unknown; reason?: unknown; message?: unknown };
+    const raw = (typeof err === 'object' && err !== null ? err : {}) as { code?: unknown; library?: unknown; message?: unknown };
     const code = typeof raw.code === 'string' && raw.code !== '' ? raw.code : 'UNKNOWN';
     const kind = isTlsError(raw) ? 'TLS handshake failed' : 'Connection failed';
     return new UltraTonNetworkError(`UltraTon: ${kind} (${code}).`, { cause: err, code });

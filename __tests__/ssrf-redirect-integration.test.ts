@@ -394,3 +394,50 @@ describe('UltraTonClient - network errors are actionable and never echo addresse
         }
     });
 });
+
+describe('UltraTonClient - truncated and malformed responses are network errors, not TLS (real sockets)', () => {
+    /** A raw TCP server that writes `payload` to every client and then ends with a clean FIN. */
+    const rawServer = async (payload: string) => {
+        const server = net.createServer(socket => {
+            socket.on('error', () => {});
+            socket.once('data', () => socket.end(payload));
+        });
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        return { server, port: (server.address() as AddressInfo).port };
+    };
+
+    it('a body cut short by a clean FIN rejects with UltraTonNetworkError carrying a code and cause', async () => {
+        const { server, port } = await rawServer('HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nabc');
+        try {
+            await assert.rejects(
+                new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+                (err: unknown) => {
+                    assert.ok(err instanceof UltraTonNetworkError);
+                    assert.ok(err.code, 'has a code');
+                    assert.ok(err.cause instanceof Error, 'keeps the original error as cause');
+                    assert.ok(!err.message.includes('127.0.0.1') && !err.message.includes(String(port)));
+                    return true;
+                }
+            );
+        } finally {
+            server.close();
+        }
+    });
+
+    it('a garbage non-HTTP response is not labelled a TLS failure', async () => {
+        const { server, port } = await rawServer('this is not http\r\n\r\n');
+        try {
+            await assert.rejects(
+                new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+                (err: unknown) => {
+                    assert.ok(err instanceof UltraTonNetworkError);
+                    assert.match(err.message, /^UltraTon: Connection failed \(.+\)\.$/);
+                    assert.doesNotMatch(err.message, /TLS/);
+                    return true;
+                }
+            );
+        } finally {
+            server.close();
+        }
+    });
+});

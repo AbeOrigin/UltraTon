@@ -16,6 +16,7 @@ import type {
 import {
   SecureHttpError,
   UltraTonMemoryError,
+  UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
   UltraTonParseError,
   UltraTonRedirectError,
@@ -386,10 +387,27 @@ export class UltraTonHTTP2 {
         chunks.push(chunk);
       });
 
+      // A response that ended without a status, or on a stream that was reset or aborted, is a lost response, not a
+      // successful one: resolving it would hand the caller a statusless or truncated body.
+      const lostResponse = (cause?: unknown) =>
+        new UltraTonNetworkError("UltraTon: Connection failed (ECONNRESET).", {
+          code: "ECONNRESET",
+          cause,
+        });
+
       stream.on("end", () => {
         if (settled) return;
         settled = true;
         clearTimeout(streamTimer);
+
+        if (
+          stream.aborted ||
+          (stream.rstCode !== undefined && stream.rstCode !== constants.NGHTTP2_NO_ERROR) ||
+          statusCode === undefined ||
+          Number.isNaN(statusCode)
+        ) {
+          return reject(lostResponse());
+        }
 
         const data = Buffer.concat(chunks);
         let parsedBody: T | Buffer;
@@ -429,22 +447,19 @@ export class UltraTonHTTP2 {
         if (settled) return;
         settled = true;
         clearTimeout(streamTimer);
-        if (!session.destroyed) {
-          // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
-          return reject(toNetworkError(err));
-        }
         // A session that dies (e.g. ECONNREFUSED while connecting) cancels its streams with a generic
-        // ERR_HTTP2_STREAM_CANCEL one event BEFORE the session emits the error that holds the real cause.
-        // Wait one turn for that error so the caller gets the actionable code.
-        let sessionError: unknown;
-        const onSessionError = (e: unknown) => {
-          sessionError = e;
-        };
-        session.once("error", onSessionError);
-        setImmediate(() => {
-          session.off("error", onSessionError);
-          reject(toNetworkError(sessionError ?? err));
-        });
+        // ERR_HTTP2_STREAM_CANCEL whose cause is the real error: report that one.
+        const { code, cause } = err as NodeJS.ErrnoException;
+        // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
+        reject(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));
+      });
+
+      // Closed before a clean end and without an error event (e.g. the socket was destroyed): the response is lost.
+      stream.on("close", () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(streamTimer);
+        reject(lostResponse());
       });
 
       if (body) {
