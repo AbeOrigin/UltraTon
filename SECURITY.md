@@ -40,7 +40,7 @@ These are out of scope, because they are documented behaviour (see the README se
 
 ## Release integrity
 
-Releases are published from GitHub Actions with npm provenance. Check a downloaded version with:
+Releases are built and staged by GitHub Actions with npm provenance, and only reach npm once a maintainer approves them with 2FA (npm staged publishing). No npm token exists. Check a downloaded version with:
 
 ```bash
 npm audit signatures
