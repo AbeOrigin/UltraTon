@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-10-20
+
+Robustness and corporate networks on the same security model, all additive: form bodies, opt-in retries, HTTP CONNECT and SOCKS5 proxies that tunnel to the validated IP, and public codes for timeouts. No breaking changes. Behaviour changes: `UltraTonNetworkTimeoutError` now carries a `code`; an HTTP/2 stream the server never processed fails with `NGHTTP2_REFUSED_STREAM` instead of an `ERR_HTTP2_*` code; and setting more than one of `json`, `form` and `body` throws a reworded `TypeError`.
+
 ### Added
 
 - **SOCKS5 proxies.** `proxy` also takes a `socks5:` URL (default port 1080), on both engines, with the same guarantees as an HTTP CONNECT proxy.
