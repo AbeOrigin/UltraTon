@@ -1,79 +1,219 @@
 # UltraTon
 
-> Ultra safe HTTP client for critical environments in Node.js
+> A secure HTTP client for Node.js. The safe choice is the default, and the risky ones are opt-in.
 
-UltraTon is an enterprise-grade, highly secure HTTP client for Node.js written in TypeScript. It is built strictly on top of `node:https` with a core focus on absolute security for high-risk environments. It has **zero external dependencies** and is designed to mitigate Server-Side Request Forgery (SSRF), Out-Of-Memory (OOM) attacks, and hanging connections (e.g., Slowloris).
-
-## Features
-
-- **Zero Dependencies**: Built entirely on native Node.js APIs (`node:https`). Assures a reduced attack surface.
-- **Strict Protocol Enforcement**: Only connects to secure endpoints (HTTPS).
-- **Memory Shield**: Implements strict constraints on response payload sizes, providing native protection against memory exhaustion attacks. Optimized using V8 zero-GC allocation controls.
-- **Network Control**: Absolute, safe-integer bounded timeouts on connections that explicitly reject floating promises, completely neutralizing Slowloris and TCP hung-socket attacks.
-- **Protocol Purism (CRLF & Pollution Defense)**: Actively downcases and filters headers at the pipeline boundary against `\r\n\0`, rendering HTTP request smuggling and prototype pollution void.
-- **Anti-SSRF & DNS Rebinding Mitigation**: Deep Dual-Stack (IPv4 & IPv6) IP validation neutralizing localhost SSRF, internal metadata attacks, and split-second DNS Rebinding using a zero-dependency native resolver interceptor. Combined with default-deny redirect policies and secure credential stripping.
-- **Sandbox Isolation**: Locked constructor implementations physically enforce inner requests to remain native, neutralizing rogue transport injection and monkey-patching.
-- **First-class TypeScript Support**: Written in TypeScript with strict typings and security-focused interfaces.
-
-## Installation
-
-Since UltraTon is designed for enterprise usage and has zero dependencies, you can install it seamlessly:
+UltraTon is an HTTP/1.1 and HTTP/2 client built only on Node's own `node:https`, `node:http2` and `node:dns`, with **zero runtime dependencies**. It is built for code that sends requests to URLs it does not fully control: webhooks, link previews, integrations, internal service clients. It blocks SSRF (including DNS rebinding), caps memory and time, and never silently ignores a mistake in its options.
 
 ```bash
 npm install ultraton
 ```
 
-*(Note: Requires Node.js >= 24.14.0)*
+Requires Node.js **22.12** or later. Works from ESM (`import`), CommonJS (`require`) and TypeScript.
 
-## Usage
+## Quickstart
 
-```typescript
+```ts
 import { UltraTonClient } from 'ultraton';
 
-const client = new UltraTonClient();
+const api = new UltraTonClient({
+  baseUrl: 'https://api.example.com/v1/',
+  headers: { authorization: `Bearer ${process.env.API_TOKEN}` },
+});
 
-async function run() {
-    try {
-        const response = await client.get<{ items: string[] }>('https://example.com/api/data', {
-            headers: {
-                'Accept': 'application/json'
-            }
-        });
-
-        console.log(`Status: ${response.statusCode} (ok: ${response.ok})`);
-        // `data` is always the raw Buffer. `json()` and `text()` decode it on demand.
-        const { items } = response.json();
-        console.log(items, response.text().length, response.data.length);
-    } catch (error) {
-        console.error('Request failed:', error);
-    }
+const res = await api.get('users/7');
+if (res.ok) {
+  const user = res.json<{ id: number; name: string }>();
+  console.log(user.name);
 }
 
-run();
+await api.post('users', { json: { name: 'Ada' } });
+await api.close(); // when the client is no longer needed
 ```
 
-## Breaking changes (unreleased)
+- Create **one client and reuse it**. Each client has its own connection pool.
+- Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`.
+- **A non-2xx response resolves.** Check `res.ok` or `res.statusCode`. The promise only rejects when no complete response arrives, or when a policy or a limit stops the request.
 
-- **Response shape.** Responses expose `statusCode: number` (never `undefined`), `ok` (200-299), `headers` (no HTTP/2 pseudo-headers), `data: Buffer` (as in 1.x, never auto-parsed), `json<T>()` and `text()`. `json()` parses lazily on every call regardless of content-type, strips `__proto__`, `constructor` and `prototype` keys at every depth, returns `{}` for an empty body (1.0.3 threw) and throws `UltraTonParseError` (with `cause`) on invalid JSON. A malformed JSON response no longer rejects the request itself.
-- **The `timeout` option is removed.** It never had any effect, and it now throws. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
-- **Methods are `(url, options)`.** Send a payload with `post(url, { json: { a: 1 } })` or `post(url, { body })` (`string`, `Buffer` or `Uint8Array`), never both. Bodies always go out with a `content-length`, never chunked.
-- **Unknown options throw.** An option outside the documented list (`headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `signal`, `auth`, `json`, `body`) throws a `TypeError`, with a hint for the usual suspects (`timeout`, `params`, `data`, `rejectUnauthorized`...), instead of being silently ignored.
-- **Invalid option values throw.** `headers` must be a plain object (a `Headers` or `Map` throws), `signal` an `AbortSignal`, `timeoutMs`, `socketTimeoutMs` and `maxBodySize` integers from 0 to 2147483647 and `maxRedirects` an integer from 0 to 20. An out-of-range value throws a `TypeError` naming the range instead of silently using the default.
-- **Errors.** `UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, DNS failures are `UltraTonNetworkError` with the resolver's `code`, and policy rejections carry a `code`: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP` or `ERR_ULTRATON_DOWNGRADE`.
-- **Loopback names need `permitReservedIps`.** Plain HTTP is accepted for every loopback name (`localhost`, `*.localhost`, `127.0.0.0/8` literals and `[::1]`) and only ever reaches loopback addresses: if such a name resolves to anything else, the request is rejected (`UltraTon: Plain http is only allowed to loopback addresses.`). Loopback addresses are reserved, so the SSRF guard also rejects them unless you opt in. `localhost` usually resolves to both `::1` and `127.0.0.1`, and every address must be allowed: use `true`, `['localhost']`, or a list covering both, such as `['127.0.0.0/8', '::1']`.
+## Secure defaults
 
-## Security Goals & Roadmap
+| Protection | Default | How to change it |
+|---|---|---|
+| Private, loopback, link-local, cloud-metadata and other reserved IPs | **Blocked**. This covers IP literals in every spelling, DNS answers, and every redirect hop. | `permitReservedIps: true` or an allowlist such as `['10.0.0.0/8']` |
+| DNS rebinding | **Blocked**. Every address is validated once and the connection is pinned to it. | — |
+| Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | — (use `https:`) |
+| Redirects | **Not followed**. The 3xx comes back as a response. | `maxRedirects` (0–20) |
+| https → http redirect | **Rejected**. | — |
+| Credentials on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped. | — |
+| Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
+| Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
+| Idle connection | **10 s** without bytes | `socketTimeoutMs` (`0` = none) |
+| TLS verification | **Always on**. It cannot be disabled. | `tls: { ca, cert, key }` for private CAs and mTLS |
+| Header injection (CRLF/NUL), pseudo-headers | **Rejected** before connecting. | — |
+| JSON prototype pollution | `__proto__`, `constructor` and `prototype` keys are stripped by `json()`. | — |
+| Unknown options or wrong option types | **Throw a `TypeError`**, with a hint for common mistakes. | — |
+| Truncated response (`content-length` mismatch, GOAWAY or reset mid-body) | **Rejected**. It never resolves as a short body. | — |
 
-UltraTon is developed in methodical security-focused sprints:
+## Options
 
-1. **Core Engine**: Asynchronous wrapper for `node:https` and manual buffer management.
-2. **Memory Shield**: Strict `MaxBodySize` limits and immediate socket destruction upon overflow.
-3. **Network Control**: Absolute timeouts for connection and total read time (Slowloris protection).
-4. **Anti-SSRF**: Default-deny redirect policies and sensitive header stripping across domain hops.
-5. **DX & Tooling**: Strict TypeScript generics, secure error handling, and final package structuring.
-6. **Hardening**: CRLF Injection defenses, strict integer boundary verification, floating promise execution prevention, and zero GC allocation buffering.
-7. **DX & Composability**: Advanced generics, robust Promise-based rejection interfaces, and structural modularity.
-8. **Rebinding & Deep SSRF Prevention**: Native `node:dns` interception to block IPv4, IPv6, and IPv4-Mapped internal IP addresses with resilient Dual-Stack resolution mapping.
+**Client options** go to `new UltraTonClient(options)`. All of them are optional:
+
+| Option | Type | Notes |
+|---|---|---|
+| `baseUrl` | `string` | Relative request paths resolve under it and can never escape it (see [baseUrl](#baseurl)). |
+| `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
+| `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
+| `userAgent` | `string` | Default `ultraton/<version>`. |
+| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps` | | Defaults for every request. A request that sets the same option wins; headers are merged key by key. |
+
+**Request options** are the second argument of every method:
+
+| Option | Type | Default |
+|---|---|---|
+| `json` | `unknown` | Serialized, and sent with `content-type: application/json` unless you set one. |
+| `body` | `string \| Buffer \| Uint8Array` | Raw payload. Cannot be combined with `json`. GET and HEAD cannot have a body. |
+| `headers` | plain object | — |
+| `auth` | `'user:password'` | Sent as Basic auth. Dropped on a cross-origin redirect. |
+| `signal` | `AbortSignal` | Aborts in any phase. The request rejects with `signal.reason`. |
+| `timeoutMs` | integer ms | `30000` |
+| `socketTimeoutMs` | integer ms | `10000` |
+| `maxBodySize` | integer bytes | `2097152` (2 MB) |
+| `maxRedirects` | integer 0–20 | `0` |
+| `permitReservedIps` | `boolean \| string[]` | `false` |
+
+**Response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `statusCode` | `number` | — |
+| `ok` | `boolean` | `true` for 200–299. |
+| `headers` | `IncomingHttpHeaders` | Never contains HTTP/2 pseudo-headers. |
+| `data` | `Buffer` | The raw body. It is never parsed automatically. |
+| `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. |
+| `text()` | `string` | Decodes the body as UTF-8. |
+
+## Errors
+
+Every error the library raises is a `SecureHttpError`, apart from the `TypeError`s for invalid input listed below and an abort, which rejects with your `signal.reason`. Policy errors carry a stable `code`.
+
+| Error | When | `code` |
+|---|---|---|
+| `TypeError` | Unknown options or wrong option types, a body on GET/HEAD, and with `baseUrl` a request path that is absolute, malformed or escapes it. Thrown before any connection. | — |
+| `SecureHttpError` | A malformed URL, a scheme other than http(s), or credentials in the URL (request URL, `baseUrl` or redirect target) | — |
+| `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
+| `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
+| `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
+| `SecureHttpError` | A request on a closed client | — |
+| `UltraTonNetworkTimeoutError` | `timeoutMs` or `socketTimeoutMs` expired | — |
+| `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response | Node's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, …) |
+| `UltraTonMemoryError` | The body exceeded `maxBodySize` | — |
+| `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
+| `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
+
+`UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, so test for the timeout first:
+
+```ts
+import { UltraTonNetworkTimeoutError, UltraTonNetworkError, SecureHttpError } from 'ultraton';
+
+try {
+  await api.get('reports/slow');
+} catch (err) {
+  if (err instanceof UltraTonNetworkTimeoutError) { /* retry later */ }
+  else if (err instanceof UltraTonNetworkError) { /* connection problem, err.code */ }
+  else if (err instanceof SecureHttpError && err.code === 'ERR_ULTRATON_RESERVED_IP') { /* blocked target */ }
+  else throw err;
+}
+```
+
+Error messages never contain the IP address or hostname, so they are safe to show to the user who supplied the URL. The original Node error is in `err.cause`, and it does contain them, so do not send `cause` to untrusted sinks.
+
+## Recipes
+
+**Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small; every hop is still checked against the SSRF policy:
+
+```ts
+const client = new UltraTonClient({ maxRedirects: 3, maxBodySize: 512 * 1024, timeoutMs: 5000 });
+const res = await client.get(untrustedUrl);
+```
+
+**Call an internal service.** Allow only the ranges you need, never `true`:
+
+```ts
+const internal = new UltraTonClient({
+  baseUrl: 'https://billing.internal/',
+  permitReservedIps: ['10.20.0.0/16'],
+  tls: { ca: fs.readFileSync('internal-ca.pem') },
+});
+```
+
+**Local development against `http://localhost`.** `localhost` usually resolves to both `::1` and `127.0.0.1`, and *every* resolved address must be allowed:
+
+```ts
+const dev = new UltraTonClient({ baseUrl: 'http://localhost:3000/', permitReservedIps: ['localhost'] });
+// or: permitReservedIps: ['127.0.0.0/8', '::1']
+```
+
+**HTTP/2:**
+
+```ts
+const h2 = new UltraTonClient({ http2: true, baseUrl: 'https://api.example.com/' });
+```
+
+**Mutual TLS:**
+
+```ts
+const mtls = new UltraTonClient({ tls: { cert: fs.readFileSync('client.pem'), key: fs.readFileSync('client.key') } });
+```
+
+**Cancel a request:**
+
+```ts
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 1000);
+await api.get('search?q=x', { signal: controller.signal }); // rejects with controller.signal.reason
+```
+
+### baseUrl
+
+With `baseUrl` set, request URLs must be relative. `'users/7'` and `'/users/7'` both resolve under the base path. An absolute or protocol-relative URL throws.
+
+A path that would land outside the base throws as well. That includes encoded and look-alike forms that lenient servers decode: `../admin`, `%2e%2e/admin`, `..%2fadmin`, `..;/admin`, `..\admin` and fullwidth dots. Normal paths work, including encoded slashes inside a segment (`group%2Fproject`), `;v=1` parameters and `.well-known/`.
+
+## Limits and things to know
+
+- **Proxies are not used.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool.
+- **The allowlist keeps IPv4 and IPv6 apart.** An IPv6 entry never covers an IPv4 address, and an IPv6 address that embeds an IPv4 (`::ffff:10.0.0.1`, NAT64) is judged only by your IPv4 entries. A hostname entry trusts whatever that name resolves to, so prefer IPs or CIDRs.
+- **Redirects into allowlisted ranges are followed.** A public server can redirect to an address your `permitReservedIps` allows. Keep allowlists narrow, or keep `maxRedirects: 0` on clients that allow private ranges.
+- **Redirects are not bound to `baseUrl`.** A followed redirect can go to another host, and every hop is still checked against the SSRF policy. Redirects are off by default.
+- **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
+- **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
+- **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
+- **Bodies are buffered, not streamed.** Responses are read into memory up to `maxBodySize`. For large downloads, use a streaming client.
+- **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
+- **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
+
+## Migrating from 1.x
+
+| 1.x | 2.0 |
+|---|---|
+| `client.post(url, body, options)` | `client.post(url, { json })` or `client.post(url, { body })`. The same applies to `put` and `patch`. |
+| `new UltraTonClient()`, then options on every request | `new UltraTonClient({ baseUrl, headers, timeoutMs, … })`. Per-request options still work and win. |
+| `timeout` | Removed (it never worked). Use `timeoutMs` (total) or `socketTimeoutMs` (idle). |
+| Unknown options ignored | Unknown options throw a `TypeError` with a hint. |
+| Out-of-range numbers fell back to the default | They throw a `TypeError` naming the valid range. |
+| `statusCode: number \| undefined` | Always a `number`. `ok` and `text()` are new. |
+| `json()` on an empty body threw | Returns `{}`. |
+| `http://127.0.0.1` (IP literals) worked without a permit | Needs `permitReservedIps` (see the localhost recipe). |
+| Shared module-wide connection pool | One pool per client. Reuse the client and call `close()` when done. |
+| Network errors were raw Node errors containing the IP | `UltraTonNetworkError` with `code` and `cause`. |
+| `UltraTonNetworkTimeoutError` was a separate branch | It extends `UltraTonNetworkError`, so check for it first. |
+| No `user-agent` header | `ultraton/<version>` is sent unless you set one. |
+| Node ≥ 24.14 | Node ≥ 22.12, and `require('ultraton')` works. |
+
+The full list is in [CHANGELOG.md](CHANGELOG.md).
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for it.
 
 ## License
 

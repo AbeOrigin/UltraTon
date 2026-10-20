@@ -1,4 +1,12 @@
+/**
+ * Base class of every error UltraTon raises (invalid input is a `TypeError`, an abort is your `signal.reason`).
+ * Messages never contain the target's IP or hostname; the original Node error (which may contain them) is in `cause`.
+ */
 export class SecureHttpError extends Error {
+    /**
+     * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`.
+     * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...); absent on timeouts.
+     */
     readonly code?: string;
 
     constructor(message: string, options?: { cause?: unknown; code?: string }) {
@@ -8,11 +16,15 @@ export class SecureHttpError extends Error {
     }
 }
 
+/** DNS, connect, TLS or mid-body failure, or a response truncated against its `content-length`. `code` says which. */
 export class UltraTonNetworkError extends SecureHttpError {}
 /** A timeout is a network failure too: `instanceof UltraTonNetworkError` catches it along with resets and refusals. */
 export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
+/** The response body exceeded `maxBodySize`; the response was aborted. */
 export class UltraTonMemoryError extends SecureHttpError {}
+/** `json()` was called on a body that is not valid JSON; the `SyntaxError` is in `cause`. */
 export class UltraTonParseError extends SecureHttpError {}
+/** The server redirected more times than `maxRedirects` allows. */
 export class UltraTonRedirectError extends SecureHttpError {}
 
 // Codes Node and OpenSSL use when a TLS handshake or certificate check fails.
