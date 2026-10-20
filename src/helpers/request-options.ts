@@ -140,7 +140,7 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
@@ -160,7 +160,7 @@ const OPTION_HINTS = new Map<string, string>([
     ['baseURL', BASE_URL_HINT],
     ['prefixUrl', BASE_URL_HINT],
     ['baseUrl', BASE_URL_HINT],
-    ['data', " Use 'json' for a JSON payload or 'body' for a string or Buffer."],
+    ['data', " Use 'json' for a JSON payload, 'form' for urlencoded fields or 'body' for a string, Buffer, Blob, FormData or URLSearchParams."],
     ['params', QUERY_HINT],
     ['searchParams', QUERY_HINT],
     ['agent', TLS_HINT],
@@ -185,6 +185,7 @@ const CLIENT_OPTION_HINTS = new Map<string, string>([
     ['signal', perRequestOnly('signal')],
     ['auth', perRequestOnly('auth')],
     ['json', perRequestOnly('json')],
+    ['form', perRequestOnly('form')],
     ['body', perRequestOnly('body')],
     ['query', perRequestOnly('query')],
 ]);
@@ -198,15 +199,21 @@ function assertKnownOptions(options: object): void {
     }
 }
 
-/** @throws {TypeError} If both `json` and `body` are set, or `body` is not a string, Buffer or Uint8Array. */
-function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
-    if (options.json !== undefined && options.body !== undefined) {
-        throw new TypeError("UltraTon: Use either 'json' or 'body', not both.");
+const isBody = (body: unknown): boolean => typeof body === 'string' || body instanceof Uint8Array
+    || body instanceof Blob || body instanceof FormData || body instanceof URLSearchParams;
+
+/** @throws {TypeError} If more than one of `json`, `form` and `body` is set, or `body` is of a type it cannot be. */
+function assertBodyOptions(options: { json?: unknown; form?: unknown; body?: unknown }): void {
+    if ([options.json, options.form, options.body].filter(value => value !== undefined).length > 1) {
+        throw new TypeError("UltraTon: Use only one of 'json', 'form' or 'body'.");
     }
-    if (options.body !== undefined && typeof options.body !== 'string' && !(options.body instanceof Uint8Array)) {
-        throw new TypeError(`UltraTon: Expected 'body' to be a string, Buffer or Uint8Array, received ${options.body === null ? 'null' : typeof options.body}. Use 'json' to send an object.`);
+    if (options.body !== undefined && !isBody(options.body)) {
+        throw new TypeError(`UltraTon: Expected 'body' to be a string, Buffer, Uint8Array, Blob, FormData or URLSearchParams, received ${describeValue(options.body)}. Use 'json' to send an object.`);
     }
 }
+
+const hasContentType = (headers: unknown): boolean => isPlainObject(headers)
+    && Object.keys(headers).some(key => key.toLowerCase() === 'content-type' && headers[key] !== undefined);
 
 /** An object whose prototype is `Object.prototype` or `null`: not an array, a class instance, a Map or a Headers. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -240,7 +247,7 @@ function ownOptions<T extends object>(options: T): T {
 export function withMethod(method: string, options: unknown): InternalRequestOptions {
     if (options === undefined) return ownOptions({ method });
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
-        throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json } or { body }.");
+        throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json }, { form } or { body }.");
     }
     if (Object.hasOwn(options, 'method')) {
         throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
@@ -249,24 +256,53 @@ export function withMethod(method: string, options: unknown): InternalRequestOpt
     return Object.assign(ownOptions(options), { method });
 }
 
+const FORM_CONTENT_TYPE = 'application/x-www-form-urlencoded;charset=UTF-8';
+
 /**
- * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized, a
- * string/Uint8Array `body` becomes a Buffer. Run it on the user-supplied options, before any internal enrichment; the
- * content-type of a `json` body is added after the client defaults are merged (see withJsonContentType).
- * @throws {TypeError} On an unknown option, `json` together with `body`, a `body` of the wrong type or a `json` that cannot be serialized.
+ * A request whose body is resolved to bytes. `contentType` is the one a form, URLSearchParams, FormData or typed Blob
+ * implies, set by withBodyContentType; it is left out when the request sets its own (a `json` body has its own rule).
  */
-export function resolveRequestBody(options: InternalRequestOptions): ResolvedRequestOptions {
+export interface ResolvedBody {
+    readonly options: ResolvedRequestOptions;
+    readonly contentType?: string;
+}
+
+/**
+ * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized,
+ * `form` urlencoded, a string/Uint8Array `body` becomes a Buffer and a Blob, FormData or URLSearchParams is encoded by
+ * the platform's Response (a FormData's multipart boundary included), all of it buffered. Run it on the user-supplied
+ * options, before any internal enrichment; the content-type is added after the client defaults are merged (see
+ * withJsonContentType and withBodyContentType).
+ * @throws {TypeError} On an unknown option, more than one of `json`/`form`/`body`, a body on GET or HEAD, a `body` or
+ *   `form` of the wrong type, a `json` that cannot be serialized, or a FormData sent with a content-type of its own.
+ */
+export async function resolveRequestBody(options: InternalRequestOptions): Promise<ResolvedBody> {
     options = ownOptions(options);
     assertKnownOptions(options);
     assertBodyOptions(options);
-    if ((options.json !== undefined || options.body !== undefined) && (options.method === 'GET' || options.method === 'HEAD')) {
+    const { json, form, body, ...rest } = options;
+    if (json === undefined && form === undefined && body === undefined) return { options: rest };
+    if (options.method === 'GET' || options.method === 'HEAD') {
         throw new TypeError('UltraTon: GET and HEAD requests cannot have a body.');
     }
 
-    const { json, body, ...rest } = options;
-    if (json === undefined) {
-        if (body === undefined) return rest;
-        return { ...rest, body: Buffer.isBuffer(body) ? body : Buffer.from(body as string | Uint8Array) };
+    if (form !== undefined) {
+        const encoded = Buffer.from(searchParams('form', 'form field', form).toString());
+        return { options: { ...rest, body: encoded }, contentType: hasContentType(rest.headers) ? undefined : FORM_CONTENT_TYPE };
+    }
+    if (typeof body === 'string' || body instanceof Uint8Array) {
+        return { options: { ...rest, body: Buffer.isBuffer(body) ? body : Buffer.from(body) } };
+    }
+    if (body !== undefined) {
+        if (body instanceof FormData && hasContentType(rest.headers)) {
+            throw new TypeError("UltraTon: A FormData body sets its own content-type (with the multipart boundary); remove the 'content-type' header.");
+        }
+        // A Blob may be a whole file: an already aborted request must not read it into memory first.
+        if (options.signal instanceof AbortSignal) options.signal.throwIfAborted();
+        // ponytail: a subclass that overrides iteration or toString shapes its own bytes; it is the caller's body anyway.
+        const encoded = new Response(body);
+        const contentType = hasContentType(rest.headers) ? undefined : encoded.headers.get('content-type') ?? undefined;
+        return { options: { ...rest, body: Buffer.from(await encoded.arrayBuffer()) }, contentType };
     }
 
     let serialized: string | undefined;
@@ -279,7 +315,7 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedReq
         throw new TypeError("UltraTon: 'json' could not be serialized: functions and symbols have no JSON representation.");
     }
 
-    return { ...rest, body: Buffer.from(serialized) };
+    return { options: { ...rest, body: Buffer.from(serialized) } };
 }
 
 const STREAM_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -324,55 +360,71 @@ export function withAcceptEncoding(options: ResolvedRequestOptions): ResolvedReq
 export function withJsonContentType(options: ResolvedRequestOptions): ResolvedRequestOptions {
     const headers: unknown = options.headers;
     if (headers === undefined) return { ...options, headers: { 'content-type': 'application/json' } };
-    if (!isPlainObject(headers)) return options;
-    const map = headers as Record<string, unknown>;
-    const hasContentType = Object.keys(map).some(key => key.toLowerCase() === 'content-type' && map[key] !== undefined);
-    if (hasContentType) return options;
-    return { ...options, headers: { ...map, 'content-type': 'application/json' } as ResolvedRequestOptions['headers'] };
+    if (!isPlainObject(headers) || hasContentType(headers)) return options;
+    return { ...options, headers: { ...headers, 'content-type': 'application/json' } as ResolvedRequestOptions['headers'] };
+}
+
+/**
+ * Sets the content-type a form, URLSearchParams, FormData or typed Blob implies (see ResolvedBody), over a client default
+ * one: unlike `json`, a client-wide content-type cannot fit these bodies (a multipart needs its boundary). Run it on the
+ * options merged with the client defaults; the request's own content-type, if any, already left `contentType` unset.
+ * Client default keys are lowercase, so 'content-type' replaces one.
+ */
+export function withBodyContentType(options: ResolvedRequestOptions, contentType: string | undefined): ResolvedRequestOptions {
+    const headers: unknown = options.headers;
+    if (contentType === undefined || (headers !== undefined && !isPlainObject(headers))) return options;
+    return { ...options, headers: { ...headers as object, 'content-type': contentType } as ResolvedRequestOptions['headers'] };
 }
 
 const describeValue = (value: unknown): string => {
     if (value === null) return 'null';
     if (Array.isArray(value)) return 'an array';
     if (typeof value === 'number') return String(value);
-    if (typeof value === 'object') return `a ${(Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null)?.constructor?.name || 'null-prototype object'}`;
+    if (typeof value === 'object') {
+        const name = (Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null)?.constructor?.name || 'null-prototype object';
+        return `${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name}`;
+    }
     return typeof value;
 };
 
-function queryValue(key: string, value: unknown): string {
+function pairValue(label: string, key: string, value: unknown): string {
     if (typeof value === 'string') return value;
     if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return String(value);
-    throw new TypeError(`UltraTon: Expected query parameter '${key}' to be a string, a finite number or a boolean, received ${describeValue(value)}.`);
+    throw new TypeError(`UltraTon: Expected ${label} '${key}' to be a string, a finite number or a boolean, received ${describeValue(value)}.`);
 }
 
 /**
- * Appends the `query` option to a request URL. Values are encoded with URLSearchParams (spaces as '+'), an array repeats
- * its key, an `undefined` value is skipped. The URL's own query is kept byte for byte: the new pairs are appended to it,
- * never re-serialized with it. Encoded values can only ever land in the query, so they cannot change the path (baseUrl
- * is checked on the path before this runs) or add a fragment. Symbol keys are ignored, like Object.keys ignores them.
- * A URLSearchParams from another realm (vm, worker) is accepted through its string form.
- * @throws {TypeError} If `query` is not a plain object or URLSearchParams, or a value is not a string, a finite number
- *   or a boolean (`null`, nested objects and arrays inside arrays included). A malformed URL is left for the engine to reject.
+ * The pairs of a `query` or `form` option. An array repeats its key, an `undefined` value is skipped and symbol keys are
+ * ignored, like Object.keys ignores them. A URLSearchParams from another realm (vm, worker) is accepted through its
+ * string form, re-parsed so a spoofed toStringTag can only ever yield ordinary encoded pairs.
+ * @throws {TypeError} If the option is not a plain object or URLSearchParams, or a value is not a string, a finite
+ *   number or a boolean (`null`, nested objects and arrays inside arrays included).
+ */
+function searchParams(option: 'query' | 'form', label: string, value: unknown): URLSearchParams {
+    if (value instanceof URLSearchParams) return value;
+    if (Object.prototype.toString.call(value) === '[object URLSearchParams]') return new URLSearchParams(String(value));
+    if (!isPlainObject(value)) {
+        throw new TypeError(`UltraTon: Expected '${option}' to be a plain object or URLSearchParams, received ${describeValue(value)}.`);
+    }
+    const params = new URLSearchParams();
+    for (const key of Object.keys(value)) {
+        const item = value[key];
+        if (item === undefined) continue;
+        for (const entry of Array.isArray(item) ? item : [item]) params.append(key, pairValue(label, key, entry));
+    }
+    return params;
+}
+
+/**
+ * Appends the `query` option to a request URL, encoded with URLSearchParams (spaces as '+'; see searchParams). The URL's
+ * own query is kept byte for byte: the new pairs are appended to it, never re-serialized with it. Encoded values can
+ * only ever land in the query, so they cannot change the path (baseUrl is checked on the path before this runs) or add
+ * a fragment.
+ * @throws {TypeError} As searchParams. A malformed URL is left for the engine to reject.
  */
 export function withQuery(url: string, query: unknown): string {
     if (query === undefined) return url;
-    let params: URLSearchParams;
-    if (query instanceof URLSearchParams) {
-        params = query;
-    } else if (Object.prototype.toString.call(query) === '[object URLSearchParams]') {
-        // Re-parsed from its string form, so a spoofed toStringTag can only ever yield ordinary encoded pairs.
-        params = new URLSearchParams(String(query));
-    } else if (isPlainObject(query)) {
-        params = new URLSearchParams();
-        for (const key of Object.keys(query)) {
-            const value = query[key];
-            if (value === undefined) continue;
-            for (const item of Array.isArray(value) ? value : [value]) params.append(key, queryValue(key, item));
-        }
-    } else {
-        throw new TypeError(`UltraTon: Expected 'query' to be a plain object or URLSearchParams, received ${describeValue(query)}.`);
-    }
-    const extra = params.toString();
+    const extra = searchParams('query', 'query parameter', query).toString();
     if (extra === '' || !URL.canParse(url)) return url;
     const target = new URL(url);
     target.search = target.search.length > 1 ? `${target.search.slice(1)}&${extra}` : extra;
@@ -552,7 +604,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
  * Fills in what a request left `undefined` from the client defaults, key by key. Only `undefined` falls back: `null`
  * (or any other wrong type) stays and is rejected by the request firewall. Headers merge case-insensitively and the
  * request wins; a request header set to `undefined` keeps the default, like any other option. Run it after
- * `resolveRequestBody`, so the caller's own options are what gets checked for unknown keys and `json`/`body`.
+ * `resolveRequestBody`, so the caller's own options are what gets checked for unknown keys and `json`/`form`/`body`.
  * Every option is an own property of the result (`undefined` when unset), so later copies with `{ ...spread }` never
  * fall through to `Object.prototype`.
  */

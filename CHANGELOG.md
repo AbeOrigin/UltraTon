@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Form bodies.**
+  - New `form` request option: a plain object or `URLSearchParams`, sent urlencoded (`application/x-www-form-urlencoded;charset=UTF-8`) with the same encoding rules and validation as `query`.
+  - `body` now also accepts `URLSearchParams` (sent urlencoded), `FormData` (sent as `multipart/form-data` with its boundary, files included) and `Blob`/`File` (sent with its `type` as content-type). Encoding uses the platform's own `Response`, with no dependencies.
+  - The request's own `content-type` header is kept, except with a `FormData` body, where it throws a `TypeError`: the header must carry the body's boundary. A client default `content-type` is replaced by the one the body implies (a form, a `FormData` or a typed `Blob`); for `json` and an untyped `Blob` it is kept.
+  - Every body is buffered before sending, a large `File` included.
+
+### Changed
+
+- Setting more than one of `json`, `form` and `body` throws `TypeError("UltraTon: Use only one of 'json', 'form' or 'body'.")`. Before, `json` together with `body` threw `"Use either 'json' or 'body', not both."`.
+
 ## [2.1.0] - 2026-10-20
 
 Everyday features on the same security model, all additive: `query`, safe response decompression, `client.stream()` and `client.fetch()`. No breaking changes. One behaviour change: requests now send `accept-encoding: gzip, deflate, br` and decode compressed responses by default (`decompress: false` turns it off).

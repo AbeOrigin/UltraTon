@@ -188,7 +188,7 @@ describe('Unified API: json option and content-length (real servers)', () => {
                 const e = await start(t);
                 await assert.rejects(
                     e.post(`${e.base}/x`, { json: { a: 1 }, body: 'x' }),
-                    (err: unknown) => err instanceof TypeError && err.message === "UltraTon: Use either 'json' or 'body', not both.",
+                    (err: unknown) => err instanceof TypeError && err.message === "UltraTon: Use only one of 'json', 'form' or 'body'.",
                 );
                 assert.strictEqual(e.connections(), 0);
             });
@@ -292,7 +292,7 @@ describe('Unified API: json option and content-length (real servers)', () => {
                         const msg = (err as Error).message;
                         return err instanceof TypeError
                             && msg.startsWith("UltraTon: Unknown option 'foo'.")
-                            && ['headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body']
+                            && ['headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body']
                                 .every(k => msg.includes(k));
                     });
                 }
@@ -376,7 +376,7 @@ describe('Unified API: buildSafeRequestOptions unknown-key firewall', () => {
     });
 
     it('throws TypeError on json together with body', () => {
-        assert.throws(() => buildSafeRequestOptions({ json: {}, body: 'x' } as any), { name: 'TypeError', message: "UltraTon: Use either 'json' or 'body', not both." });
+        assert.throws(() => buildSafeRequestOptions({ json: {}, body: 'x' } as any), { name: 'TypeError', message: "UltraTon: Use only one of 'json', 'form' or 'body'." });
     });
 
     it('throws on an unknown key, even when its value is undefined', () => {
