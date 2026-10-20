@@ -53,6 +53,7 @@ const HOP_BY_HOP: Array<[string, string]> = [
     ['transfer-encoding', 'chunked'],
     ['upgrade', 'h2c'],
     ['te', 'gzip'],
+    ['http2-settings', 'AAMAAABkAAQAoAAAAAIAAAAA'],
 ];
 
 describe('HTTP/2 strips hop-by-hop request headers instead of failing the request', () => {

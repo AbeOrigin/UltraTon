@@ -38,7 +38,7 @@ const BODY_CHUNK_BYTES = 64 * 1024;
 const clientClosed = () => new SecureHttpError("UltraTon: Client is closed.");
 
 /** Connection-specific request headers, meaningless (and refused by node) on HTTP/2. `te` is handled apart. */
-const HOP_BY_HOP_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"];
+const HOP_BY_HOP_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "http2-settings"];
 
 /** The HTTP/2 engine behind `UltraTonClient({ http2: true })`. Not public: the client validates and merges the options. */
 export class Http2Engine {
@@ -347,6 +347,12 @@ export class Http2Engine {
         release();
         if (stream.pending && heldStreams(session) === 0 && !session.destroyed) session.destroy();
       };
+      // A timeout may mean the connection itself is dead: the next request gets a new session instead of reusing this
+      // one. Streams still on it keep draining. (An abort is the caller's choice and says nothing about the connection.)
+      const abandonOnTimeout = () => {
+        abandon();
+        this.#sessionManager.retire(session);
+      };
 
       // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
       const streamTimer =
@@ -355,7 +361,7 @@ export class Http2Engine {
             if (settled) return;
             settled = true;
             cleanup();
-            abandon();
+            abandonOnTimeout();
             reject(
               new UltraTonNetworkTimeoutError(
                 `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
@@ -373,7 +379,7 @@ export class Http2Engine {
           if (settled) return;
           settled = true;
           cleanup();
-          abandon();
+          abandonOnTimeout();
           reject(
             new UltraTonNetworkTimeoutError(
               `UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`,

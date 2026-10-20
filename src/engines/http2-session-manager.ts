@@ -20,6 +20,7 @@ import {
   resolveAndPinAll,
 } from "../security/dns-pinner.ts";
 import { SecureHttpError, toNetworkError } from "../errors.ts";
+import { incompleteResponse } from "../helpers/response.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -30,8 +31,8 @@ interface SessionEntry {
 
 /**
  * Timings of the pool, overridable through the constructor for tests only (the client never passes them):
- * `idleTimeoutMs` reaps a session with no stream in flight after that long without a frame, and `maxLifespanMs`
- * retires a session from the pool once it is that old.
+ * `idleTimeoutMs` reaps a session with no stream in flight after that long without a frame (and, while a stream holds
+ * it, is the interval of the PING liveness check), and `maxLifespanMs` retires a session from the pool once it is that old.
  */
 export interface SessionTimings {
   readonly idleTimeoutMs?: number;
@@ -378,12 +379,28 @@ export class Http2SessionManager {
       }
     });
     // The idle timeout reaps a session nobody uses. A stream may legitimately wait longer than that for its response
-    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is left alone and
-    // looked at again one idle period later: Node only re-arms the timer on the next frame, and a stream that is
-    // given up (abort, timeout) may never be followed by one, which would leave the session pooled for good.
+    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is not reaped: it is
+    // checked for liveness instead. Each idle period without a frame sends a PING; a live peer ACKs it at once, however
+    // long it takes to answer the request. A PING still unanswered at the next check means the connection is dead (a
+    // peer that vanished without FIN or RST): the session is destroyed and its streams fail as a reset connection,
+    // so it never pins the pool. The timer is re-armed by hand because Node only refreshes it on the next frame, and a
+    // stream that is given up may never be followed by one.
+    let pingUnanswered = false;
     newSession.on("timeout", () => {
-      if (heldStreams(newSession) === 0) this.#destroySession(key, newSession);
-      else newSession.setTimeout(this.#idleTimeoutMs);
+      if (heldStreams(newSession) === 0) return this.#destroySession(key, newSession);
+      if (pingUnanswered) {
+        if (!newSession.destroyed) newSession.destroy(incompleteResponse());
+        return;
+      }
+      pingUnanswered = true;
+      try {
+        newSession.ping((err) => {
+          if (!err) pingUnanswered = false;
+        });
+      } catch {
+        /* Closing, or too many PINGs outstanding: left unanswered, so the next check decides. */
+      }
+      newSession.setTimeout(this.#idleTimeoutMs);
     });
 
     const entry: SessionEntry = {
@@ -394,6 +411,17 @@ export class Http2SessionManager {
     this.#sessions.set(key, entry);
 
     return entry;
+  }
+
+  /**
+   * Takes `session` out of the pool (see #retireSession) if it is pooled here: the next request opens a new session,
+   * streams already on this one finish, and closeAll() still destroys it. Used when a stream on it was given up
+   * because of a timeout, which may mean the connection is dead.
+   */
+  public retire(session: ClientHttp2Session): void {
+    for (const [key, entry] of this.#sessions) {
+      if (entry.session === session) return this.#retireSession(key, session);
+    }
   }
 
   /** Removes a session from the pool and closes it gracefully: open streams finish, no new ones start. */
