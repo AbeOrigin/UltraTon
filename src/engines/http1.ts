@@ -10,7 +10,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
-import { createResponse } from '../helpers/response.ts';
+import { createResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -168,6 +168,10 @@ export class Http1Engine {
 
                 this._consumeResponseBuffer(res, req as ClientRequest, reqOpts, executionTimer)
                     .then(data => {
+                        // llhttp already fails a body cut short of its content-length; checked here too so both
+                        // engines share one rule and a truncated body can never resolve as a success.
+                        const declared = declaredBodyLength(reqOpts.method, res.statusCode as number, res.headers);
+                        if (declared !== undefined && data.length !== declared) return reject(incompleteResponse());
                         resolve({
                             statusCode: res.statusCode as number,
                             headers: res.headers,

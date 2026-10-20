@@ -21,13 +21,59 @@ const MUST_BE_RELATIVE = 'UltraTon: With baseUrl set, request paths must be rela
 const ESCAPES_BASE = 'UltraTon: Request path escapes baseUrl.';
 const MALFORMED_ENCODING = 'UltraTon: Request path has malformed percent-encoding.';
 
+/** How many times the part below the base is percent-decoded before a still-changing path is refused. */
+const MAX_DECODE_PASSES = 5;
+/** Path separators for the servers this check anticipates: '/', '\', DIVISION SLASH and REVERSE SOLIDUS OPERATOR. */
+const SEPARATORS = /[/\\\u2215\u29F5]/;
+/** A segment made only of dots plus spaces and control characters, which lenient servers trim (Windows/IIS). */
+const DOTS_AND_JUNK = /^[.\u0000-\u0020\u007F-\u009F]*$/;
+// Non-fatal: bytes that are not UTF-8 become U+FFFD instead of throwing.
+const utf8 = new TextDecoder();
+
+/** Decodes every valid `%XX` run and leaves anything else as is, the way lenient servers decode a second time. */
+function lenientDecode(text: string): string {
+    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => utf8.decode(Buffer.from(run.replace(/%/g, ''), 'hex')));
+}
+
+/**
+ * Judges the part of a resolved path below the base the way the most lenient servers read it, and throws if any of
+ * them could see a step out of the base. That means: percent-decoded until it stops changing (at most
+ * MAX_DECODE_PASSES, else refused), NFKC-normalized (fullwidth dots and slashes, the two-dot leader), split on every
+ * separator in SEPARATORS, each segment cut at ';' (Tomcat/Spring params) and at a decoded '?' or '#'. A segment that
+ * is then '.' or '..', or only dots plus trailing spaces/controls ('.. ', '..%00'), escapes. So does a run of 3 or
+ * more dots followed by a separator ('.../'); the same run as the last segment is an ordinary file name.
+ * An encoded slash inside an ordinary segment (GitLab's 'group%2Fproject') stays allowed.
+ */
+function assertNoDecodedTraversal(below: string): void {
+    let decoded: string;
+    try {
+        decoded = decodeURIComponent(below).normalize('NFKC');
+    } catch {
+        throw new TypeError(MALFORMED_ENCODING);
+    }
+    for (let passes = 1; ; passes++) {
+        const next = lenientDecode(decoded).normalize('NFKC');
+        if (next === decoded) break;
+        if (passes === MAX_DECODE_PASSES) throw new TypeError(ESCAPES_BASE);
+        decoded = next;
+    }
+
+    const segments = decoded.split(SEPARATORS);
+    segments.forEach((segment, index) => {
+        const name = segment.split(/[;?#]/, 1)[0];
+        if (!name.includes('.') || !DOTS_AND_JUNK.test(name)) return;
+        const fileNameOfDots = /^\.{3,}$/.test(name) && index === segments.length - 1;
+        if (!fileNameOfDots) throw new TypeError(ESCAPES_BASE);
+    });
+}
+
 /**
  * Resolves a request path against the client's `baseUrl` so that it can never land outside it.
  * The input is judged as the WHATWG parser will read it (leading/trailing C0 controls and spaces ignored, tabs and
  * newlines removed anywhere), and the final check is on the resolved href, not on the input: percent-encoded dots
  * (`%2e%2e`) and backslashes are dot segments and slashes to the parser, whatever the input looks like.
- * @throws {TypeError} If the path is absolute or protocol-relative, resolves outside the base path, has a '.' or '..'
- *   segment once percent-decoded (with '\' as a separator and ';params' stripped), or has malformed percent-encoding.
+ * @throws {TypeError} If the path is absolute or protocol-relative, resolves outside the base path, could be read as a
+ *   step out of it by a lenient server (see assertNoDecodedTraversal), or has malformed percent-encoding.
  */
 function resolveAgainstBase(path: unknown, base: URL): string {
     if (typeof path !== 'string') {
@@ -41,20 +87,9 @@ function resolveAgainstBase(path: unknown, base: URL): string {
     const resolved = new URL(parsed.replace(/^[\\/]/, ''), base);
     // base.href ends with '/', so this also rules out another host, port or scheme and sibling paths ('/v1-admin').
     if (!resolved.href.startsWith(base.href)) throw new TypeError(ESCAPES_BASE);
-    // The URL is inside the base, but servers do not all read it the same way: some decode %2F/%5C before resolving dot
-    // segments, IIS reads '\' as '/', Tomcat/Spring drop ';params' ('..;' is '..'). Judge the part below the base as such
-    // a server would: decoded once, split on both slashes, params stripped. An encoded slash inside an ordinary segment
-    // (GitLab's 'group%2Fproject') stays allowed.
-    let below: string;
-    try {
-        below = decodeURIComponent(resolved.pathname.slice(base.pathname.length));
-    } catch {
-        throw new TypeError(MALFORMED_ENCODING);
-    }
-    for (const segment of below.split(/[\\/]/)) {
-        const name = segment.split(';', 1)[0];
-        if (name === '.' || name === '..') throw new TypeError(ESCAPES_BASE);
-    }
+    // The URL is inside the base, but servers do not all read it the same way: some decode %2F/%5C (even twice) before
+    // resolving dot segments, IIS reads '\' as '/' and trims trailing dots and spaces, Tomcat/Spring drop ';params'.
+    assertNoDecodedTraversal(resolved.pathname.slice(base.pathname.length));
     return resolved.href;
 }
 

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { createSecureServer, createServer as createH2Server, type IncomingHttpHeaders } from 'node:http2';
+import { constants as h2constants, createSecureServer, createServer as createH2Server, type IncomingHttpHeaders } from 'node:http2';
 import type { AddressInfo, Socket } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { SecureHttpError, UltraTonNetworkError, UltraTonNetworkTimeoutError } from '../src/errors.ts';
@@ -22,13 +22,20 @@ type Echo = { method: string; path: string; headers: Record<string, string | und
 
 interface Fixture {
     base: string;
+    /** Paths the server started answering, in order. */
+    seen(): string[];
     /** Connections the server accepted so far. */
     accepted(): number;
     /** Connections the server still holds open. */
     open(): number;
 }
 
-/** Answers every request with its method, path and headers as JSON; `/slow/<ms>` answers after that many ms. */
+/**
+ * Answers every request with its method, path and headers as JSON; `/slow/<ms>` answers after that many ms.
+ * Special routes (both engines): `/partial` declares content-length 100, sends 7 bytes and hangs; `/short` declares
+ * content-length 20, sends 7 bytes and ends; `/not-modified` is a 304 and `/head-length` (for HEAD) a 200, both
+ * declaring content-length 20 with no body, as HTTP allows.
+ */
 const respond = (path: string, send: () => void) => {
     const slow = /^\/slow\/(\d+)/.exec(path);
     if (slow) setTimeout(send, Number(slow[1]));
@@ -51,31 +58,65 @@ function track(server: http.Server | ReturnType<typeof createH2Server>, t: TestC
 }
 
 async function startHttp1(t: TestContext): Promise<Fixture> {
+    const seen: string[] = [];
     const server = http.createServer((req, res) => {
         req.resume();
         req.on('end', () => respond(req.url ?? '/', () => {
+            seen.push(req.url ?? '/');
+            if (req.url === '/partial' || req.url === '/short') {
+                res.writeHead(200, { 'content-length': req.url === '/partial' ? '100' : '20' });
+                res.write('partial');
+                if (req.url === '/short') res.socket?.end();
+                return;
+            }
+            if (req.url === '/not-modified' || req.url === '/head-length') {
+                res.writeHead(req.url === '/not-modified' ? 304 : 200, { 'content-length': '20' });
+                res.end();
+                return;
+            }
             res.setHeader('content-type', 'application/json');
             res.end(JSON.stringify({ method: req.method, path: req.url, headers: req.headers }));
         }));
     });
     const counters = track(server, t);
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
-    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, ...counters };
+    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen: () => seen, ...counters };
 }
 
 async function startHttp2(t: TestContext): Promise<Fixture> {
+    const seen: string[] = [];
     const server = createH2Server();
     server.on('stream', (stream, headers: IncomingHttpHeaders) => {
         stream.resume();
         stream.on('end', () => respond(String(headers[':path']), () => {
             if (stream.closed) return;
+            const path = String(headers[':path']);
+            seen.push(path);
+            if (path === '/partial' || path === '/short') {
+                stream.respond({ ':status': 200, 'content-length': path === '/partial' ? '100' : '20' });
+                stream.write('partial');
+                if (path === '/short') stream.end();
+                return;
+            }
+            if (path === '/goaway') {
+                // A graceful GOAWAY that covers this stream: the server promises to finish it, then does.
+                stream.respond({ ':status': 200, 'content-length': '20' });
+                stream.write('partial');
+                stream.session?.goaway(h2constants.NGHTTP2_NO_ERROR, stream.id);
+                setTimeout(() => stream.end('-and-the-rest'), 50);
+                return;
+            }
+            if (path === '/not-modified' || path === '/head-length') {
+                stream.respond({ ':status': path === '/not-modified' ? 304 : 200, 'content-length': '20' }, { endStream: true });
+                return;
+            }
             stream.respond({ ':status': 200, 'content-type': 'application/json' });
             stream.end(JSON.stringify({ method: headers[':method'], path: headers[':path'], headers }));
         }));
     });
     const counters = track(server, t);
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
-    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, ...counters };
+    return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen: () => seen, ...counters };
 }
 
 /** A client that is always closed when the test ends, so no pooled socket outlives it. */
@@ -259,11 +300,76 @@ for (const [name, http2, start] of engines) {
             });
         });
 
+        it('close() while the body is still arriving rejects with "Client is closed", never a truncated success', async (t) => {
+            const f = await start(t);
+            const client = new UltraTonClient({ http2, permitReservedIps: true });
+
+            const pending = client.get(`${f.base}/partial`);
+            await until(() => f.seen().includes('/partial'));
+            await new Promise(r => setTimeout(r, 50)); // headers and the first 7 bytes reach the client
+            await client.close();
+
+            await assert.rejects(pending, (err: Error) => {
+                assert.ok(err instanceof SecureHttpError && !(err instanceof UltraTonNetworkError), `${err.name}: ${err.message}`);
+                assert.equal(err.message, 'UltraTon: Client is closed.');
+                return true;
+            });
+        });
+
+        it('a body shorter than its content-length rejects as a reset connection', async (t) => {
+            const f = await start(t);
+            const client = clientFor(t, { http2, permitReservedIps: true });
+            await assert.rejects(client.get(`${f.base}/short`), (err: Error & { code?: string }) => {
+                assert.ok(err instanceof UltraTonNetworkError, `${err.name}: ${err.message}`);
+                assert.equal(err.message, 'UltraTon: Connection failed (ECONNRESET).');
+                assert.equal(err.code, 'ECONNRESET');
+                return true;
+            });
+        });
+
+        it('HEAD and 304 declaring a content-length without a body still resolve', async (t) => {
+            const f = await start(t);
+            const client = clientFor(t, { http2, permitReservedIps: true });
+            const head = await client.head(`${f.base}/head-length`);
+            assert.equal(head.statusCode, 200);
+            assert.equal(head.data.length, 0);
+            const notModified = await client.get(`${f.base}/not-modified`);
+            assert.equal(notModified.statusCode, 304);
+            assert.equal(notModified.data.length, 0);
+        });
+
+        it('options that are not plain objects throw instead of being silently stripped', async (t) => {
+            const f = await start(t);
+            class ClientOpts { get http2() { return true; } }
+            assert.throws(() => new UltraTonClient(new ClientOpts() as any), { name: 'TypeError', message: 'UltraTon: Options must be a plain object.' });
+            assert.throws(() => new UltraTonClient(Object.create({ http2 }) as any), { name: 'TypeError', message: 'UltraTon: Options must be a plain object.' });
+            assert.throws(() => new UltraTonClient({ tls: new (class { ca = CA })() } as any), { name: 'TypeError', message: 'UltraTon: Options must be a plain object.' });
+
+            // A null-prototype object is plain.
+            const client = clientFor(t, Object.assign(Object.create(null), { http2, permitReservedIps: true }));
+            class RequestOpts { permitReservedIps = true; }
+            await assert.rejects(client.get(`${f.base}/`, new RequestOpts() as any), { name: 'TypeError', message: 'UltraTon: Options must be a plain object.' });
+            assert.equal((await client.get(`${f.base}/ok`, Object.assign(Object.create(null), { timeoutMs: 2000 }))).statusCode, 200);
+            assert.deepEqual(f.seen(), ['/ok']);
+        });
+
         it('rejects percent-encoded and ;-param traversal under baseUrl; encoded slashes inside a segment still work', async (t) => {
             const f = await start(t);
             const client = clientFor(t, { http2, permitReservedIps: true, baseUrl: `${f.base}/api/v1/` });
 
-            for (const path of ['..%2fadmin', '..%2F..%2Fadmin', '%2e%2e%2fadmin', '%2e%2E%2fadmin', '..%5cadmin', '..;/admin', 'x/..;jsessionid=1/..;/admin', '.;/admin', 'a/%2e%2e%2f%2e%2e%2fadmin']) {
+            const traversals = [
+                '..%2fadmin', '..%2F..%2Fadmin', '%2e%2e%2fadmin', '%2e%2E%2fadmin', '..%5cadmin', '..;/admin',
+                'x/..;jsessionid=1/..;/admin', '.;/admin', 'a/%2e%2e%2f%2e%2e%2fadmin',
+                // double (and deeper) encoding
+                '%252e%252e%252fadmin', '%25252e%25252e%25252fadmin', '%252e%252e%252f%25admin',
+                // unicode lookalikes: fullwidth dot, two-dot leader, fullwidth slash, division slash, small reverse solidus, reverse solidus operator
+                '\uFF0E\uFF0E/admin', '\u2025/admin', '..\uFF0Fadmin', '..\u2215admin', '..\uFE68admin', '..\u29F5admin',
+                // trailing junk a lenient server trims
+                '..%00/admin', '..%20/admin', '..%09/admin', '...%2fadmin', '.. ./admin', '..%2e%20/admin', '..%7f/admin',
+                // an encoded query or fragment ends the segment for some servers
+                '..%3f/admin', '..%23', '..%3fx=1/admin',
+            ];
+            for (const path of traversals) {
                 await assert.rejects(client.get(path), (err: Error) => {
                     assert.ok(err instanceof TypeError, `${JSON.stringify(path)} -> ${err.message}`);
                     assert.equal(err.message, 'UltraTon: Request path escapes baseUrl.');
@@ -271,11 +377,16 @@ for (const [name, http2, start] of engines) {
                 });
             }
             await assert.rejects(client.get('bad%zzencoding'), { name: 'TypeError', message: 'UltraTon: Request path has malformed percent-encoding.' });
+            // Still decoding after 5 passes: refused rather than guessed.
+            await assert.rejects(client.get('%25252525252e%25252525252e/admin'), { name: 'TypeError', message: 'UltraTon: Request path escapes baseUrl.' });
             assert.equal(f.accepted(), 0);
 
             assert.equal((await client.get('group%2Fproject/issues')).json<Echo>().path, '/api/v1/group%2Fproject/issues');
             assert.equal((await client.get('a/b/c;v=1')).json<Echo>().path, '/api/v1/a/b/c;v=1');
             assert.equal((await client.get('.well-known/x')).json<Echo>().path, '/api/v1/.well-known/x');
+            assert.equal((await client.get('files/...')).json<Echo>().path, '/api/v1/files/...');
+            assert.equal((await client.get('100%25')).json<Echo>().path, '/api/v1/100%25');
+            assert.equal((await client.get('a..b/c.d./..e')).json<Echo>().path, '/api/v1/a..b/c.d./..e');
         });
 
         it('a null request option throws instead of taking the client default', async (t) => {
@@ -327,6 +438,18 @@ describe('UltraTonClient http2: true', () => {
         const res = await client.get(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
         assert.equal(res.text(), 'h2');
         assert.equal(streams, 1);
+    });
+
+    it('a graceful GOAWAY drains the in-flight stream (no truncated success) and the next request opens a new session', async (t) => {
+        const f = await startHttp2(t);
+        const client = clientFor(t, { http2: true, permitReservedIps: true });
+
+        const res = await client.get(`${f.base}/goaway`);
+        assert.equal(res.statusCode, 200);
+        assert.equal(res.text(), 'partial-and-the-rest');
+
+        assert.equal((await client.get(`${f.base}/after`)).statusCode, 200);
+        assert.equal(f.accepted(), 2, 'the session that got GOAWAY left the pool');
     });
 });
 

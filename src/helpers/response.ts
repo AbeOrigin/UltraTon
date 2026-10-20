@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Buffer } from "node:buffer";
-import { UltraTonParseError } from "../errors.ts";
+import { UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
 import type { UltraTonResponse } from "../types/request-response.ts";
 
 export const secureReviver = (key: string, value: any) => {
@@ -9,6 +9,23 @@ export const secureReviver = (key: string, value: any) => {
   }
   return value;
 };
+
+/**
+ * The exact body length a response promises with `content-length`, or `undefined` when none applies: HEAD, 1xx, 204
+ * and 304 responses carry no body whatever the header says, and an absent or malformed header promises nothing.
+ * Both engines compare it with the bytes received, so a response cut short never resolves as a success.
+ */
+export function declaredBodyLength(method: string | undefined, statusCode: number, headers: IncomingHttpHeaders): number | undefined {
+  if (method === "HEAD" || statusCode < 200 || statusCode === 204 || statusCode === 304) return undefined;
+  const raw = headers["content-length"];
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return undefined;
+  const length = Number(raw);
+  return Number.isSafeInteger(length) ? length : undefined;
+}
+
+/** The error both engines give a response that ended before (or beyond) the body it promised. */
+export const incompleteResponse = (cause?: unknown) =>
+  new UltraTonNetworkError("UltraTon: Connection failed (ECONNRESET).", { code: "ECONNRESET", cause });
 
 /**
  * Builds the response both engines hand to the caller. The body stays a raw Buffer: JSON is parsed only when

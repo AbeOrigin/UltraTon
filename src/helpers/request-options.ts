@@ -192,8 +192,15 @@ function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
  * A copy of the object's own enumerable properties on a null-prototype object. Every options object is read through
  * one: a property inherited from a polluted `Object.prototype` (`baseUrl`, `tls`, `permitReservedIps`, `auth`, ...)
  * must never be taken for an option.
+ * @throws {TypeError} If the object is not plain (its prototype is neither `Object.prototype` nor `null`): a class
+ *   instance or `Object.create(proto)` keeps options in getters or on its prototype, which would otherwise be dropped
+ *   silently (a `get http2() { return true }` giving an HTTP/1 client).
  */
 function ownOptions<T extends object>(options: T): T {
+    const proto: unknown = Object.getPrototypeOf(options);
+    if (proto !== Object.prototype && proto !== null) {
+        throw new TypeError('UltraTon: Options must be a plain object.');
+    }
     const own = Object.create(null) as Record<string, unknown>;
     for (const key of Object.keys(options)) own[key] = (options as Record<string, unknown>)[key];
     return own as T;
@@ -212,7 +219,8 @@ export function withMethod(method: string, options: unknown): InternalRequestOpt
     if (Object.hasOwn(options, 'method')) {
         throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
     }
-    return ownOptions({ ...options, method });
+    // Copied from the caller's object itself, so a non-plain one is refused before a spread could flatten it.
+    return Object.assign(ownOptions(options), { method });
 }
 
 /**

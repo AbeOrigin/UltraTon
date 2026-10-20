@@ -15,13 +15,16 @@ import type {
 import {
   SecureHttpError,
   UltraTonMemoryError,
-  UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
   UltraTonRedirectError,
   toNetworkError,
 } from "../errors.ts";
 import { HTTP_CODES_REDIRECTS } from "../constants.ts";
-import { createResponse } from "../helpers/response.ts";
+import {
+  createResponse,
+  declaredBodyLength,
+  incompleteResponse,
+} from "../helpers/response.ts";
 import {
   basicAuthorization,
   buildSafeRequestOptions,
@@ -349,18 +352,27 @@ export class Http2Engine {
         chunks.push(chunk);
       });
 
-      // A response that ended without a status, or on a stream that was reset or aborted, is a lost response, not a
-      // successful one: resolving it would hand the caller a statusless or truncated body.
-      const lostResponse = (cause?: unknown) =>
-        new UltraTonNetworkError("UltraTon: Connection failed (ECONNRESET).", {
-          code: "ECONNRESET",
-          cause,
-        });
+      // A response that ended without a status, on a stream that was reset or aborted, or with fewer or more bytes than
+      // its content-length, is a lost response, not a successful one: resolving it would hand the caller a statusless
+      // or truncated body.
+      const lostResponse = incompleteResponse;
+      const declared = () =>
+        statusCode === undefined || Number.isNaN(statusCode)
+          ? undefined
+          : declaredBodyLength(String(pseudoHeaders[":method"]), statusCode, responseHeaders);
 
       stream.on("end", () => {
         if (settled) return;
         settled = true;
         clearTimeout(streamTimer);
+
+        // close() ends a stream whose body is still arriving with a clean NO_ERROR: that is not a complete response.
+        if (this.#closed) return reject(clientClosed());
+
+        const expected = declared();
+        if (expected !== undefined && totalBytes !== expected) {
+          return reject(lostResponse());
+        }
 
         if (
           stream.aborted ||
@@ -381,6 +393,12 @@ export class Http2Engine {
         // A session that dies (e.g. ECONNREFUSED while connecting) cancels its streams with a generic
         // ERR_HTTP2_STREAM_CANCEL whose cause is the real error: report that one.
         const { code, cause } = err as NodeJS.ErrnoException;
+        // A body cut short of its content-length (nghttp2 resets such a stream itself) is the same incomplete response
+        // HTTP/1 reports; the original error stays reachable as `cause`.
+        const expected = declared();
+        if (expected !== undefined && totalBytes < expected) {
+          return reject(this.#orClosed(lostResponse(err)));
+        }
         // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
         reject(this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err)));
       });

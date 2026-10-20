@@ -82,6 +82,8 @@ const bareHostOf = (hostname: string): string => {
 
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
+  /** Sessions that got a GOAWAY: out of the pool, finishing their streams, still closed by closeAll(). Value: pool key. */
+  #draining: Map<ClientHttp2Session, string> = new Map();
   #pendingConnections: Map<string, Attempt> = new Map();
   readonly #tlsConfig?: SecureClientSessionOptions;
   readonly #connectFn: typeof nativeConnect;
@@ -113,7 +115,11 @@ export class Http2SessionManager {
     for (const [key, entry] of this.#sessions.entries()) {
       this.#destroySession(key, entry.session);
     }
+    for (const [session, key] of [...this.#draining]) {
+      this.#destroySession(key, session);
+    }
     this.#sessions.clear();
+    this.#draining.clear();
     this.#pendingConnections.clear();
   }
 
@@ -302,8 +308,12 @@ export class Http2SessionManager {
     newSession.on("error", () => this.#destroySession(key, newSession));
 
     newSession.setTimeout(IDLE_TIMEOUT);
-    newSession.on("goaway", () => this.#destroySession(key, newSession));
+    // A GOAWAY lets the streams it covers finish: destroying the session here would end them early, and a stream
+    // whose body was cut could look complete. Take it out of the pool so new requests open a fresh session, and close
+    // it gracefully (Node also destroys it by itself when the GOAWAY carries an error code).
+    newSession.on("goaway", () => this.#retireSession(key, newSession));
     newSession.on("close", () => {
+      this.#draining.delete(newSession);
       if (this.#sessions.get(key)?.session === newSession) {
         this.#sessions.delete(key);
       }
@@ -318,6 +328,20 @@ export class Http2SessionManager {
     this.#sessions.set(key, entry);
 
     return entry;
+  }
+
+  /** Removes a session from the pool and closes it gracefully: open streams finish, no new ones start. */
+  #retireSession(key: string, session: ClientHttp2Session): void {
+    if (this.#sessions.get(key)?.session === session) {
+      this.#sessions.delete(key);
+    }
+    if (session.destroyed) return;
+    this.#draining.set(session, key);
+    try {
+      if (!session.closed) session.close();
+    } catch {
+      /* Session might have already transitioned state */
+    }
   }
 
   /**
