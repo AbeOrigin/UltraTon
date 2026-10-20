@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A header key spelling the prototype in another case (`__PROTO__`, `Constructor`) was not dropped.** The check ran before the key was lowercased, so `__PROTO__` set the prototype of the sanitized headers object to its value; an array value then added inherited keys. All case variants are now dropped, like `__proto__`. The fuzzing review found it, and the header property now covers it.
+
 ### Added
 
+- **Property tests (fuzzing) for the parsers that face hostile input,** with no dependency: a seeded PRNG, generators built from the pieces real bypasses use, and a shrinker, in `__tests__/fuzz/`. They check that:
+  - no request path UltraTon accepts escapes `baseUrl` as a lenient server decodes it;
+  - IPv6 parsing gives exactly the written address in every spelling;
+  - header validation throws if and only if a key or value has CR/LF/NUL or a pseudo-header;
+  - against a hostile proxy splitting its answers at random points, a CONNECT or SOCKS5 tunnel opens on a valid answer, never on an invalid one or one followed by bytes in the same write, and never hangs.
+
+  `npm test` runs 200 cases per property with a fixed seed; a nightly workflow runs 5000 with a fresh one.
 - **Public SSRF corpus** in `compat/ssrf-corpus/`: 30 cases, each linked to its source (OWASP, PayloadsAllTheThings). They cover IP spellings, IPv6 forms (mapped, compatible, NAT64), `0.0.0.0` and private ranges, cloud metadata, internal DNS answers (including a mixed one and `.nip.io`), `localhost` variants, the userinfo trick, and 302/307/308/protocol-relative redirects. Every case declares the reason UltraTon must block it for, so a case blocked by an unrelated rule cannot hide a regression, and redirect cases check that the allowed first hop happened.
   - It runs against `UltraTonClient`, against axios, got and node-fetch through `createSecureAgents()`, and against those libraries and Node's `fetch` on their own.
   - A CI test fails if UltraTon stops blocking any case.

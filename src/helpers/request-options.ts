@@ -96,10 +96,11 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
     for (const key in rawHeaders) {
         if (!Object.prototype.hasOwnProperty.call(rawHeaders, key)) continue;
 
-        // Prototype pollution prevention
-        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-
+        // Prototype pollution prevention, on the lowercased key that is assigned below: '__PROTO__' would otherwise
+        // become sanitized['__proto__'] and set the prototype of the headers object.
         const lowerKey = key.toLowerCase();
+        if (lowerKey === '__proto__' || lowerKey === 'constructor' || lowerKey === 'prototype') continue;
+
         if (crlfRegex.test(lowerKey)) {
             throw new TypeError(`UltraTon: Header key '${key}' contains invalid CRLF characters.`);
         }
