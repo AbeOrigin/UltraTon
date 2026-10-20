@@ -617,27 +617,56 @@ function proxyOption(value: unknown): ProxyConfig | undefined {
     }
 
     const url = URL.canParse(raw.url as string) ? new URL(raw.url as string) : undefined;
-    if (!url || (url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname === '') {
-        throw new TypeError("UltraTon: Expected 'proxy' to be an http: or https: URL, such as 'http://egress.corp:3128'.");
+    if (!url || !PROXY_SCHEMES.includes(url.protocol) || url.hostname === '') {
+        throw new TypeError("UltraTon: Expected 'proxy' to be an http:, https:, socks5: or socks5h: URL, such as 'http://egress.corp:3128'.");
     }
     if (url.username !== '' || url.password !== '') {
         throw new TypeError("UltraTon: 'proxy' cannot contain credentials; pass them as proxy: { url, auth }.");
     }
-    if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || (raw.url as string).includes('?') || (raw.url as string).includes('#')) {
+    // A socks5: URL is not a special scheme, so its empty path stays '' where http's is '/'.
+    if ((url.pathname !== '/' && url.pathname !== '') || url.search !== '' || url.hash !== '' || (raw.url as string).includes('?') || (raw.url as string).includes('#')) {
         throw new TypeError("UltraTon: 'proxy' must be an origin only (no path, query or fragment).");
     }
     if (raw.resolve !== undefined && raw.resolve !== 'local' && raw.resolve !== 'proxy') {
         const received = typeof raw.resolve === 'string' ? `'${raw.resolve}'` : describeValue(raw.resolve);
         throw new TypeError(`UltraTon: Expected 'proxy.resolve' to be 'local' or 'proxy', received ${received}.`);
     }
+    const socks = url.protocol === 'socks5:' || url.protocol === 'socks5h:';
+    // socks5h: is curl's spelling of "the proxy resolves the name", the same as resolve: 'proxy'.
+    if (url.protocol === 'socks5h:' && raw.resolve === 'local') {
+        throw new TypeError("UltraTon: A socks5h: proxy resolves names itself; use socks5: with resolve: 'local', or drop 'resolve'.");
+    }
     validateType('proxy.auth', raw.auth, 'string');
+    if (socks && raw.auth !== undefined) assertSocksAuth(raw.auth as string);
+    if (socks && raw.ca !== undefined) {
+        throw new TypeError("UltraTon: 'proxy.ca' only applies to an https: proxy; a SOCKS5 proxy has no TLS of its own.");
+    }
     const ca = tlsMaterial('proxy.ca', raw.ca);
     return Object.freeze({
         url,
-        resolve: (raw.resolve ?? 'local') as ProxyConfig['resolve'],
+        kind: socks ? 'socks5' : 'connect',
+        resolve: (url.protocol === 'socks5h:' ? 'proxy' : raw.resolve ?? 'local') as ProxyConfig['resolve'],
         ...(raw.auth !== undefined ? { auth: raw.auth as string } : {}),
         ...(ca !== undefined ? { ca } : {}),
     });
+}
+
+const PROXY_SCHEMES = ['http:', 'https:', 'socks5:', 'socks5h:'];
+
+/**
+ * SOCKS5 username/password authentication (RFC 1929) carries each part as 1 to 255 bytes after a length byte.
+ * @throws {TypeError} When `auth` is not `user:password` with both parts in that range.
+ */
+function assertSocksAuth(auth: string): void {
+    const colon = auth.indexOf(':');
+    const user = colon === -1 ? auth : auth.slice(0, colon);
+    const password = colon === -1 ? '' : auth.slice(colon + 1);
+    for (const part of [user, password]) {
+        const bytes = Buffer.byteLength(part);
+        if (bytes < 1 || bytes > 255) {
+            throw new TypeError("UltraTon: A SOCKS5 'proxy.auth' must be 'user:password', each part from 1 to 255 bytes.");
+        }
+    }
 }
 
 /**

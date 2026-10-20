@@ -65,7 +65,7 @@ await api.close(); // when the client is no longer needed
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
-| `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound proxy for `https:` targets, tunnelled with CONNECT to the validated IP (see [Proxy](#proxy)). |
+| `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
 
 **Request options** are the second argument of every method:
@@ -249,7 +249,7 @@ Every attempt is a full request: a new connection resolves and validates DNS aga
 
 ### Proxy
 
-`proxy` sends every `https:` request through an HTTP CONNECT proxy, on both engines. The SSRF checks run before the proxy is ever contacted, and the proxy cannot point the connection anywhere else:
+`proxy` sends every `https:` request through an HTTP CONNECT or a SOCKS5 proxy, on both engines. The SSRF checks run before the proxy is ever contacted, and the proxy cannot point the connection anywhere else:
 
 ```ts
 const client = new UltraTonClient({
@@ -271,7 +271,15 @@ new UltraTonClient({ proxy: { url: 'http://smokescreen:4750', resolve: 'proxy' }
 
 > ⚠️ With `resolve: 'proxy'` the proxy resolves the name, so **SSRF protection for hostnames depends on the proxy**. UltraTon still rejects reserved IP literals, bad schemes and credentials in URLs, but it cannot pin DNS. Use it only with a proxy that enforces its own egress policy.
 
-SOCKS5 proxies are not supported yet; they are planned.
+**SOCKS5.** A `socks5:` URL (default port 1080) tunnels the same way: UltraTon resolves and validates the name and sends the IP as the SOCKS5 address (IPv4 or IPv6), never the name. `auth` is SOCKS5 username/password (RFC 1929, each part 1 to 255 bytes). `socks5h:` is the SOCKS5 spelling of `resolve: 'proxy'`: the name is sent and the proxy resolves it, with the same warning as above. `proxy.ca` does not apply, since SOCKS5 has no TLS of its own; TLS to the target runs through the tunnel as with CONNECT.
+
+```ts
+new UltraTonClient({ proxy: { url: 'socks5://bastion.corp:1080', auth: 'svc:s3cret' } });
+```
+
+A SOCKS5 refusal rejects with `ERR_ULTRATON_PROXY` and the reason (`connection refused`, `host unreachable`, `authentication failed`, …). These are final: a refused login, no acceptable authentication method, the proxy's ruleset and "command not supported". Any other reply (unreachable, refused, general failure, …) moves on to the next validated address. SOCKS4, `BIND` and `UDP ASSOCIATE` are not supported.
+
+> ⚠️ SOCKS5 has no encryption of its own: the username and password in `auth` cross the network to the proxy in cleartext. The request itself is safe (TLS runs end to end through the tunnel), but only use SOCKS5 credentials over a network you trust, or reach the proxy through an SSH tunnel.
 
 ### baseUrl
 
@@ -281,7 +289,7 @@ A path that would land outside the base throws as well. That includes encoded an
 
 ## Limits and things to know
 
-- **Proxies are only used when you set `proxy`.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool. Only HTTP CONNECT proxies are supported, not SOCKS (yet). The CONNECT handshake for each address gives up after 10 s, or sooner through `timeoutMs`, `signal` or `close()`; `socketTimeoutMs` only starts once the tunnel is up.
+- **Proxies are only used when you set `proxy`.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool. HTTP CONNECT and SOCKS5 proxies are supported (no SOCKS4). The proxy handshake for each address gives up after 10 s, or sooner through `timeoutMs`, `signal` or `close()`; `socketTimeoutMs` only starts once the tunnel is up.
 - **The allowlist keeps IPv4 and IPv6 apart.** An IPv6 entry never covers an IPv4 address, and an IPv6 address that embeds an IPv4 (`::ffff:10.0.0.1`, NAT64) is judged only by your IPv4 entries. A hostname entry trusts whatever that name resolves to, so prefer IPs or CIDRs.
 - **Redirects into allowlisted ranges are followed.** A public server can redirect to an address your `permitReservedIps` allows. Keep allowlists narrow, or keep `maxRedirects: 0` on clients that allow private ranges.
 - **Redirects are not bound to `baseUrl`.** A followed redirect can go to another host, and every hop is still checked against the SSRF policy. Redirects are off by default.

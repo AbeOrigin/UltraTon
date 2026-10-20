@@ -13,7 +13,8 @@ import net, { type AddressInfo } from 'node:net';
 import tls from 'node:tls';
 import { createSecureServer } from 'node:http2';
 import { UltraTonClient } from '../src/http-client.ts';
-import { mockDns, RESERVED, v4 } from './fixtures/net-fixtures.ts';
+import { ipv6Available, mockDns, RESERVED, v4, v6 } from './fixtures/net-fixtures.ts';
+import { ipv6Bytes } from '../src/proxy/tunnel.ts';
 
 const fixture = (name: string) => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 const CERT = fixture('localhost-cert.pem');
@@ -99,7 +100,7 @@ async function connectProxy(t: TestContext, opts: { status?: number; tlsProxy?: 
 }
 
 /** An HTTPS (or h2) target for `localhost` that answers with the headers it got; `redirect` makes it a 302 to that URL. */
-async function tlsTarget(t: TestContext, http2: boolean, redirect?: string) {
+async function tlsTarget(t: TestContext, http2: boolean, redirect?: string, host = '127.0.0.1') {
     const handler = (req: http.IncomingMessage | any, res: http.ServerResponse | any) => {
         if (redirect) { res.writeHead(302, { location: redirect }); res.end(); return; }
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -108,7 +109,7 @@ async function tlsTarget(t: TestContext, http2: boolean, redirect?: string) {
     const server = http2 ? createSecureServer({ cert: CERT, key: KEY }, handler) : https.createServer({ cert: CERT, key: KEY }, handler);
     const sockets = new Set<net.Socket>();
     server.on('secureConnection', (s: net.Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
-    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    await new Promise<void>(r => server.listen(0, host, r));
     t.after(async () => {
         for (const s of sockets) s.destroy();
         await new Promise<void>(r => server.close(() => r()));
@@ -305,8 +306,16 @@ describe('proxy (both engines)', () => {
 
     it('validates the proxy option on the constructor', () => {
         const bad: Array<[unknown, RegExp]> = [
-            ['ftp://proxy:21', /^UltraTon: Expected 'proxy' to be an http: or https: URL/],
-            ['not a url', /^UltraTon: Expected 'proxy' to be an http: or https: URL/],
+            ['ftp://proxy:21', /^UltraTon: Expected 'proxy' to be an http:, https:, socks5: or socks5h: URL/],
+            ['not a url', /^UltraTon: Expected 'proxy' to be an http:, https:, socks5: or socks5h: URL/],
+            ['socks4://proxy:1080', /socks5: or socks5h: URL/],
+            ['socks5://user:pass@proxy:1080', /cannot contain credentials/],
+            ['socks5://proxy:1080/x', /must be an origin only/],
+            [{ url: 'socks5h://proxy:1080', resolve: 'local' }, /^UltraTon: A socks5h: proxy resolves names itself; use socks5: with resolve: 'local', or drop 'resolve'.$/],
+            [{ url: 'socks5://proxy:1080', ca: 'x' }, /^UltraTon: 'proxy.ca' only applies to an https: proxy; a SOCKS5 proxy has no TLS of its own.$/],
+            [{ url: 'socks5://proxy:1080', auth: 'nopassword' }, /^UltraTon: A SOCKS5 'proxy.auth' must be 'user:password', each part from 1 to 255 bytes.$/],
+            [{ url: 'socks5://proxy:1080', auth: `${'u'.repeat(256)}:p` }, /each part from 1 to 255 bytes/],
+            [{ url: 'socks5://proxy:1080', auth: ':p' }, /each part from 1 to 255 bytes/],
             ['http://user:pass@proxy:3128', /^UltraTon: 'proxy' cannot contain credentials; pass them as proxy: \{ url, auth \}\.$/],
             ['http://proxy:3128/path', /^UltraTon: 'proxy' must be an origin only \(no path, query or fragment\)\.$/],
             ['http://proxy:3128/?a=1', /must be an origin only/],
@@ -326,5 +335,262 @@ describe('proxy (both engines)', () => {
         await assert.rejects(new UltraTonClient().get('https://example.com/', { proxy: 'http://p:1' } as any), {
             message: "UltraTon: Unknown option 'proxy'. 'proxy' is an option of the client constructor, not of a request.",
         });
+    });
+});
+
+/** The 16 bytes of an IPv6 address in full form (no `::`), as a SOCKS5 request carries it. */
+const ipv6Text = (raw: Buffer) => Array.from({ length: 8 }, (_, i) => raw.readUInt16BE(i * 2).toString(16)).join(':');
+
+type SocksSeen = { methods: number[]; user?: string; pass?: string; atyp: number; host: string; port: number };
+
+/**
+ * A SOCKS5 proxy (RFC 1928/1929) on loopback that records each request. `auth`: the only accepted `user:password`
+ * (method 2 required). `refuse`: target host → reply code. `methodReply`: forces the method answer (0xff: none).
+ * `splitReply`: the success reply goes out one byte at a time. `trailing`: a stray byte follows it.
+ */
+async function socksProxy(t: TestContext, opts: { auth?: string; refuse?: Record<string, number>; methodReply?: number; hang?: boolean; splitReply?: boolean; trailing?: boolean } = {}) {
+    const seen: SocksSeen[] = [];
+    let connections = 0;
+    const clients = new Set<net.Socket>();
+    const sockets = new Set<net.Socket>();
+    const track = (s: net.Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); s.on('error', () => undefined); };
+    const server = net.createServer(client => {
+        connections++;
+        track(client);
+        clients.add(client);
+        client.on('close', () => clients.delete(client));
+        let buffered = Buffer.alloc(0);
+        let stage: 'greeting' | 'auth' | 'request' = 'greeting';
+        const record: Partial<SocksSeen> = {};
+        const onData = (chunk: Buffer) => {
+            buffered = Buffer.concat([buffered, chunk]);
+            for (;;) {
+                if (stage === 'greeting') {
+                    if (buffered.length < 2 || buffered.length < 2 + buffered[1]) return;
+                    record.methods = [...buffered.subarray(2, 2 + buffered[1])];
+                    buffered = buffered.subarray(2 + buffered[1]);
+                    if (opts.hang) return;
+                    const method = opts.methodReply ?? (opts.auth ? 2 : 0);
+                    client.write(Buffer.from([5, method]));
+                    if (method === 0xff) { client.end(); return; }
+                    stage = method === 2 ? 'auth' : 'request';
+                    continue;
+                }
+                if (stage === 'auth') {
+                    if (buffered.length < 2) return;
+                    const ulen = buffered[1];
+                    if (buffered.length < 3 + ulen || buffered.length < 3 + ulen + buffered[2 + ulen]) return;
+                    const plen = buffered[2 + ulen];
+                    record.user = buffered.subarray(2, 2 + ulen).toString();
+                    record.pass = buffered.subarray(3 + ulen, 3 + ulen + plen).toString();
+                    buffered = buffered.subarray(3 + ulen + plen);
+                    const ok = `${record.user}:${record.pass}` === opts.auth;
+                    client.write(Buffer.from([1, ok ? 0 : 1]));
+                    if (!ok) { client.end(); return; }
+                    stage = 'request';
+                    continue;
+                }
+                if (buffered.length < 5) return;
+                const atyp = buffered[3];
+                const length = atyp === 1 ? 4 : atyp === 4 ? 16 : 1 + buffered[4];
+                if (buffered.length < 4 + length + 2) return;
+                const raw = buffered.subarray(4, 4 + length);
+                const host = atyp === 1 ? [...raw].join('.') : atyp === 4 ? ipv6Text(raw) : raw.subarray(1).toString();
+                const port = buffered.readUInt16BE(4 + length);
+                seen.push({ ...record, atyp, host, port } as SocksSeen);
+                client.off('data', onData);
+                client.pause();
+                const code = opts.refuse?.[host];
+                if (code !== undefined) { client.end(Buffer.from([5, code, 0, 1, 0, 0, 0, 0, 0, 0])); return; }
+                const upstream = net.connect({ host: host === 'localhost' ? '127.0.0.1' : host, port });
+                track(upstream);
+                upstream.once('error', () => { if (!client.destroyed) client.end(Buffer.from([5, 5, 0, 1, 0, 0, 0, 0, 0, 0])); });
+                upstream.once('connect', () => {
+                    // An ATYP 3 bound address, so the reply length depends on it.
+                    const reply = Buffer.from([5, 0, 0, 3, 4, ...Buffer.from('bind'), 0, 0, ...(opts.trailing ? [0x16] : [])]);
+                    if (opts.splitReply) for (const byte of reply) client.write(Buffer.from([byte]));
+                    else client.write(reply);
+                    client.pipe(upstream);
+                    upstream.pipe(client);
+                    upstream.on('close', () => client.destroy());
+                    client.on('close', () => upstream.destroy());
+                });
+                return;
+            }
+        };
+        client.on('data', onData);
+    });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    t.after(async () => {
+        for (const s of sockets) s.destroy();
+        await new Promise<void>(r => server.close(() => r()));
+    });
+    const port = (server.address() as AddressInfo).port;
+    return { port, url: `socks5://127.0.0.1:${port}`, seen, connections: () => connections, openClients: () => clients.size };
+}
+
+for (const http2 of [false, true]) {
+    describe(`SOCKS5 proxy (${http2 ? 'HTTP/2' : 'HTTP/1'})`, () => {
+        it('sends the validated IPv4 address (ATYP 1), never the name, offering no authentication', async (t) => {
+            mockDns(t, { localhost: [v4('127.0.0.1')] });
+            const proxy = await socksProxy(t);
+            const port = await tlsTarget(t, http2);
+            assert.equal((await proxied(t, http2, proxy.url).get(`https://localhost:${port}/`)).statusCode, 200);
+            assert.deepEqual(proxy.seen.map(s => [s.atyp, s.host, s.port, s.methods]), [[1, '127.0.0.1', port, [0]]]);
+        });
+
+        it('authenticates with username/password (RFC 1929) when auth is set', async (t) => {
+            mockDns(t, { localhost: [v4('127.0.0.1')] });
+            const proxy = await socksProxy(t, { auth: 'svc:s3cret' });
+            const port = await tlsTarget(t, http2);
+            const res = await proxied(t, http2, { url: proxy.url, auth: 'svc:s3cret' }).get(`https://localhost:${port}/`);
+            assert.equal(res.statusCode, 200);
+            assert.deepEqual([proxy.seen[0].methods, proxy.seen[0].user, proxy.seen[0].pass], [[0, 2], 'svc', 's3cret']);
+        });
+
+        it('a rejected login, or no acceptable method, is final: no other address is tried', async (t) => {
+            mockDns(t, { localhost: [v4('127.0.0.9'), v4('127.0.0.1')] });
+            const wrong = await socksProxy(t, { auth: 'svc:right' });
+            await assert.rejects(proxied(t, http2, { url: wrong.url, auth: 'svc:wrong' }).get('https://localhost:9/'), {
+                code: 'ERR_ULTRATON_PROXY', message: 'UltraTon: The SOCKS proxy refused the connection (authentication failed).',
+            });
+            assert.equal(wrong.connections(), 1);
+            const none = await socksProxy(t, { methodReply: 0xff });
+            await assert.rejects(proxied(t, http2, none.url).get('https://localhost:9/'), {
+                code: 'ERR_ULTRATON_PROXY', message: 'UltraTon: The SOCKS proxy refused the connection (no acceptable authentication method).',
+            });
+            assert.equal(none.connections(), 1);
+        });
+
+        it('tries the next validated address on host unreachable, but not past the ruleset', async (t) => {
+            mockDns(t, { localhost: [v4('127.0.0.9'), v4('127.0.0.1')] });
+            const port = await tlsTarget(t, http2);
+            const unreachable = await socksProxy(t, { refuse: { '127.0.0.9': 4 } });
+            assert.equal((await proxied(t, http2, unreachable.url).get(`https://localhost:${port}/`)).statusCode, 200);
+            assert.deepEqual(unreachable.seen.map(s => s.host), ['127.0.0.9', '127.0.0.1']);
+
+            const ruleset = await socksProxy(t, { refuse: { '127.0.0.9': 2 } });
+            await assert.rejects(proxied(t, http2, ruleset.url).get(`https://localhost:${port}/`), {
+                code: 'ERR_ULTRATON_PROXY', message: 'UltraTon: The SOCKS proxy refused the connection (connection not allowed by ruleset).',
+            });
+            assert.equal(ruleset.seen.length, 1);
+        });
+
+        it('blocks SSRF before the SOCKS proxy is ever contacted', async (t) => {
+            mockDns(t, { 'internal.example': [v4('10.0.0.1')] });
+            const proxy = await socksProxy(t);
+            const client = proxied(t, http2, proxy.url, { permitReservedIps: false });
+            await assert.rejects(client.get('https://internal.example/'), (err: Error) => RESERVED.test(err.message));
+            await assert.rejects(client.get('https://10.0.0.1/'), (err: Error) => RESERVED.test(err.message));
+            assert.equal(proxy.connections(), 0);
+        });
+
+        it('socks5h: sends the name (ATYP 3) and resolves nothing locally', async (t) => {
+            mockDns(t, {});
+            const proxy = await socksProxy(t);
+            const port = await tlsTarget(t, http2);
+            const client = proxied(t, http2, `socks5h://127.0.0.1:${proxy.port}`);
+            assert.equal((await client.get(`https://localhost:${port}/`)).statusCode, 200);
+            assert.deepEqual(proxy.seen.map(s => [s.atyp, s.host]), [[3, 'localhost']]);
+        });
+
+        it("checks an IP-literal target's certificate against the IP through a SOCKS proxy reached by name", async (t) => {
+            const proxy = await socksProxy(t);
+            const cert = { cert: fixture('dns-only-cert.pem'), key: fixture('dns-only-key.pem') };
+            const answer = (_req: unknown, res: http.ServerResponse) => res.end('mitm');
+            const target = http2 ? createSecureServer(cert, answer as any) : https.createServer(cert, answer);
+            await new Promise<void>(r => target.listen(0, '127.0.0.1', r));
+            t.after(() => new Promise<void>(r => target.close(() => r())));
+            const client = proxied(t, http2, `socks5://localhost:${proxy.port}`, { tls: { ca: fixture('dns-only-cert.pem') } });
+            await assert.rejects(client.get(`https://127.0.0.1:${(target.address() as AddressInfo).port}/`), /TLS handshake failed/);
+            assert.equal(proxy.seen.length, 1);
+        });
+
+        it('a SOCKS proxy that never answers is bounded by timeoutMs, and close() ends it', async (t) => {
+            mockDns(t, { localhost: [v4('127.0.0.1')] });
+            const proxy = await socksProxy(t, { hang: true });
+            const client = proxied(t, http2, proxy.url, { timeoutMs: 300 });
+            const started = Date.now();
+            await assert.rejects(client.get('https://localhost:9/'), { code: 'ERR_ULTRATON_TIMEOUT' });
+            assert.ok(Date.now() - started < 1500, `took ${Date.now() - started}ms`);
+            await eventually(() => proxy.openClients() === 0);
+
+            const waiting = proxied(t, http2, proxy.url, { timeoutMs: 0 });
+            const pending = waiting.get('https://localhost:9/');
+            await eventually(() => proxy.openClients() === 1);
+            await waiting.close();
+            await assert.rejects(pending, { message: 'UltraTon: Client is closed.' });
+            await eventually(() => proxy.openClients() === 0);
+        });
+
+        it('sends a validated IPv6 address as ATYP 4', { skip: !ipv6Available && 'no IPv6 loopback' }, async (t) => {
+            mockDns(t, { localhost: [v6('::1')] });
+            const proxy = await socksProxy(t);
+            const port = await tlsTarget(t, http2, undefined, '::1');
+            const res = await proxied(t, http2, proxy.url, { permitReservedIps: ['::1'] }).get(`https://localhost:${port}/`);
+            assert.equal(res.statusCode, 200);
+            assert.deepEqual(proxy.seen.map(s => [s.atyp, s.host]), [[4, '0:0:0:0:0:0:0:1']]);
+        });
+    });
+}
+
+describe('SOCKS5 proxy (protocol edges)', () => {
+    it('reads a reply that arrives one byte at a time, with an ATYP 3 bound address', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        const proxy = await socksProxy(t, { splitReply: true });
+        const port = await tlsTarget(t, false);
+        assert.equal((await proxied(t, false, proxy.url).get(`https://localhost:${port}/`)).statusCode, 200);
+    });
+
+    it('refuses a byte past the reply as malformed', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        const proxy = await socksProxy(t, { trailing: true });
+        const port = await tlsTarget(t, false);
+        await assert.rejects(proxied(t, false, proxy.url).get(`https://localhost:${port}/`), {
+            code: 'ERR_ULTRATON_PROXY', message: 'UltraTon: The proxy sent a malformed response.',
+        });
+    });
+
+    it('sends no credentials when the proxy picks "no authentication"', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        const proxy = await socksProxy(t, { methodReply: 0 });
+        const port = await tlsTarget(t, false);
+        assert.equal((await proxied(t, false, { url: proxy.url, auth: 'svc:s3cret' }).get(`https://localhost:${port}/`)).statusCode, 200);
+        assert.deepEqual([proxy.seen[0].methods, proxy.seen[0].user], [[0, 2], undefined]);
+    });
+
+    it('encodes multibyte credentials by bytes, splitting at the first colon', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        const proxy = await socksProxy(t, { auth: 'üser:pa:ss€' });
+        const port = await tlsTarget(t, false);
+        assert.equal((await proxied(t, false, { url: proxy.url, auth: 'üser:pa:ss€' }).get(`https://localhost:${port}/`)).statusCode, 200);
+        assert.deepEqual([proxy.seen[0].user, proxy.seen[0].pass], ['üser', 'pa:ss€']);
+    });
+
+    it('a name too long for SOCKS5 throws before the proxy is contacted', async (t) => {
+        const proxy = await socksProxy(t);
+        const long = Array.from({ length: 5 }, () => 'a'.repeat(60)).join('.');
+        for (const http2 of [false, true]) {
+            await assert.rejects(proxied(t, http2, `socks5h://127.0.0.1:${proxy.port}`).get(`https://${long}/`), {
+                name: 'TypeError', message: 'UltraTon: The hostname is too long for a SOCKS5 proxy (at most 255 bytes).',
+            });
+        }
+        assert.equal(proxy.connections(), 0);
+    });
+});
+
+describe('ipv6Bytes', () => {
+    it('expands every IPv6 form a resolver can return', () => {
+        const hex = (ip: string) => ipv6Bytes(ip).toString('hex');
+        assert.equal(hex('::1'), '00000000000000000000000000000001');
+        assert.equal(hex('::'), '0'.repeat(32));
+        assert.equal(hex('2001:db8::8a2e:370:7334'), '20010db80000000000008a2e03707334');
+        assert.equal(hex('1::'), '0001' + '0'.repeat(28));
+        assert.equal(hex('::ffff:10.0.0.1'), '00000000000000000000ffff0a000001');
+        assert.equal(hex('fe80::1%eth0'), 'fe800000000000000000000000000001');
+        assert.equal(hex('1:2:3:4:5:6:7:8'), '00010002000300040005000600070008');
+        assert.equal(hex('1:2:3:4:5:6:1.2.3.4'), '00010002000300040005000601020304');
+        assert.equal(hex('::FFFF:7F00:1'), '00000000000000000000ffff7f000001');
+        assert.throws(() => ipv6Bytes('not-an-ip'), TypeError);
     });
 });
