@@ -26,6 +26,8 @@ const TYPES = [
   'UltraTonClientOptions',
   'UltraTonRequestOptions',
   'UltraTonResponse',
+  'UltraTonRetryOptions',
+  'UltraTonRetryInfo',
 ];
 // Exports that existed before 2.0 and must stay gone.
 const REMOVED = ['UltraTonHTTP2'];

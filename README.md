@@ -65,7 +65,7 @@ await api.close(); // when the client is no longer needed
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
-| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps` | | Defaults for every request. A request that sets the same option wins; headers are merged key by key. |
+| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -84,6 +84,7 @@ await api.close(); // when the client is no longer needed
 | `decompress` | `boolean` | `true`: sends `accept-encoding` (unless you set one) and decodes the body. `false` leaves `data` as received. |
 | `maxRedirects` | integer 0–20 | `0` |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
+| `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
 
 **Response:**
 
@@ -108,7 +109,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
 | `SecureHttpError` | A request on a closed client | — |
-| `UltraTonNetworkTimeoutError` | `timeoutMs` or `socketTimeoutMs` expired | — |
+| `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |
 | `SecureHttpError` | More than 2 content-encodings on a response | `ERR_ULTRATON_CONTENT_ENCODING` |
 | `UltraTonMemoryError` | The body exceeded `maxBodySize` | — |
@@ -220,6 +221,30 @@ else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'))
 ```
 
 `stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+
+### Retries
+
+Off by default. `retry: n` retries up to `n` times (at most 10) with these rules:
+
+- **Methods:** GET, PUT, DELETE, HEAD and OPTIONS. POST and PATCH are never retried unless you list them in `methods`, because the server may have already acted on them.
+- **Statuses:** 408, 429, 502, 503 and 504. `statusCodes` replaces the list; 500 is not in it by default. When the retries run out, you get the last response, not an error.
+- **Network failures:** `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE` and the idle timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`). Policy errors, `maxBodySize`, `maxRedirects`, invalid input, the `timeoutMs` timeout and an abort are never retried.
+- **Waits:** exponential backoff with full jitter (300 ms base, at most `maxDelayMs`, default 30 s). A `Retry-After` (seconds or an HTTP date) is waited exactly; if it asks for more than `maxDelayMs` or than what is left of `timeoutMs`, that response is returned instead.
+- **Budget:** `timeoutMs` covers every attempt and wait together, and `signal` also cancels a wait.
+- **HTTP/2:** a stream the server refused (`REFUSED_STREAM`) or a GOAWAY fails with an `ERR_HTTP2_*` code, which is not retried for now.
+
+```ts
+const api = new UltraTonClient({
+  baseUrl: 'https://api.example.com/',
+  // error.code, not error: its cause is Node's own error, whose message contains the IP address.
+  retry: { limit: 3, onRetry: ({ attempt, delayMs, statusCode, error }) => log.warn({ attempt, delayMs, statusCode, code: (error as Error & { code?: string })?.code }) },
+});
+await api.get('reports');                                            // up to 3 retries
+await api.post('jobs', { json: job, retry: { methods: ['POST'] } }); // opt in for an idempotent POST
+await api.get('health', { retry: 0 });                               // off for this request
+```
+
+Every attempt is a full request: a new connection resolves and validates DNS again, so a rebinding between attempts is blocked. A request's `retry` merges over the client's field by field. `stream()` retries until the headers arrive. `fetch()` never retries, because libraries that take a fetch bring their own retries. If `onRetry` throws, the request ends with that error.
 
 ### baseUrl
 

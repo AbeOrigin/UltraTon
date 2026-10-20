@@ -5,10 +5,11 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
+import { resolveRetry, withRetry } from './helpers/retry.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
@@ -221,14 +222,20 @@ export class UltraTonClient {
         // The caller's own options are validated (unknown keys, json/form/body, body type) and the body encoded before any
         // client default is merged in. The content-type comes last: a client default one is kept for json, replaced by
         // the one a form, FormData, URLSearchParams or typed Blob implies.
-        // `query` is applied here, after baseUrl's path check, and never reaches the engines.
-        // withMethod returns a null-prototype object: `query` is deleted from it, never destructured into a plain one.
+        // `query` is applied here, after baseUrl's path check, and `retry` wraps the engine call: neither reaches the engines.
+        // withMethod returns a null-prototype object: both are deleted from it, never destructured into a plain one.
         const requested = withMethod(method, options);
         const target = withQuery(resolved, requested.query);
+        const retry = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
         Reflect.deleteProperty(requested, 'query');
+        Reflect.deleteProperty(requested, 'retry');
         const body = await resolveRequestBody(requested);
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, this.#defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
-        return stream ? this.#engine.request(target, resolvedOptions, stream) : this.#engine.request<T>(target, resolvedOptions);
+        const send = (timeoutMs?: number): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {
+            const attempt = timeoutMs === undefined ? resolvedOptions : { ...resolvedOptions, timeoutMs };
+            return stream ? this.#engine.request(target, attempt, stream) : this.#engine.request<T>(target, attempt);
+        };
+        return retry ? withRetry(send, retry, resolvedOptions.timeoutMs, resolvedOptions.signal) : send();
     }
 }

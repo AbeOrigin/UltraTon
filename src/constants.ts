@@ -1,5 +1,7 @@
 export const HTTP_CODES_REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 export const MAX_REDIRECTS_CEILING = 20;
+/** `timeoutMs` when neither the request nor the client sets it. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Paranoid limits to prevent RAM exhaustion on HTTP/2 sessions (HPACK bombs, memory leaks).
 export const MAX_HEADER_LIST_SIZE = 16384; // 16 KB
