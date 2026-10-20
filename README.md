@@ -69,6 +69,37 @@ await api.close(); // when the client is no longer needed
 | Retries | **Off**. When on: idempotent methods only, `Retry-After` waited (or the response returned when it asks for too long), and policy, memory and redirect errors never retried. Every attempt is validated again. | `retry` (0–10, or `{ limit, methods, statusCodes, maxDelayMs, onRetry }`) |
 | Proxies | **Not used**, and never read from `HTTP_PROXY`/`HTTPS_PROXY`. When set, the proxy gets the validated IP (CONNECT or SOCKS5), never a name, and the target's certificate is still checked. | `proxy` (client option) |
 
+## Choosing a client
+
+UltraTon does not try to be the fastest HTTP client: Node's built-in `fetch` (undici) is faster, and it should be. UltraTon is the client for code that sends requests to URLs it does not fully control, and for teams that want safe defaults without writing them by hand.
+
+- **The URL is yours and you want maximum throughput:** use `fetch`.
+- **The URL comes from outside (webhooks, link previews, integrations, user input), or you want safe defaults:** use UltraTon. It is also 1.3–1.8× faster than axios, got and node-fetch in [our benchmarks](compat/bench/RESULTS.md).
+- **You already use axios, got or node-fetch:** keep them and add [`createSecureAgents()`](#protect-the-client-you-already-use). It costs nothing measurable.
+
+How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`, axios 1.20, got 16.1, node-fetch 3.3):
+
+| | UltraTon | `fetch` (undici) | axios | got | node-fetch |
+|---|---|---|---|---|---|
+| Blocks SSRF (reserved IPs, DNS rebinding, redirects inside) | Yes, all 30 [corpus](compat/ssrf-corpus/RESULTS.md) cases | No | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) |
+| Redirects | off by default | followed (up to 20) | followed (up to 21) | followed (up to 10) | followed (up to 20) |
+| Response size limit | 2 MB, also on decoded bytes | none | none | none | none |
+| Total timeout | 30 s | none (300 s idle) | none | none | none |
+| Retries | opt-in, idempotent only | — | — (plugin) | on (2), idempotent | — |
+| Proxies | CONNECT and SOCKS5, opt-in, target pinned | `NODE_USE_ENV_PROXY` (recent Node) | from `HTTP_PROXY` by default | through an agent | through an agent |
+| HTTP/2 | `http2: true` | not by default | `httpVersion: 2` | `http2: true` | — |
+| Hooks / interceptors | `diagnostics_channel` (hooks planned) | — | interceptors | hooks | — |
+| Cookies, HTTP cache, pagination | — | — | — | Yes | — |
+| Upload streaming | — (planned) | Yes | Yes | Yes | Yes |
+| Runs in browsers, Bun, Deno | — (Node only) | Yes | Yes | — | — |
+| Runtime dependencies | 0 | built in | 4 | 10 | 3 |
+| Maturity | new (2.x in 2026), one maintainer | Node core team | many years, large community | many years | many years |
+
+**Where UltraTon is not the right choice:**
+- **Raw throughput against an API you trust:** `fetch` and Node's own `http.request` are about 1.5× faster on small bodies.
+- **Other runtimes:** browsers, Bun or Deno.
+- **Features it does not have:** request-rewriting interceptors, a cookie jar, HTTP caching or upload streaming. Hooks and upload streaming are planned.
+
 ## Options
 
 **Client options** go to `new UltraTonClient(options)`. All of them are optional:
@@ -276,7 +307,7 @@ UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_ch
 
 `request` is `{ method, origin, path }`, frozen, and **the same object** on every event of one call, so it can key a span or a timer. `error` is `{ name, code }`. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
 
-> ⚠️ **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
+> **Warning:** **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
 
 A call that fails before it starts publishes nothing: options that throw a `TypeError`, a URL that does not parse, or a closed client. A retry event is published once a retry is decided, after your `onRetry` ran; if `onRetry` throws, there is no retry and no retry event, just the error.
 
@@ -342,7 +373,7 @@ const client = new UltraTonClient({
 new UltraTonClient({ proxy: { url: 'http://smokescreen:4750', resolve: 'proxy' } });
 ```
 
-> ⚠️ With `resolve: 'proxy'` the proxy resolves the name, so **SSRF protection for hostnames depends on the proxy**. UltraTon still rejects reserved IP literals, bad schemes and credentials in URLs, but it cannot pin DNS. Use it only with a proxy that enforces its own egress policy.
+> **Warning:** With `resolve: 'proxy'` the proxy resolves the name, so **SSRF protection for hostnames depends on the proxy**. UltraTon still rejects reserved IP literals, bad schemes and credentials in URLs, but it cannot pin DNS. Use it only with a proxy that enforces its own egress policy.
 
 **SOCKS5.** A `socks5:` URL (default port 1080) tunnels the same way: UltraTon resolves and validates the name and sends the IP as the SOCKS5 address (IPv4 or IPv6), never the name. `auth` is SOCKS5 username/password (RFC 1929, each part 1 to 255 bytes). `socks5h:` is the SOCKS5 spelling of `resolve: 'proxy'`: the name is sent and the proxy resolves it, with the same warning as above. `proxy.ca` does not apply, since SOCKS5 has no TLS of its own; TLS to the target runs through the tunnel as with CONNECT.
 
@@ -352,7 +383,7 @@ new UltraTonClient({ proxy: { url: 'socks5://bastion.corp:1080', auth: 'svc:s3cr
 
 A SOCKS5 refusal rejects with `ERR_ULTRATON_PROXY` and the reason (`connection refused`, `host unreachable`, `authentication failed`, …). These are final: a refused login, no acceptable authentication method, the proxy's ruleset and "command not supported". Any other reply (unreachable, refused, general failure, …) moves on to the next validated address. SOCKS4, `BIND` and `UDP ASSOCIATE` are not supported.
 
-> ⚠️ SOCKS5 has no encryption of its own: the username and password in `auth` cross the network to the proxy in cleartext. The request itself is safe (TLS runs end to end through the tunnel), but only use SOCKS5 credentials over a network you trust, or reach the proxy through an SSH tunnel.
+> **Warning:** SOCKS5 has no encryption of its own: the username and password in `auth` cross the network to the proxy in cleartext. The request itself is safe (TLS runs end to end through the tunnel), but only use SOCKS5 credentials over a network you trust, or reach the proxy through an SSH tunnel.
 
 ### Protect the client you already use
 
@@ -379,23 +410,23 @@ agents.https.destroy();
 
 Every new socket resolves its host and validates **every** address, then connects only to those addresses: a DNS rebinding between connections is blocked. Redirects the library follows open their own sockets through the agent, so each hop is checked. IP literals are judged in every spelling, TLS is always verified (a library's `rejectUnauthorized: false` is ignored), and plain `http:` only reaches loopback unless you pass `allowPlainHttp: true`, which lifts the scheme rule but never the address policy. A blocked connection fails with the usual `SecureHttpError` (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`). axios, got and node-fetch all expose its code as `err.code`; axios and got also keep the original error as `err.cause`. A failure to reach an *allowed* address is Node's own error, and its message may name that address.
 
-> ⚠️ **With axios, `proxy: false` is mandatory, and `httpVersion: 2` is not allowed.** axios reads `HTTP_PROXY`/`HTTPS_PROXY` by default. For an `https:` URL it then **replaces your `httpsAgent`** with its own tunnelling agent, which sends the proxy the hostname: the secure agents never see the request, and no check runs. For an `http:` URL it sends the proxy an absolute URL through your agent, which the agents refuse with `ERR_ULTRATON_AGENT_PROXY`. Always create the instance with `proxy: false`, and never pass `proxy` on a single request (it overrides the instance's). axios with `httpVersion: 2` opens its own HTTP/2 connection without any agent, so never use it with the secure agents. If you need a proxy or HTTP/2, use `UltraTonClient`, whose `proxy` and `http2` keep the target pinned. got and node-fetch do not read proxy variables; got with `http2: true` uses the agent, but not when you also pass `createConnection` or `h2session`. The compat tests in this repository check all three, including this axios behaviour.
+> **Warning:** **With axios, `proxy: false` is mandatory, and `httpVersion: 2` is not allowed.** axios reads `HTTP_PROXY`/`HTTPS_PROXY` by default. For an `https:` URL it then **replaces your `httpsAgent`** with its own tunnelling agent, which sends the proxy the hostname: the secure agents never see the request, and no check runs. For an `http:` URL it sends the proxy an absolute URL through your agent, which the agents refuse with `ERR_ULTRATON_AGENT_PROXY`. Always create the instance with `proxy: false`, and never pass `proxy` on a single request (it overrides the instance's). axios with `httpVersion: 2` opens its own HTTP/2 connection without any agent, so never use it with the secure agents. If you need a proxy or HTTP/2, use `UltraTonClient`, whose `proxy` and `http2` keep the target pinned. got and node-fetch do not read proxy variables; got with `http2: true` uses the agent, but not when you also pass `createConnection` or `h2session`. The compat tests in this repository check all three, including this axios behaviour.
 
 The agents protect the **connection**. The rest stays with the library you plug them into:
 
 | Protection | Secure agents | `UltraTonClient` |
 |---|---|---|
-| Reserved IPs blocked, every address validated, DNS pinned | ✅ | ✅ |
-| Redirect hops checked | ✅ (each new socket) | ✅ |
-| TLS always verified | ✅ | ✅ |
-| Plain http only to loopback | ✅ (unless `allowPlainHttp`) | ✅ |
-| https → http redirect rejected, credentials dropped across origins | ❌ (the library decides) | ✅ |
-| Body size limit, decompression bombs, truncated bodies | ❌ | ✅ |
-| Total and idle timeouts | ❌ | ✅ |
-| Header injection, unknown options, `baseUrl` traversal | ❌ | ✅ |
-| A library's own proxy (axios reads `HTTP_PROXY`) | ⚠️ `http:` refused (`ERR_ULTRATON_AGENT_PROXY`); axios bypasses the agents for `https:`, so pass `proxy: false` | — |
-| Proxies with the target still pinned (CONNECT, SOCKS5) | ❌ | ✅ (`proxy`) |
-| Error messages without addresses | Blocked connections only | ✅ |
+| Reserved IPs blocked, every address validated, DNS pinned | Yes | Yes |
+| Redirect hops checked | Yes (each new socket) | Yes |
+| TLS always verified | Yes | Yes |
+| Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes |
+| https → http redirect rejected, credentials dropped across origins | No (the library decides) | Yes |
+| Body size limit, decompression bombs, truncated bodies | No | Yes |
+| Total and idle timeouts | No | Yes |
+| Header injection, unknown options, `baseUrl` traversal | No | Yes |
+| A library's own proxy (axios reads `HTTP_PROXY`) | Partly: `http:` refused (`ERR_ULTRATON_AGENT_PROXY`); axios bypasses the agents for `https:`, so pass `proxy: false` | — |
+| Proxies with the target still pinned (CONNECT, SOCKS5) | No | Yes (`proxy`) |
+| Error messages without addresses | Blocked connections only | Yes |
 
 ### baseUrl
 

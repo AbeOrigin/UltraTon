@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@300;400;600;800&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -16,13 +17,14 @@
 
     <nav class="navbar">
         <div class="logo">
-            <span class="logo-icon">🛡️</span>
+            <span class="logo-icon"><svg class="icon logo-mark" viewBox="5 3 54 54" aria-hidden="true"><path d="M14 16v18c0 12 8 20 18 20s18-8 18-20V16M22 9h20M32 9v26"/><circle cx="23" cy="29" r="3"/><circle cx="41" cy="29" r="3"/></svg></span>
             UltraTon
         </div>
         <div class="nav-links">
             <a href="#features">Security</a>
             <a href="#everyday">Features</a>
             <a href="#in-action">Demo</a>
+            <a href="#compare">Compare</a>
             <a href="#installation">Usage</a>
             <a href="#limits" class="highlight-link">Limits</a>
             <a href="https://github.com/AbeOrigin/UltraTon" class="github-btn" target="_blank" rel="noopener noreferrer">
@@ -57,25 +59,25 @@
 
             <div class="grid">
                 <div class="card glass">
-                    <div class="card-icon secure-icon">📦</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M4 7.5l8 4.5 8-4.5M12 12v9"/></svg></div>
                     <h3>Zero Runtime Dependencies</h3>
                     <p>Built only on Node's own modules: <code>node:https</code>, <code>node:http2</code>, <code>node:dns</code>, <code>node:net</code>, <code>node:tls</code> and <code>node:zlib</code>. <code>HTTP_PROXY</code> and <code>http.globalAgent</code> are never used: each client has its own connection pool.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🛑</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 3h7L21 8.5v7L15.5 21h-7L3 15.5v-7z"/><path d="M8 12h8"/></svg></div>
                     <h3>SSRF Protection</h3>
                     <p>Private, loopback, link-local, cloud-metadata and other reserved IPs are blocked in IP literals of every spelling, DNS answers and every redirect hop. Each address is validated once and the connection is pinned to it, which blocks DNS rebinding. Allow only the ranges you need with <code>permitReservedIps</code>.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">⏱️</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M10 2h4M12 2v3"/></svg></div>
                     <h3>Memory &amp; Time Limits</h3>
                     <p>Response bodies are capped at 2 MB (<code>maxBodySize</code>), requests at 30 s in total including DNS and every hop (<code>timeoutMs</code>), and idle connections at 10 s (<code>socketTimeoutMs</code>). A truncated response is rejected, never resolved as a short body.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🛡️</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
                     <h3>Strict Protocol Handling</h3>
                     <p>Redirects are not followed unless you set <code>maxRedirects</code>; https → http is rejected, and credentials are dropped on a cross-origin hop. TLS verification is always on. CRLF/NUL in headers, and unknown or mistyped options, throw before connecting.</p>
                 </div>
@@ -90,37 +92,37 @@
 
             <div class="grid">
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🧾</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 12h7M9 16h7"/></svg></div>
                     <h3>Queries, Forms &amp; Uploads</h3>
                     <p><code>query</code> builds the query string, <code>json</code> serializes, <code>form</code> sends urlencoded fields for OAuth and older APIs, and a <code>FormData</code> body goes as multipart with its boundary set for you. Values that cannot be encoded throw instead of being dropped.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🗜️</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h5V4M20 9h-5V4M4 15h5v5M20 15h-5v5"/></svg></div>
                     <h3>Safe Decompression</h3>
                     <p>gzip, deflate and brotli are decoded by default, with <code>maxBodySize</code> applied to the decoded bytes too, so a decompression bomb stops at the limit. A corrupt or cut-short body is an error, never a short success.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🌊</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 13c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 18c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg></div>
                     <h3>Bounded Streaming</h3>
                     <p><code>client.stream()</code> resolves on the headers and hands you a <code>ReadableStream</code>. The size limit, content-length check, decoding and idle timeout keep applying as you read, so large downloads never sit in memory.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🔌</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></svg></div>
                     <h3>Drop-in <code>fetch()</code></h3>
                     <p><code>client.fetch</code> takes the same arguments as <code>fetch</code> and returns a standard <code>Response</code>. Hand it to any SDK that accepts a custom fetch, and its requests get the SSRF policy and limits without code changes.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🔁</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 3v5h5M4 13a8 8 0 0 0 14.3 4.9L20 16M20 21v-5h-5"/></svg></div>
                     <h3>Opt-in Retries</h3>
                     <p><code>retry: 2</code> retries 408, 429 and 5xx gateway errors and transient network failures, with jittered backoff and <code>Retry-After</code> respected. Only idempotent methods, one <code>timeoutMs</code> budget for every attempt, and DNS validated again each time.</p>
                 </div>
 
                 <div class="card glass">
-                    <div class="card-icon secure-icon">🧭</div>
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg></div>
                     <h3>HTTP &amp; SOCKS5 Proxies</h3>
                     <p><code>proxy: 'http://egress:3128'</code> or <code>'socks5://bastion:1080'</code>. UltraTon validates the target first and sends the proxy the <strong>IP</strong>, never a name it could resolve elsewhere. TLS runs to the target through the tunnel, with its certificate checked.</p>
                 </div>
@@ -138,11 +140,11 @@
                 <pre class="sim-call"><code id="sim-call"></code></pre>
 
                 <div class="sim-track" id="sim-track">
-                    <div class="sim-node" data-node="app"><span class="sim-node-icon" aria-hidden="true">💻</span><span>Your code</span></div>
+                    <div class="sim-node" data-node="app"><span class="sim-node-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg></span><span>Your code</span></div>
                     <div class="sim-lane"></div>
-                    <div class="sim-node sim-shield" data-node="shield"><span class="sim-node-icon" aria-hidden="true">🛡️</span><span>UltraTon</span></div>
+                    <div class="sim-node sim-shield" data-node="shield"><span class="sim-node-icon" aria-hidden="true"><svg class="icon logo-mark" viewBox="5 3 54 54" aria-hidden="true"><path d="M14 16v18c0 12 8 20 18 20s18-8 18-20V16M22 9h20M32 9v26"/><circle cx="23" cy="29" r="3"/><circle cx="41" cy="29" r="3"/></svg></span><span>UltraTon</span></div>
                     <div class="sim-lane"></div>
-                    <div class="sim-node" data-node="net"><span class="sim-node-icon" aria-hidden="true">🌐</span><span>Network</span></div>
+                    <div class="sim-node" data-node="net"><span class="sim-node-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></span><span>Network</span></div>
                     <div class="sim-packet" id="sim-packet" aria-hidden="true"></div>
                 </div>
                 <p class="sim-wire" id="sim-wire"></p>
@@ -160,6 +162,34 @@
 
                 <div class="sim-result" id="sim-result" aria-live="polite"></div>
             </div>
+        </section>
+
+        <section id="compare" class="features">
+            <div class="section-header">
+                <h2>Choosing a Client</h2>
+                <p>UltraTon does not try to be the fastest HTTP client. It is the one for URLs you do not fully control, and for safe defaults you do not have to write.</p>
+            </div>
+
+            <div class="grid">
+                <div class="card glass">
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
+                    <h3>Your URL, max throughput</h3>
+                    <p>Use Node's built-in <code>fetch</code> (undici). It is about 1.5× faster than UltraTon on small bodies, and it should be: it is Node's own engine, with no SSRF checks to run.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+                    <h3>Their URL, or safe defaults</h3>
+                    <p>Use UltraTon. It blocked all 30 cases of the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/ssrf-corpus/RESULTS.md" target="_blank" rel="noopener noreferrer">SSRF corpus</a>, all of which <code>fetch</code>, axios, got and node-fetch reach on their own. It is also 1.3–1.8× faster than axios, got and node-fetch in the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">benchmarks</a>.</p>
+                </div>
+
+                <div class="card glass">
+                    <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5"/></svg></div>
+                    <h3>Already on axios or got</h3>
+                    <p>Keep them, and plug in <code>createSecureAgents()</code>. Every connection is then validated and pinned, at no measurable cost. With axios, pass <code>proxy: false</code>.</p>
+                </div>
+            </div>
+            <p class="compare-note">Not for browsers, Bun or Deno, and no cookie jar, HTTP cache or upload streaming (yet). The <a href="https://github.com/AbeOrigin/UltraTon#choosing-a-client" target="_blank" rel="noopener noreferrer">full comparison</a> lists each library's defaults, including where UltraTon falls short.</p>
         </section>
 
         <section id="installation" class="usage-section glass">
@@ -234,7 +264,7 @@
     <footer>
         <div class="footer-content">
             <div class="logo">
-                <span class="logo-icon">🛡️</span>
+                <span class="logo-icon"><svg class="icon logo-mark" viewBox="5 3 54 54" aria-hidden="true"><path d="M14 16v18c0 12 8 20 18 20s18-8 18-20V16M22 9h20M32 9v26"/><circle cx="23" cy="29" r="3"/><circle cx="41" cy="29" r="3"/></svg></span>
                 UltraTon
             </div>
             <p>A secure HTTP client for Node.js.</p>

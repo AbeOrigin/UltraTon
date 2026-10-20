@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **"Choosing a client" in the README and on the site:** when to use UltraTon, Node's `fetch`, or `createSecureAgents()` with the client you already have, plus a table of each library's defaults (SSRF, redirects, size limits, timeouts, retries, proxies, HTTP/2, dependencies, maturity) that also lists where UltraTon falls short.
 - **Reproducible benchmarks** in `compat/bench/`: UltraTon (HTTP/1.1 and HTTP/2, and axios through `createSecureAgents()`) next to Node's `http.request`, Node's `fetch` (undici), axios, got and node-fetch.
   - It reports requests per second, p50/p99 latency, CPU per 1 000 requests and memory, with a 1 KiB and a 64 KiB body.
   - Every client runs in its own process, takes the median of 3 rounds after a warm-up, and gets an IP literal, so DNS is not measured.

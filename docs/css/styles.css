@@ -97,7 +97,29 @@ a {
 }
 
 .logo-icon {
-    -webkit-text-fill-color: initial;
+    display: inline-flex;
+    color: var(--accent-neon);
+}
+
+.icon {
+    width: 1em;
+    height: 1em;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.logo-mark {
+    width: 1.2em;
+    height: 1.2em;
+    stroke-width: 4.5;
+}
+
+.logo-mark circle {
+    fill: currentColor;
+    stroke: none;
 }
 
 .nav-links {
@@ -280,7 +302,9 @@ a {
 
 .card-icon {
     font-size: 2.5rem;
+    line-height: 1;
     margin-bottom: 1.5rem;
+    color: var(--accent-cyan);
 }
 
 .card h3 {
@@ -667,7 +691,7 @@ footer {
 .sim-check.is-pass { color: var(--text-primary); }
 .sim-check.is-pass::before { content: '✓'; color: var(--accent-neon); }
 .sim-check.is-fail { color: #fff; border-color: var(--accent-danger); background: rgba(255, 42, 109, 0.12); }
-.sim-check.is-fail::before { content: '✖'; color: var(--accent-danger); }
+.sim-check.is-fail::before { content: '✕'; color: var(--accent-danger); }
 .sim-check.is-skip { opacity: 0.35; }
 
 .sim-result {
@@ -697,4 +721,11 @@ footer {
 @media (prefers-reduced-motion: reduce) {
     .glow-box::after { animation: none; }
     .sim-packet.is-blocked { animation: none; }
+}
+
+.compare-note {
+    max-width: 820px;
+    margin: 2rem auto 0;
+    text-align: center;
+    color: var(--text-secondary);
 }

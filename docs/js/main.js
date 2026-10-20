@@ -270,7 +270,7 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 
     function show(s, blocked) {
         result.className = `sim-result ${blocked ? 'is-blocked' : 'is-ok'}`;
-        result.replaceChildren(...[['title', (blocked ? '✖ ' : '✓ ') + s.result.title], ['detail', s.result.detail], ['note', s.result.note]]
+        result.replaceChildren(...[['title', (blocked ? '✕ ' : '✓ ') + s.result.title], ['detail', s.result.detail], ['note', s.result.note]]
             .map(([part, text]) => { const p = document.createElement('p'); p.className = `sim-result-${part}`; p.textContent = text; return p; }));
     }
 
