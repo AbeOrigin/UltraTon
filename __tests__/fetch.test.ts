@@ -40,6 +40,8 @@ async function server(t: TestContext, http2: boolean) {
             req.on('end', () => {
                 const headers = Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k, String(v)]));
                 const r = answer({ method: req.method ?? '', path: req.url ?? '', headers, body: Buffer.concat(chunks).toString('latin1') });
+                // Never HTML: a route sets its own content-type in r.headers, which overrides this one.
+                res.setHeader('content-type', 'text/plain');
                 res.writeHead(r.status, r.headers);
                 res.end(r.body);
             });
