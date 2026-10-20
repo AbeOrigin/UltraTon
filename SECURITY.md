@@ -29,12 +29,20 @@ UltraTon's job is to keep a request from reaching somewhere it should not, and t
 - **A truncated response resolving as if it were complete.**
 - **An error message that leaks the target's IP or hostname.**
 - **Prototype pollution through options, headers or `json()`.**
+- **A proxy receiving a hostname, or an unvalidated address,** with `resolve: 'local'` (the default), or the target's certificate checked against anything but the target.
+- **Proxy credentials (`proxy.auth`) reaching a target**, or retries going past `retry.limit`, the `timeoutMs` budget, or onto a non-idempotent method that was not opted in.
+- **`createSecureAgents()` connecting to an address it did not validate**, when used as the README describes (with axios: `proxy: false`, no `httpVersion: 2`).
 
-These are out of scope, because they are documented behaviour (see the README section "Limits and things to know"):
+These are out of scope, because they are documented behaviour (see the README section "Limits and things to know" and [THREAT_MODEL.md](THREAT_MODEL.md)):
 
 - what a client configured with `permitReservedIps: true`, or a broad allowlist, can reach;
 - redirects into allowlisted ranges;
 - environment proxies being ignored;
+- 6to4 (`2002::/16`) and Teredo (`2001::/32`) addresses, which are not reserved (see THREAT_MODEL.md);
+- Brotli's working memory (up to 16 MiB per layer) beyond `maxBodySize`; the decoded output is still capped;
+- redirects not being bound to `baseUrl`;
+- name resolution by the proxy with `resolve: 'proxy'` or `socks5h:` (SSRF protection for hostnames is then the proxy's), and SOCKS5 credentials travelling in cleartext;
+- library modes that skip any agent (axios with a proxy for `https:` or `httpVersion: 2`, got with `createConnection` or `h2session`), and the limits the secure agents leave to the library (body size, timeouts, headers);
 - DNS lookups that keep running after a timeout;
 - the contents of `error.cause`.
 

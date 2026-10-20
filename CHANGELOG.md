@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Supply-chain and security documentation.**
+  - [THREAT_MODEL.md](THREAT_MODEL.md) covers:
+    - the assets and adversaries;
+    - each defense, with where it lives in the code and which tests cover it;
+    - the trust assumptions and the accepted residual risks;
+    - a section for auditors.
+  - SECURITY.md's scope now covers proxies, retries and the secure agents.
+  - An OpenSSF Scorecard workflow (results in the Security tab and a README badge).
+  - Dependabot for the actions, the build tooling and `compat/`, with a 14-day cooldown on new versions.
 - **`createSecureAgents()`: UltraTon's SSRF policy for the client you already use.** It returns an `http.Agent` and an `https.Agent` for axios (`httpAgent`/`httpsAgent`), got (`agent`), node-fetch (`agent`) and `http.request`.
   - Every new socket resolves its host and validates every address against `permitReservedIps`, then connects only to them. A DNS rebinding between connections is blocked, and so is each redirect hop the library follows, since it opens a new socket.
   - IP literals are judged as themselves. The library's own `lookup` is ignored and a `socketPath` throws.
