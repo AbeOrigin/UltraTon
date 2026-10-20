@@ -10,10 +10,13 @@ async function echoTarget(t: TestContext, http2: boolean) {
     const sockets = new Set<Socket>();
     const server = http2
         ? createH2Server().on('stream', (stream, headers: IncomingHttpHeaders) => {
-            stream.respond({ ':status': 200 });
+            stream.respond({ ':status': 200, 'content-type': 'text/plain' });
             stream.end(String(headers[':path']));
         })
-        : http.createServer((req, res) => res.end(req.url));
+        : http.createServer((req, res) => {
+            res.writeHead(200, { 'content-type': 'text/plain' });
+            res.end(req.url);
+        });
     server.on('connection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
     await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
     t.after(async () => {
