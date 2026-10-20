@@ -300,7 +300,7 @@ const describeValue = (value: unknown): string => {
     if (value === null) return 'null';
     if (Array.isArray(value)) return 'an array';
     if (typeof value === 'number') return String(value);
-    if (typeof value === 'object') return `a ${(Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null)?.constructor?.name ?? 'null-prototype object'}`;
+    if (typeof value === 'object') return `a ${(Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null)?.constructor?.name || 'null-prototype object'}`;
     return typeof value;
 };
 
@@ -314,7 +314,8 @@ function queryValue(key: string, value: unknown): string {
  * Appends the `query` option to a request URL. Values are encoded with URLSearchParams (spaces as '+'), an array repeats
  * its key, an `undefined` value is skipped. The URL's own query is kept byte for byte: the new pairs are appended to it,
  * never re-serialized with it. Encoded values can only ever land in the query, so they cannot change the path (baseUrl
- * is checked on the path before this runs) or add a fragment.
+ * is checked on the path before this runs) or add a fragment. Symbol keys are ignored, like Object.keys ignores them.
+ * A URLSearchParams from another realm (vm, worker) is accepted through its string form.
  * @throws {TypeError} If `query` is not a plain object or URLSearchParams, or a value is not a string, a finite number
  *   or a boolean (`null`, nested objects and arrays inside arrays included). A malformed URL is left for the engine to reject.
  */
@@ -323,6 +324,9 @@ export function withQuery(url: string, query: unknown): string {
     let params: URLSearchParams;
     if (query instanceof URLSearchParams) {
         params = query;
+    } else if (Object.prototype.toString.call(query) === '[object URLSearchParams]') {
+        // Re-parsed from its string form, so a spoofed toStringTag can only ever yield ordinary encoded pairs.
+        params = new URLSearchParams(String(query));
     } else if (isPlainObject(query)) {
         params = new URLSearchParams();
         for (const key of Object.keys(query)) {

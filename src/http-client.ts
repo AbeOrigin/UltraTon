@@ -197,8 +197,10 @@ export class UltraTonClient {
         // The caller's own options are validated (unknown keys, json/body, body type) and `json` serialized before any
         // client default is merged in. The json content-type comes last, so a client default content-type is kept.
         // `query` is applied here, after baseUrl's path check, and never reaches the engines.
-        const { query, ...requested } = withMethod(method, options);
-        const target = withQuery(resolved, query);
+        // withMethod returns a null-prototype object: `query` is deleted from it, never destructured into a plain one.
+        const requested = withMethod(method, options);
+        const target = withQuery(resolved, requested.query);
+        Reflect.deleteProperty(requested, 'query');
         const merged = mergeClientDefaults(resolveRequestBody(requested), this.#defaults);
         return this.#engine.request<T>(target, requested.json === undefined ? merged : withJsonContentType(merged));
     }

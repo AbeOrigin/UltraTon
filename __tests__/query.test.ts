@@ -73,6 +73,25 @@ for (const http2 of [false, true]) {
             assert.equal(res.text(), '/api/v1/users?next=..%2F..%2Fadmin&frag=%23%2Fadmin&slash=%2Fetc%2Fpasswd');
         });
 
+        it('handles a URL ending in a bare ?', async (t) => {
+            const base = await echoTarget(t, http2);
+            const client = clientOf(t, http2);
+            assert.equal((await client.get(`${base}/x?`, { query: { a: '1' } })).text(), '/x?a=1');
+        });
+
+        it('keeps a URLSearchParams whose toString lies inside the query', async (t) => {
+            const base = await echoTarget(t, http2);
+            const client = clientOf(t, http2);
+            class Sneaky extends URLSearchParams { override toString() { return '#/../x?y'; } }
+            assert.equal((await client.get(`${base}/x`, { query: new Sneaky() })).text(), '/x?%23/../x?y');
+        });
+
+        it('still rejects a baseUrl escape when a query is given', async (t) => {
+            const base = await echoTarget(t, http2);
+            const client = clientOf(t, http2, { baseUrl: `${base}/api/v1/` });
+            await assert.rejects(client.get('../admin', { query: { a: '1' } }), { name: 'TypeError', message: 'UltraTon: Request path escapes baseUrl.' });
+        });
+
         it('keeps a fragment out of the request and the query before it', async (t) => {
             const base = await echoTarget(t, http2);
             const client = clientOf(t, http2);
@@ -106,6 +125,26 @@ describe('query option validation', () => {
                 assert.match(err.message, VALUE_TYPE(key));
                 return true;
             });
+        }
+    });
+
+    it('rejects a relative URL without baseUrl instead of dropping the query', async () => {
+        await assert.rejects(client.get('users', { query: { a: '1' } }), (err: Error) => err.name === 'SecureHttpError');
+    });
+
+    it('does not let a polluted Object.prototype.json add a json content-type', async (t) => {
+        const sockets = new Set<Socket>();
+        const server = http.createServer((req, res) => res.end(String(req.headers['content-type'])));
+        server.on('connection', (s: Socket) => sockets.add(s));
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        t.after(async () => { for (const s of sockets) s.destroy(); await new Promise<void>(r => server.close(() => r())); });
+        const local = clientOf(t, false);
+        (Object.prototype as any).json = { injected: true };
+        try {
+            const res = await local.get(`http://127.0.0.1:${(server.address() as AddressInfo).port}/x`, { query: { a: '1' } });
+            assert.equal(res.text(), 'undefined');
+        } finally {
+            delete (Object.prototype as any).json;
         }
     });
 
