@@ -2,6 +2,9 @@ import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 
 export type { ReservedIpPolicy };
 
+/** A value of the `query` option: sent as its string form. */
+export type QueryValue = string | number | boolean;
+
 /**
  * The options of one request, the same for every method and both engines. A closed list: anything else throws a
  * `TypeError` (with a hint for the common mistakes), it is never ignored.
@@ -12,6 +15,13 @@ export interface UltraTonRequestOptions {
      * Pseudo-headers (keys starting with ':') are rejected, and so is 'host' on HTTP/2 (it is derived from the URL).
      */
     readonly headers?: Record<string, string | string[] | undefined>;
+
+    /**
+     * Query parameters appended to the URL, after any query it already has (which is kept as is). Values are encoded
+     * like URLSearchParams (spaces as '+'), an array repeats its key and `undefined` is skipped. `null`, nested objects
+     * and non-finite numbers throw a `TypeError`. They only ever land in the query: they cannot change the path.
+     */
+    readonly query?: Readonly<Record<string, QueryValue | readonly QueryValue[] | undefined>> | URLSearchParams;
 
     /**
      * A JSON payload. It is serialized with `JSON.stringify` and sent with `content-type: application/json`

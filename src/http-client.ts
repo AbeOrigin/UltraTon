@@ -5,7 +5,7 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withJsonContentType, withMethod } from './helpers/request-options.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions } from './types/request-options.types.ts';
@@ -193,10 +193,14 @@ export class UltraTonClient {
 
     async #request<T>(method: string, url: string, options: unknown): Promise<UltraTonResponse<T>> {
         if (this.#closed) throw new SecureHttpError('UltraTon: Client is closed.');
-        const target = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
+        const resolved = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
         // The caller's own options are validated (unknown keys, json/body, body type) and `json` serialized before any
         // client default is merged in. The json content-type comes last, so a client default content-type is kept.
+        // `query` is applied here, after baseUrl's path check, and never reaches the engines.
+        // withMethod returns a null-prototype object: `query` is deleted from it, never destructured into a plain one.
         const requested = withMethod(method, options);
+        const target = withQuery(resolved, requested.query);
+        Reflect.deleteProperty(requested, 'query');
         const merged = mergeClientDefaults(resolveRequestBody(requested), this.#defaults);
         return this.#engine.request<T>(target, requested.json === undefined ? merged : withJsonContentType(merged));
     }
