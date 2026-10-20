@@ -18,6 +18,8 @@ npm install ultraton
 
 Requires Node.js **22.12** or later. Works from ESM (`import`), CommonJS (`require`) and TypeScript.
 
+**Zero dependencies:** `npm install ultraton` installs exactly one package, with no runtime, peer or optional dependencies. The [`compat/`](compat/) folder of this repository holds axios, got and node-fetch only to test [`createSecureAgents()`](#protect-the-client-you-already-use) against them. It is a separate workspace that is never part of the published package, so a dependency scanner reading this repository may list those libraries; they are not dependencies of `ultraton`.
+
 ## Quickstart
 
 ```ts
