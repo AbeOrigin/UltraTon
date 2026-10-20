@@ -49,7 +49,7 @@ export interface UltraTonRequestOptions {
     readonly signal?: AbortSignal;
 
     /**
-     * Decode gzip, deflate and br (and zstd when this Node has it) response bodies, and ask for them with an
+     * Decode gzip, deflate and br response bodies, and ask for them with an
      * `accept-encoding` header unless the request sets its own. `maxBodySize` then bounds the decoded bytes too, so a
      * decompression bomb stops at the limit. `false` sends no `accept-encoding` and leaves `data` as received. Default true.
      */

@@ -2,21 +2,21 @@ import zlib from 'node:zlib';
 import { finished, pipeline, type Transform } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 
-// zstd only exists in newer Node versions (22.15+): advertised and decoded only when this runtime has it.
-const createZstdDecompress = (zlib as { createZstdDecompress?: () => Transform }).createZstdDecompress;
-
 const DECODERS = new Map<string, () => Transform>([
     ['gzip', () => zlib.createGunzip()],
     ['x-gzip', () => zlib.createGunzip()],
     // ponytail: zlib-wrapped deflate only (RFC 9110). Raw deflate from very old servers fails as Z_DATA_ERROR; sniff the
     // first byte (inflate vs inflateRaw) if one ever matters.
     ['deflate', () => zlib.createInflate()],
+    // Brotli's ring buffer can take up to 16 MiB per layer whatever maxBodySize is; zlib has no knob to lower it.
     ['br', () => zlib.createBrotliDecompress()],
-    ...(createZstdDecompress ? [['zstd', () => createZstdDecompress()] as [string, () => Transform]] : []),
+    // ponytail: no zstd yet. Node's decoder resolves a truncated frame without an error (a partial body would pass as
+    // complete) and its default window lets a few bytes allocate 128 MiB. Add it with ZSTD_d_windowLogMax 23 (RFC 9659)
+    // once a cut frame can be detected.
 ]);
 
-/** The accept-encoding sent by default: every coding this runtime can decode. */
-export const ACCEPT_ENCODING = ['gzip', 'deflate', 'br', ...(createZstdDecompress ? ['zstd'] : [])].join(', ');
+/** The accept-encoding sent by default: every coding the reader decodes. */
+export const ACCEPT_ENCODING = 'gzip, deflate, br';
 
 /** Each layer is another decompression to bound; two cover every real server (e.g. "gzip, br"). */
 const MAX_LAYERS = 2;
@@ -65,6 +65,8 @@ export class BodyReader {
     readonly #chunks: Buffer[] = [];
     #size = 0;
     #error?: Error;
+    /** Too many content-encodings: reported only if a body actually arrives, so a 204/304/HEAD still resolves. */
+    #codingError?: Error;
     #destroyed = false;
     #first?: Transform;
     #done?: Promise<void>;
@@ -73,7 +75,7 @@ export class BodyReader {
         this.#options = options;
         const codings = options.decompress ? codingsFor(options.contentEncoding) : [];
         this.#codings = codings instanceof Error ? [] : codings;
-        if (codings instanceof Error) this.#error = codings;
+        if (codings instanceof Error) this.#codingError = codings;
     }
 
     /** The error the body failed with, if any. */
@@ -86,6 +88,7 @@ export class BodyReader {
      * @throws The reader's error: too many content-encodings, or `maxBodySize` exceeded (wire or undecoded bytes).
      */
     write(chunk: Buffer): void {
+        if (this.#codingError) this.#error ??= this.#codingError;
         if (this.#error) throw this.#error;
         this.wireBytes += chunk.length;
         if (this.wireBytes > this.#options.maxBodySize) throw this.#fail(this.#options.tooLarge());
@@ -101,6 +104,7 @@ export class BodyReader {
      * @throws The reader's error, including a compressed body that is corrupt or cut short.
      */
     async end(): Promise<Buffer> {
+        if (this.#destroyed) throw this.#error ?? new Error('UltraTon: BodyReader used after destroy().');
         if (this.#first) {
             this.#first.end();
             await this.#done;

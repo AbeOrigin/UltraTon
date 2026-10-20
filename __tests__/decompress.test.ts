@@ -8,7 +8,6 @@ import { UltraTonClient } from '../src/http-client.ts';
 import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError } from '../src/errors.ts';
 
 const PAYLOAD = JSON.stringify({ hello: 'wörld', list: Array.from({ length: 200 }, (_, i) => i) });
-const zstd = typeof (zlib as any).zstdCompressSync === 'function';
 // 4 MiB of zeros, about 4 KiB on the wire: small, but past the 1 MiB maxBodySize the test sets, which only the decoded bytes cross.
 const OVER_LIMIT = zlib.gzipSync(Buffer.alloc(4 * 1024 * 1024));
 
@@ -18,7 +17,6 @@ const routes: Record<string, () => Reply> = {
     '/x-gzip': () => ({ encoding: 'x-gzip', body: zlib.gzipSync(PAYLOAD) }),
     '/deflate': () => ({ encoding: 'deflate', body: zlib.deflateSync(PAYLOAD) }),
     '/br': () => ({ encoding: 'br', body: zlib.brotliCompressSync(PAYLOAD) }),
-    '/zstd': () => ({ encoding: 'zstd', body: (zlib as any).zstdCompressSync(PAYLOAD) }),
     // Listed in the order applied: gzip first, then br. Decoded br first, then gzip.
     '/layers': () => ({ encoding: 'gzip, br', body: zlib.brotliCompressSync(zlib.gzipSync(PAYLOAD)) }),
     '/identity': () => ({ encoding: 'identity', body: Buffer.from(PAYLOAD) }),
@@ -28,6 +26,9 @@ const routes: Record<string, () => Reply> = {
     '/corrupt': () => ({ encoding: 'gzip', body: Buffer.from('definitely not gzip data at all') }),
     '/truncated': () => ({ encoding: 'gzip', body: zlib.gzipSync(PAYLOAD).subarray(0, 40) }),
     '/no-content': () => ({ status: 204, encoding: 'gzip', body: Buffer.alloc(0) }),
+    '/no-content-three': () => ({ status: 204, encoding: 'gzip, gzip, gzip', body: Buffer.alloc(0) }),
+    // A coding the reader does not decode is left raw, zstd included.
+    '/zstd': () => ({ encoding: 'zstd', body: Buffer.from('zstd-bytes') }),
 };
 
 /** A loopback server of either engine. Every response echoes the accept-encoding it received in x-seen-ae. */
@@ -70,13 +71,13 @@ function clientOf(t: TestContext, http2: boolean, options: Record<string, unknow
 
 for (const http2 of [false, true]) {
     describe(`response decompression (${http2 ? 'HTTP/2' : 'HTTP/1'})`, () => {
-        it('asks for gzip, deflate and br (and zstd when Node has it) by default', async (t) => {
+        it('asks for gzip, deflate and br by default', async (t) => {
             const base = await server(t, http2);
             const res = await clientOf(t, http2).get(`${base}/plain`);
-            assert.equal(res.headers['x-seen-ae'], zstd ? 'gzip, deflate, br, zstd' : 'gzip, deflate, br');
+            assert.equal(res.headers['x-seen-ae'], 'gzip, deflate, br');
         });
 
-        for (const path of ['/gzip', '/x-gzip', '/deflate', '/br', '/layers', '/identity', ...(zstd ? ['/zstd'] : [])]) {
+        for (const path of ['/gzip', '/x-gzip', '/deflate', '/br', '/layers', '/identity']) {
             it(`decodes ${path.slice(1)} into data, text() and json()`, async (t) => {
                 const base = await server(t, http2);
                 const res = await clientOf(t, http2).get(`${base}${path}`);
@@ -116,6 +117,7 @@ for (const http2 of [false, true]) {
         it('leaves an unknown encoding raw', async (t) => {
             const base = await server(t, http2);
             assert.equal((await clientOf(t, http2).get(`${base}/unknown`)).text(), 'raw-bytes');
+            assert.equal((await clientOf(t, http2).get(`${base}/zstd`)).text(), 'zstd-bytes');
         });
 
         it('treats a bodiless response with content-encoding as empty', async (t) => {
@@ -123,6 +125,8 @@ for (const http2 of [false, true]) {
             const client = clientOf(t, http2);
             assert.equal((await client.get(`${base}/no-content`)).data.length, 0);
             assert.equal((await client.head(`${base}/gzip`)).data.length, 0);
+            // Too many encodings only matter when there is a body to decode.
+            assert.equal((await client.get(`${base}/no-content-three`)).statusCode, 204);
         });
 
         it('with decompress: false sends no accept-encoding and returns the raw bytes', async (t) => {

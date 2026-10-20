@@ -516,7 +516,12 @@ export class Http2Engine {
         stopUpload(constants.NGHTTP2_NO_ERROR);
         const status = statusCode;
         (reader ? reader.end() : Promise.resolve(Buffer.alloc(0))).then(
-          (data) => resolve(createResponse<T>(status, responseHeaders, data)),
+          // close() or an abort while the queued compressed bytes were still decoding wins, as it would mid-body.
+          (data) => {
+            if (signal?.aborted) return reject(signal.reason);
+            if (this.#closed) return reject(clientClosed());
+            resolve(createResponse<T>(status, responseHeaders, data));
+          },
           reject,
         );
       });

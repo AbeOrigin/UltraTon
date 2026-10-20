@@ -46,7 +46,7 @@ await api.close(); // when the client is no longer needed
 | https → http redirect | **Rejected**. | — |
 | Credentials on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped. | — |
 | Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
-| Compressed responses (gzip, deflate, br, zstd where Node has it) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. | `decompress: false` |
+| Compressed responses (gzip, deflate, br) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. | `decompress: false` |
 | Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
 | Idle connection | **10 s** without bytes | `socketTimeoutMs` (`0` = none) |
 | TLS verification | **Always on**. It cannot be disabled. | `tls: { ca, cert, key }` for private CAs and mTLS |
@@ -192,7 +192,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
-- **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon cannot decode leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`.
+- **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is.
 - **Bodies are buffered, not streamed.** Responses are read into memory up to `maxBodySize`. For large downloads, use a streaming client.
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.

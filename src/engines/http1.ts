@@ -84,6 +84,7 @@ export class Http1Engine {
             // Leaving the loop early (throw) destroys `res`; a premature close or socket error throws here.
             for await (const chunk of res) reader.write(chunk);
         } catch (err: unknown) {
+            clearTimeout(executionTimer);
             if (reader.error) {
                 req.destroy();
                 throw reader.error;
@@ -98,11 +99,18 @@ export class Http1Engine {
             // a stream that just ends early has none, which is a reset connection as far as the caller is concerned.
             if (typeof code === 'string') throw toNetworkError(err);
             throw new UltraTonNetworkError('UltraTon: Connection failed (ECONNRESET).', { cause: err, code: 'ECONNRESET' });
+        }
+
+        // The absolute timeout still runs while the queued compressed bytes finish decoding.
+        try {
+            const data = await reader.end();
+            // close() or an abort during that last stretch wins over the decoded body, as it would mid-body.
+            if (reqOpts.signal?.aborted) throw reqOpts.signal.reason;
+            if (this.#closed) throw clientClosed();
+            return { data, wireBytes: reader.wireBytes };
         } finally {
             clearTimeout(executionTimer);
         }
-
-        return { data: await reader.end(), wireBytes: reader.wireBytes };
     }
 
     private _executeSingleNetworkHop(
