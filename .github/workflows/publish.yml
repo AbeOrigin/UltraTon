@@ -2,7 +2,8 @@ name: Publish to npm
 
 # Publishing uses npm trusted publishing (OIDC): no npm token is stored in the repository.
 # One-time setup on npmjs.com: package settings → Trusted publisher → GitHub Actions,
-# repository AbeOrigin/UltraTon, workflow file publish.yml.
+# repository AbeOrigin/UltraTon, workflow file publish.yml, environment npm.
+# Add required reviewers to the "npm" environment (repo Settings → Environments) so a release needs an approval.
 on:
   release:
     types: [published]
@@ -13,6 +14,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    environment: npm
     permissions:
       contents: read
       id-token: write # OIDC token for trusted publishing and provenance
@@ -33,4 +35,7 @@ jobs:
     - run: npm ci
 
     # prepack builds a clean dist; prepublishOnly runs the test suite and the package smoke test.
-    - run: npm publish --provenance --access public
+    # A GitHub prerelease goes to the "next" dist-tag, never to "latest".
+    - run: npm publish --provenance --access public --tag "$([ "$PRERELEASE" = true ] && echo next || echo latest)"
+      env:
+        PRERELEASE: ${{ github.event.release.prerelease }}

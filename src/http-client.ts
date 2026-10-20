@@ -142,7 +142,8 @@ export class UltraTonClient {
      * @param url - An absolute `https:` URL (plain `http:` only to loopback), or a relative path when `baseUrl` is set.
      * @param options - Per-request options; they override the client's defaults. See {@link UltraTonRequestOptions}.
      * @returns The response, for any status code: check `ok` or `statusCode`. Not-followed redirects resolve too.
-     * @throws {TypeError} Before connecting, on an invalid option or URL, or a path that escapes `baseUrl`.
+     * @throws {TypeError} Before connecting, on an unknown or mistyped option, or with `baseUrl` a path that is absolute,
+     *   malformed or escapes it. A malformed, non-http(s) or credential-bearing absolute URL is a `SecureHttpError`.
      * @throws {SecureHttpError} On a policy rejection (`code` `ERR_ULTRATON_*`), or a subclass: network failure,
      *   timeout, `maxBodySize` or `maxRedirects` exceeded. An abort rejects with `signal.reason`.
      */

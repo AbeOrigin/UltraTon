@@ -14,7 +14,6 @@ The first release since 1.0.3. It is a breaking release: the README has a migrat
 ### Security
 
 - **Quadratic time on request paths with long control-character runs.** With `baseUrl` set, the leading/trailing whitespace trim used a regex that retried from every position: a 200 000-character path took about 10 s to reject. It is now a linear scan (#6).
-
 - **SSRF via IP-literal URLs.** The reserved-IP check only ran inside the custom DNS `lookup`, which Node never calls for IP-literal hosts. `http://127.0.0.1`, numeric forms (`2130706433`, `0x7f.1`, `127.1`) and IPv6 literals (`[::1]`, `[::ffff:127.0.0.1]`) reached internal services with default options. Every hop, redirect targets included, is now checked before a socket opens (#1).
 - **Reserved-range coverage.** `isReservedIp` is rebuilt on `net.BlockList` and also blocks multicast, `240/4`, `198.18/15`, `192.0.0/24`, the TEST-NETs, `::/96`, `fec0::/10`, `ff00::/8`, `2001:db8::/32` and `100::/64`. IPv4 addresses embedded in NAT64 `64:ff9b::/96` are judged by the IPv4 rules, and `64:ff9b:1::/48` is blocked (#1).
 - **`auth` option leaked on cross-origin redirects.** It is now cleared whenever the origin changes, like `authorization`, `cookie` and `proxy-authorization` (#1).

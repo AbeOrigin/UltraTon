@@ -5,7 +5,7 @@
 export class SecureHttpError extends Error {
     /**
      * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`.
-     * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...).
+     * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...); absent on timeouts.
      */
     readonly code?: string;
 
@@ -20,7 +20,7 @@ export class SecureHttpError extends Error {
 export class UltraTonNetworkError extends SecureHttpError {}
 /** A timeout is a network failure too: `instanceof UltraTonNetworkError` catches it along with resets and refusals. */
 export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
-/** The response body exceeded `maxBodySize`; the connection was destroyed. */
+/** The response body exceeded `maxBodySize`; the response was aborted. */
 export class UltraTonMemoryError extends SecureHttpError {}
 /** `json()` was called on a body that is not valid JSON; the `SyntaxError` is in `cause`. */
 export class UltraTonParseError extends SecureHttpError {}

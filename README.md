@@ -44,13 +44,13 @@ await api.close(); // when the client is no longer needed
 | Redirects | **Not followed**. The 3xx comes back as a response. | `maxRedirects` (0–20) |
 | https → http redirect | **Rejected**. | — |
 | Credentials on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped. | — |
-| Response body size | **2 MB**, then the connection is destroyed. | `maxBodySize` |
+| Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
 | Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
 | Idle connection | **10 s** without bytes | `socketTimeoutMs` (`0` = none) |
 | TLS verification | **Always on**. It cannot be disabled. | `tls: { ca, cert, key }` for private CAs and mTLS |
 | Header injection (CRLF/NUL), pseudo-headers | **Rejected** before connecting. | — |
 | JSON prototype pollution | `__proto__`, `constructor` and `prototype` keys are stripped by `json()`. | — |
-| Unknown or invalid options | **Throw a `TypeError`**, with a hint for common mistakes. | — |
+| Unknown options or wrong option types | **Throw a `TypeError`**, with a hint for common mistakes. | — |
 | Truncated response (`content-length` mismatch, GOAWAY or reset mid-body) | **Rejected**. It never resolves as a short body. | — |
 
 ## Options
@@ -97,7 +97,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 
 | Error | When | `code` |
 |---|---|---|
-| `TypeError` | Invalid or unknown options, a path that escapes `baseUrl`, a body on GET/HEAD. Thrown before any connection. | — |
+| `TypeError` | Unknown options or wrong option types, a body on GET/HEAD, and with `baseUrl` a request path that is absolute, malformed or escapes it. Thrown before any connection. | — |
+| `SecureHttpError` | A malformed URL, a scheme other than http(s), or credentials in the URL (request URL, `baseUrl` or redirect target) | — |
 | `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
 | `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
@@ -127,7 +128,7 @@ Error messages never contain the IP address or hostname, so they are safe to sho
 
 ## Recipes
 
-**Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small so that every hop is still checked:
+**Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small; every hop is still checked against the SSRF policy:
 
 ```ts
 const client = new UltraTonClient({ maxRedirects: 3, maxBodySize: 512 * 1024, timeoutMs: 5000 });
@@ -200,7 +201,7 @@ A path that would land outside the base throws as well. That includes encoded an
 | Out-of-range numbers fell back to the default | They throw a `TypeError` naming the valid range. |
 | `statusCode: number \| undefined` | Always a `number`. `ok` and `text()` are new. |
 | `json()` on an empty body threw | Returns `{}`. |
-| `http://localhost` / `http://127.0.0.1` worked without a permit | Needs `permitReservedIps` (see the localhost recipe). |
+| `http://127.0.0.1` (IP literals) worked without a permit | Needs `permitReservedIps` (see the localhost recipe). |
 | Shared module-wide connection pool | One pool per client. Reuse the client and call `close()` when done. |
 | Network errors were raw Node errors containing the IP | `UltraTonNetworkError` with `code` and `cause`. |
 | `UltraTonNetworkTimeoutError` was a separate branch | It extends `UltraTonNetworkError`, so check for it first. |
