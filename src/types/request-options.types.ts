@@ -15,7 +15,8 @@ export interface UltraTonRequestOptions {
 
     /**
      * A JSON payload. It is serialized with `JSON.stringify` and sent with `content-type: application/json`
-     * unless a `content-type` header is already set. Cannot be combined with `body`.
+     * unless a `content-type` header is already set, by the request or by the client's default `headers`.
+     * Cannot be combined with `body`.
      */
     readonly json?: unknown;
 

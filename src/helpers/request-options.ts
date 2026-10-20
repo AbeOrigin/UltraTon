@@ -188,6 +188,13 @@ function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
     }
 }
 
+/** An object whose prototype is `Object.prototype` or `null`: not an array, a class instance, a Map or a Headers. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (typeof value !== 'object' || value === null) return false;
+    const proto: unknown = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+}
+
 /**
  * A copy of the object's own enumerable properties on a null-prototype object. Every options object is read through
  * one: a property inherited from a polluted `Object.prototype` (`baseUrl`, `tls`, `permitReservedIps`, `auth`, ...)
@@ -197,8 +204,7 @@ function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
  *   silently (a `get http2() { return true }` giving an HTTP/1 client).
  */
 function ownOptions<T extends object>(options: T): T {
-    const proto: unknown = Object.getPrototypeOf(options);
-    if (proto !== Object.prototype && proto !== null) {
+    if (!isPlainObject(options)) {
         throw new TypeError('UltraTon: Options must be a plain object.');
     }
     const own = Object.create(null) as Record<string, unknown>;
@@ -224,9 +230,9 @@ export function withMethod(method: string, options: unknown): InternalRequestOpt
 }
 
 /**
- * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized (and
- * sets `content-type: application/json` unless the caller already set one), a string/Uint8Array `body` becomes a Buffer.
- * Run it on the user-supplied options, before any internal enrichment.
+ * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized, a
+ * string/Uint8Array `body` becomes a Buffer. Run it on the user-supplied options, before any internal enrichment; the
+ * content-type of a `json` body is added after the client defaults are merged (see withJsonContentType).
  * @throws {TypeError} On an unknown option, `json` together with `body`, a `body` of the wrong type or a `json` that cannot be serialized.
  */
 export function resolveRequestBody(options: InternalRequestOptions): ResolvedRequestOptions {
@@ -253,18 +259,22 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedReq
         throw new TypeError("UltraTon: 'json' could not be serialized: functions and symbols have no JSON representation.");
     }
 
-    // headers is only checked for shape by buildSafeRequestOptions later; here, anything that is not a plain object is left alone.
-    const headers: unknown = rest.headers;
-    let withType: unknown = headers;
-    if (headers === undefined) {
-        withType = { 'content-type': 'application/json' };
-    } else if (typeof headers === 'object' && headers !== null && !Array.isArray(headers)) {
-        const map = headers as Record<string, unknown>;
-        const hasContentType = Object.keys(map).some(key => key.toLowerCase() === 'content-type' && map[key] !== undefined);
-        if (!hasContentType) withType = { ...map, 'content-type': 'application/json' };
-    }
+    return { ...rest, body: Buffer.from(serialized) };
+}
 
-    return { ...rest, headers: withType as ResolvedRequestOptions['headers'], body: Buffer.from(serialized) };
+/**
+ * Adds `content-type: application/json` for a `json` body, unless the headers already carry a content-type. Run it on
+ * the options merged with the client defaults, so a client default content-type (`application/vnd.api+json`) is kept
+ * and a request's own one wins over both. Headers that are not a plain object are left for buildSafeRequestOptions to reject.
+ */
+export function withJsonContentType(options: ResolvedRequestOptions): ResolvedRequestOptions {
+    const headers: unknown = options.headers;
+    if (headers === undefined) return { ...options, headers: { 'content-type': 'application/json' } };
+    if (!isPlainObject(headers)) return options;
+    const map = headers as Record<string, unknown>;
+    const hasContentType = Object.keys(map).some(key => key.toLowerCase() === 'content-type' && map[key] !== undefined);
+    if (hasContentType) return options;
+    return { ...options, headers: { ...map, 'content-type': 'application/json' } as ResolvedRequestOptions['headers'] };
 }
 
 /** `auth` as the value of a Basic `authorization` header, the same encoding `node:http` applies to its own `auth` option. */

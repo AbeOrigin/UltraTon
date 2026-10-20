@@ -7,5 +7,8 @@
 /** A replacement for `http.request`/`https.request` used by the HTTP/1 engine. */
 export const kTransport: unique symbol = Symbol('ultraton.transport');
 
-/** A pre-built `Http2SessionManager` used by the HTTP/2 engine instead of the client's own. */
+/**
+ * A pre-built `Http2SessionManager` used by the HTTP/2 engine instead of the client's own. Tests also use it to shorten
+ * the pool timings (session idle timeout, maximum lifespan) through the manager's `SessionTimings` constructor argument.
+ */
 export const kSessionManager: unique symbol = Symbol('ultraton.sessionManager');

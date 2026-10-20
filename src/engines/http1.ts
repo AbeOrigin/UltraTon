@@ -113,11 +113,14 @@ export class Http1Engine {
             const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
             // The body always goes out with its exact length, never chunked: a caller-supplied content-length or
-            // transfer-encoding must not disagree with the bytes actually written.
+            // transfer-encoding must not disagree with the bytes actually written. Without a body a caller
+            // content-length would promise bytes that never come and the server would wait for them: drop it.
             const headers = { ...reqOpts.headers };
             if (body !== undefined) {
                 headers['content-length'] = String(body.length);
                 delete headers['transfer-encoding'];
+            } else {
+                delete headers['content-length'];
             }
 
             const req = transport(urlObj, {

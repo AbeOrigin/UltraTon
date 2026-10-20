@@ -28,6 +28,16 @@ interface SessionEntry {
   ips: readonly string[];
 }
 
+/**
+ * Timings of the pool, overridable through the constructor for tests only (the client never passes them):
+ * `idleTimeoutMs` reaps a session with no stream in flight after that long without a frame, and `maxLifespanMs`
+ * retires a session from the pool once it is that old.
+ */
+export interface SessionTimings {
+  readonly idleTimeoutMs?: number;
+  readonly maxLifespanMs?: number;
+}
+
 /** A DNS lookup plus connect in flight for one pool key, shared by every caller that arrives while it runs. */
 interface Attempt {
   promise: Promise<SessionEntry>;
@@ -128,13 +138,18 @@ export class Http2SessionManager {
   #pendingConnections: Map<string, Attempt> = new Map();
   readonly #tlsConfig?: SecureClientSessionOptions;
   readonly #connectFn: typeof nativeConnect;
+  readonly #idleTimeoutMs: number;
+  readonly #maxLifespanMs: number;
 
   constructor(
     tlsConfig: SecureClientSessionOptions = {},
     connectFn: typeof nativeConnect = nativeConnect,
+    timings: SessionTimings = {},
   ) {
     this.#tlsConfig = tlsConfig;
     this.#connectFn = connectFn;
+    this.#idleTimeoutMs = timings.idleTimeoutMs ?? IDLE_TIMEOUT;
+    this.#maxLifespanMs = timings.maxLifespanMs ?? MAX_SESSION_LIFESPAN;
   }
 
   /**
@@ -208,7 +223,7 @@ export class Http2SessionManager {
 
     if (entry) {
       const { session, createdAt } = entry;
-      const isExpired = Date.now() - createdAt > MAX_SESSION_LIFESPAN;
+      const isExpired = Date.now() - createdAt > this.#maxLifespanMs;
 
       if (!session.destroyed && !session.closed && !isExpired) {
         return entry;
@@ -339,7 +354,7 @@ export class Http2SessionManager {
       pooled &&
       !pooled.session.closed &&
       !pooled.session.destroyed &&
-      Date.now() - pooled.createdAt <= MAX_SESSION_LIFESPAN
+      Date.now() - pooled.createdAt <= this.#maxLifespanMs
     ) {
       return pooled;
     }
@@ -358,7 +373,7 @@ export class Http2SessionManager {
     // the synchronous gap between session creation and error handler registration.
     newSession.on("error", () => this.#destroySession(key, newSession));
 
-    newSession.setTimeout(IDLE_TIMEOUT);
+    newSession.setTimeout(this.#idleTimeoutMs);
     // Idle until a request holds it (holdSession): a pooled session must not keep the process alive by itself.
     newSession.unref();
     // A GOAWAY lets the streams it covers finish: destroying the session here would end them early, and a stream
@@ -371,7 +386,12 @@ export class Http2SessionManager {
         this.#sessions.delete(key);
       }
     });
-    newSession.on("timeout", () => this.#destroySession(key, newSession));
+    // The idle timeout reaps a session nobody uses. A stream may legitimately wait longer than that for its response
+    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is left alone: Node
+    // re-arms the timer on the next frame, and the session is reaped once it has been idle with no stream held.
+    newSession.on("timeout", () => {
+      if (heldStreams(newSession) === 0) this.#destroySession(key, newSession);
+    });
 
     const entry: SessionEntry = {
       session: newSession,

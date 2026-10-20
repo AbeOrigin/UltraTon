@@ -37,6 +37,9 @@ const BODY_CHUNK_BYTES = 64 * 1024;
 
 const clientClosed = () => new SecureHttpError("UltraTon: Client is closed.");
 
+/** Connection-specific request headers, meaningless (and refused by node) on HTTP/2. `te` is handled apart. */
+const HOP_BY_HOP_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"];
+
 /** The HTTP/2 engine behind `UltraTonClient({ http2: true })`. Not public: the client validates and merges the options. */
 export class Http2Engine {
   readonly #sessionManager: Http2SessionManager;
@@ -116,11 +119,17 @@ export class Http2Engine {
         ...reqOpts.headers,
       };
 
+      // HTTP/2 has no connection-specific headers (RFC 9113 8.2.2) and node refuses to send them, which would fail
+      // the request with a misleading network error: drop them, on every request. `te` may only be `trailers`.
+      for (const name of HOP_BY_HOP_HEADERS) delete safeHeaders[name];
+      if (safeHeaders["te"] !== "trailers") delete safeHeaders["te"];
+
       // Always present with a body, and the real byte length wins over anything the caller put in the header.
-      // HTTP/2 does its own framing: a caller transfer-encoding is a connection-specific header node rejects.
+      // Without a body a caller content-length would promise bytes that never come: drop it.
       if (currentOptions.body !== undefined) {
         safeHeaders["content-length"] = String(currentOptions.body.length);
-        delete safeHeaders["transfer-encoding"];
+      } else {
+        delete safeHeaders["content-length"];
       }
 
       const method = (reqOpts.method || "GET").toUpperCase();
