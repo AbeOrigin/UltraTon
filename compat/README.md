@@ -19,6 +19,14 @@ The tests also pin two axios behaviours that bypass any agent, which is why the 
 - **In CI:** `ssrf-corpus.test.ts` fails if UltraTon stops blocking any case.
 - **The table:** `npm run corpus` regenerates [`ssrf-corpus/RESULTS.md`](ssrf-corpus/RESULTS.md), the comparison table.
 
+## Benchmarks
+
+[`bench/`](bench/) measures UltraTon next to Node's `http.request` (the baseline with no checks), Node's `fetch` (undici), axios, got and node-fetch.
+
+- **What it measures:** requests per second, p50/p99 latency, CPU per 1 000 requests and memory, with a 1 KiB and a 64 KiB body, every client in its own process.
+- **Where it runs:** only in CI, in the `Benchmarks` workflow (by hand, weekly, and on PRs that touch `bench/`). `npm run bench` refuses to run elsewhere. `BENCH_SMOKE=1 npm run bench` is a sub-second check of the harness itself, and its numbers mean nothing.
+- **The results:** [`bench/RESULTS.md`](bench/RESULTS.md) is committed from a CI run's artifact.
+
 ## Why the dependencies are safe here
 - **Exact versions and a lockfile with integrity hashes:** `npm ci` refuses anything that does not match byte for byte.
 - **No install scripts:** everything is installed with `--ignore-scripts`, so third-party code never runs at install time.

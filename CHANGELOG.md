@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Reproducible benchmarks** in `compat/bench/`: UltraTon (HTTP/1.1 and HTTP/2, and axios through `createSecureAgents()`) next to Node's `http.request`, Node's `fetch` (undici), axios, got and node-fetch.
+  - It reports requests per second, p50/p99 latency, CPU per 1 000 requests and memory, with a 1 KiB and a 64 KiB body.
+  - Every client runs in its own process, takes the median of 3 rounds after a warm-up, and gets an IP literal, so DNS is not measured.
+  - It runs only in CI, in a `Benchmarks` workflow (by hand, weekly, and on PRs that touch it); results are committed to `compat/bench/RESULTS.md`.
 - **Property tests (fuzzing) for the parsers that face hostile input,** with no dependency: a seeded PRNG, generators built from the pieces real bypasses use, and a shrinker, in `__tests__/fuzz/`. They check that:
   - no request path UltraTon accepts escapes `baseUrl` as a lenient server decodes it;
   - IPv6 parsing gives exactly the written address in every spelling;
