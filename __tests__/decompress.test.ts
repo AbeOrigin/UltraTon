@@ -35,7 +35,7 @@ const routes: Record<string, () => Reply> = {
 async function server(t: TestContext, http2: boolean) {
     const sockets = new Set<Socket>();
     const reply = (path: string, ae: unknown) => {
-        const r = (routes[path] ?? (() => ({ body: Buffer.from('plain') })))();
+        const r = Object.hasOwn(routes, path) ? routes[path]() : { body: Buffer.from('plain') };
         const headers: Record<string, string> = { 'x-seen-ae': String(ae), 'content-length': String(r.body.length) };
         if (r.encoding) headers['content-encoding'] = r.encoding;
         if (r.status === 204) delete headers['content-length'];
