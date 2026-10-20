@@ -38,6 +38,8 @@ export interface UltraTonStreamResponse {
     readonly headers: IncomingHttpHeaders;
     /** The final URL, after any redirect that was followed. */
     readonly url: string;
+    /** True when at least one redirect was followed to get here. */
+    readonly redirected: boolean;
     /**
      * The body, decoded when `decompress` is on. Read it to the end or `cancel()` it: until then it holds its
      * connection (and keeps the process alive). It fails, rather than ending, when the body is cut short, too large,

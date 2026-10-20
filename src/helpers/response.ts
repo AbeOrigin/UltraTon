@@ -70,7 +70,8 @@ export function createStreamResponse(
   rawHeaders: IncomingHttpHeaders,
   body: ReadableStream<Uint8Array>,
   url: string,
+  redirected: boolean,
 ): UltraTonStreamResponse {
   const { headers } = createResponse(statusCode, rawHeaders, Buffer.alloc(0));
-  return { statusCode, ok: statusCode >= 200 && statusCode < 300, headers, url, body };
+  return { statusCode, ok: statusCode >= 200 && statusCode < 300, headers, url, redirected, body };
 }

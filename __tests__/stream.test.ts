@@ -145,6 +145,7 @@ for (const http2 of [false, true]) {
             assert.equal(res.ok, true);
             assert.equal(res.headers['content-length'], String(3 * MiB));
             assert.equal(res.url, `${base}/data?n=${3 * MiB}`);
+            assert.equal(res.redirected, false);
             assert.ok(res.body instanceof ReadableStream);
             assert.equal((await readAll(res.body)).length, 3 * MiB);
             // The buffered methods keep their own limit.
@@ -251,6 +252,7 @@ for (const http2 of [false, true]) {
             const res = await clientOf(t, http2, { maxRedirects: 1 }).stream(`${base}/redir`);
             assert.equal(res.statusCode, 200);
             assert.equal(res.url, `${base}/data?n=10`);
+            assert.equal(res.redirected, true);
             assert.equal((await readAll(res.body)).length, 10);
         });
 
