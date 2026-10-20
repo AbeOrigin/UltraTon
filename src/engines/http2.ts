@@ -161,7 +161,7 @@ export class Http2Engine {
         reqOpts.signal,
         reqOpts.maxRedirects > 0,
         reqOpts.decompress,
-        stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl },
+        stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl, redirected: redirectCount > 0 },
       );
 
       const statusCode = response.statusCode;
@@ -321,7 +321,7 @@ export class Http2Engine {
     signal: AbortSignal | undefined,
     followRedirects: boolean,
     decompress: boolean,
-    streaming?: { maxBodySize: number; url: string },
+    streaming?: { maxBodySize: number; url: string; redirected: boolean },
   ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     return new Promise((resolve, reject) => {
       // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
@@ -444,7 +444,7 @@ export class Http2Engine {
 
           if (streaming) {
             const empty = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
-            return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url));
+            return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url, streaming.redirected));
           }
           return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
         }
@@ -491,7 +491,7 @@ export class Http2Engine {
               // As for a buffered response: a silent connection may be dead, so the next request gets a new one.
               if (err instanceof UltraTonNetworkTimeoutError) this.#sessionManager.retire(session);
             },
-          }), streaming.url));
+          }), streaming.url, streaming.redirected));
         }
 
         reader = new BodyReader({

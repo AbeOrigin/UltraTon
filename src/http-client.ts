@@ -8,6 +8,7 @@ import { Http2SessionManager } from './engines/http2-session-manager.ts';
 import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, splitStreamOptions, withAcceptEncoding, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
+import { fetchWith } from './helpers/fetch.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
@@ -118,6 +119,16 @@ export class UltraTonClient {
     readonly #defaults: ClientDefaults;
     readonly #baseUrl?: URL;
     #closed = false;
+
+    /**
+     * A `fetch()` that goes through this client: same arguments and a standard `Response`, with every UltraTon check
+     * (SSRF, redirects up to the client's `maxRedirects`, limits, decoding) and `json()` stripping `__proto__` keys.
+     * Bound to the client, so it can be handed to any library that accepts a fetch implementation.
+     * Network and policy failures reject as `TypeError('fetch failed')` with the UltraTon error as `cause`; an abort
+     * with the signal's reason. Request bodies are buffered (a ReadableStream body throws).
+     */
+    public readonly fetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+        fetchWith((url, options) => this.stream(url, options), input, init);
 
     /**
      * @param options - Defaults for every request plus `baseUrl`, `http2`, `tls` and `userAgent`. Validated now: an

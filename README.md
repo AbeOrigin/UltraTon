@@ -177,6 +177,22 @@ setTimeout(() => controller.abort(), 1000);
 await api.get('search?q=x', { signal: controller.signal }); // rejects with controller.signal.reason
 ```
 
+**Use it as `fetch`, or hand it to a library.** `client.fetch` takes the same arguments as `fetch` and returns a standard `Response`. Every request still goes through the client's SSRF policy and limits. It is bound to the client, so libraries that accept a custom fetch get the protection without code changes:
+
+```ts
+const client = new UltraTonClient({ maxRedirects: 3 });
+const res = await client.fetch(webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event) });
+
+const sdk = new SomeSdk({ fetch: client.fetch });
+```
+
+Differences from the platform's `fetch`:
+- **Redirects** follow the client's `maxRedirects`, which defaults to 0. With the default, a 3xx comes back as the `Response`; `redirect: 'manual'` and `'error'` work as usual.
+- **Failures:** network and policy failures reject as `TypeError('fetch failed')` with the UltraTon error as `cause`, as undici does. An abort rejects with the signal's reason.
+- **`json()`** strips `__proto__`, `constructor` and `prototype` keys.
+- **Request bodies** are buffered: a `ReadableStream` body throws.
+- **Options:** browser-only options (`mode`, `credentials`, `cache`, …) are ignored. Options that would change the connection (`dispatcher`, `agent`) throw: configure the client instead.
+
 **Stream a large download.** `stream()` resolves on the headers and hands you the body as a `ReadableStream`. Its limits still apply as it is read, and `maxBodySize` may go up to `Number.MAX_SAFE_INTEGER` here:
 
 ```ts

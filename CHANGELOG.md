@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`client.fetch(input, init)`.** A `fetch()` that goes through the client and returns a standard `Response`. It is bound to the client, so it can be passed to any library that accepts a fetch implementation.
+  - It is built on `stream()`, so every UltraTon check applies.
+  - Bodies (string, `ArrayBuffer`/views, `Blob`, `URLSearchParams`, `FormData` with its multipart boundary) and headers are normalized by the platform's own `Request`, and a `Request` can be the input.
+  - Methods are upper-cased.
+  - Redirects follow the client's `maxRedirects` (default 0, so a 3xx comes back as the `Response`). `redirect: 'manual'` returns the 3xx, and `'error'` rejects.
+  - Failures follow undici: a non-`TypeError` failure rejects as `TypeError('fetch failed')` with the UltraTon error as `cause`, and an abort rejects with the signal's reason.
+  - The `Response` has `url` and `redirected` set and a null body for 204/205/304/HEAD. Its `json()` strips `__proto__`, `constructor` and `prototype` keys.
+  - Browser-only init fields are ignored. `dispatcher`, `agent` and any other unknown field throw, and so does a streaming request body.
+- **`redirected` on stream responses.** `UltraTonStreamResponse` now says whether a redirect was followed.
 - **`client.stream(url, options)`.** Resolves when the response headers arrive, with `{ statusCode, ok, headers, url, body }`, where `body` is a `ReadableStream<Uint8Array>`. The method is an option (`method`, default `'GET'`, one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS). Every check of the other methods applies before the headers (SSRF, redirects followed before resolving, credentials, `timeoutMs`), and the body keeps its limits as it is read:
   - `maxBodySize` on wire and decoded bytes, here up to `Number.MAX_SAFE_INTEGER`;
   - the content-length match and decoding;
