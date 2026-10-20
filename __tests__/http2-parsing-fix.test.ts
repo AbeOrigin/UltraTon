@@ -2,9 +2,10 @@ import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
-import { UltraTonHTTP2 } from '../src/http2-client.ts';
+import { UltraTonClient } from '../src/http-client.ts';
+import { kSessionManager } from '../src/internal.ts';
 
 /**
  * Real h2c server on 127.0.0.1 that answers every request with `application/json`
@@ -27,20 +28,22 @@ const serveJson = async (t: TestContext, body: string) => {
   });
 
   return {
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     url: `http://127.0.0.1:${port}/`,
   };
 };
 
-describe('UltraTonHTTP2 - JSON Parsing Fix Validation', () => {
-  it('rejects with UltraTonParseError on a malformed application/json body instead of crashing', { timeout: 5000 }, async (t) => {
+describe('UltraTonClient (http2) - JSON Parsing Fix Validation', () => {
+  it('resolves a malformed application/json body and json() throws UltraTonParseError instead of crashing', { timeout: 5000 }, async (t) => {
     const { client, url } = await serveJson(t, '{not json');
 
     const uncaught: unknown[] = [];
     const onUncaught = (err: unknown) => { uncaught.push(err); };
     process.on('uncaughtException', onUncaught);
     try {
-      await assert.rejects(client.get(url, { permitReservedIps: true }), UltraTonParseError);
+      const res = await client.get(url, { permitReservedIps: true });
+      assert.strictEqual(res.statusCode, 200);
+      assert.throws(() => res.json(), UltraTonParseError);
       // A throw from a stream listener surfaces as an uncaught exception on a later tick.
       await new Promise<void>((resolve) => setImmediate(resolve));
       assert.deepStrictEqual(uncaught, []);
@@ -49,12 +52,12 @@ describe('UltraTonHTTP2 - JSON Parsing Fix Validation', () => {
     }
   });
 
-  it('parses a valid application/json body and strips __proto__', { timeout: 5000 }, async (t) => {
+  it('json() parses a valid application/json body and strips __proto__', { timeout: 5000 }, async (t) => {
     const { client, url } = await serveJson(t, '{"a":1,"__proto__":{"polluted":true}}');
 
     const res = await client.get(url, { permitReservedIps: true });
 
-    assert.deepStrictEqual(res.body, { a: 1 });
+    assert.deepStrictEqual(res.json(), { a: 1 });
     assert.strictEqual(({} as { polluted?: boolean }).polluted, undefined);
   });
 });

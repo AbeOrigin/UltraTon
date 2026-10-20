@@ -1,277 +1,187 @@
-import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError } from "./errors.ts";
-import { buildSafeRequestOptions } from "./helpers/request-options.ts";
-import { parseSafeUrl } from "./helpers/url-parser.ts";
-import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
-import type { UltraTonResponse } from "./types/request-response.ts";
-import { assertAllowedIp, policyKey, resolveAndPinHost } from "./security/dns-pinner.ts";
-import type { ReservedIpPolicy } from "./security/dns-pinner.ts";
-import * as http from 'node:http';
-import * as https from 'node:https';
-import type { LookupOptions, LookupAddress } from 'node:dns';
-import { HTTP_CODES_REDIRECTS } from './constants.ts';
-import { parseSecurePayload, secureReviver } from './helpers/payload-parser.ts';
+import type * as http from 'node:http';
+import type * as https from 'node:https';
+import { SecureHttpError } from './errors.ts';
+import { VERSION } from './constants.ts';
+import { Http1Engine } from './engines/http1.ts';
+import { Http2Engine } from './engines/http2.ts';
+import { Http2SessionManager } from './engines/http2-session-manager.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withJsonContentType, withMethod } from './helpers/request-options.ts';
+import type { ClientDefaults } from './helpers/request-options.ts';
+import { kSessionManager, kTransport } from './internal.ts';
+import type { UltraTonClientOptions, UltraTonRequestOptions } from './types/request-options.types.ts';
+import type { UltraTonResponse } from './types/request-response.ts';
 
-// Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
-// host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
-// Hence one keep-alive agent pair per policy: sockets are never shared across policies.
-// Idle pooled sockets are reaped after 5s, as with Node's global agent: without it a hostile server reached through N hostnames
-// could pin N file descriptors for as long as it keeps them open.
-// ponytail: one agent pair per distinct policy, never evicted, so the map grows with distinct allowlists; the ceiling is the
-// number of policies an app uses. Same upgrade path as the compiled-allowlist cache: bound it if lists ever come from request-time input.
-const IDLE_SOCKET_TIMEOUT_MS = 5000;
-const agentsByPolicy = new Map<string, { http: http.Agent; https: https.Agent }>();
-
-function agentFor(policy: ReservedIpPolicy, protocol: string): http.Agent {
-    const key = policyKey(policy);
-    let agents = agentsByPolicy.get(key);
-    if (!agents) {
-        agents = { http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }), https: new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }) };
-        agentsByPolicy.set(key, agents);
-    }
-    return protocol === 'http:' ? agents.http : agents.https;
+/** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
+interface InternalClientOptions extends UltraTonClientOptions {
+    readonly [kTransport]?: typeof https.request | typeof http.request;
+    readonly [kSessionManager]?: Http2SessionManager;
 }
 
+const MUST_BE_RELATIVE = 'UltraTon: With baseUrl set, request paths must be relative.';
+const ESCAPES_BASE = 'UltraTon: Request path escapes baseUrl.';
+const MALFORMED_ENCODING = 'UltraTon: Request path has malformed percent-encoding.';
+
+/** How many times the part below the base is percent-decoded before a still-changing path is refused. */
+const MAX_DECODE_PASSES = 5;
+/** Path separators for the servers this check anticipates: '/', '\', DIVISION SLASH and REVERSE SOLIDUS OPERATOR. */
+const SEPARATORS = /[/\\\u2215\u29F5]/;
+/** A segment made only of dots plus spaces and control characters, which lenient servers trim (Windows/IIS). */
+const DOTS_AND_JUNK = /^[.\u0000-\u0020\u007F-\u009F]*$/;
+// Fatal: a run of bytes that is not UTF-8 throws instead of becoming U+FFFD.
+const utf8 = new TextDecoder('utf-8', { fatal: true });
+
+/**
+ * Decodes every `%XX` run and leaves anything else as is (a bare '%' not followed by two hex digits stays literal, so
+ * '100%' is fine), the way lenient servers decode a second time. A run that is not UTF-8, such as the double-encoded
+ * overlong dots of '%25c0%25ae', is something a lenient server may read as anything, so it throws ESCAPES_BASE.
+ */
+function lenientDecode(text: string): string {
+    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => {
+        try {
+            return utf8.decode(Buffer.from(run.replace(/%/g, ''), 'hex'));
+        } catch {
+            throw new TypeError(ESCAPES_BASE);
+        }
+    });
+}
+
+/**
+ * Judges the part of a resolved path below the base the way the most lenient servers read it, and throws if any of
+ * them could see a step out of the base. That means: percent-decoded until it stops changing (at most
+ * MAX_DECODE_PASSES, else refused), NFKC-normalized (fullwidth dots and slashes, the two-dot leader), split on every
+ * separator in SEPARATORS, each segment cut at ';' (Tomcat/Spring params) and at a decoded '?' or '#'. A segment that
+ * is then '.' or '..', or only dots plus trailing spaces/controls ('.. ', '..%00'), escapes. So does a run of 3 or
+ * more dots followed by a separator ('.../'); the same run as the last segment is an ordinary file name.
+ * An encoded slash inside an ordinary segment (GitLab's 'group%2Fproject') stays allowed.
+ */
+function assertNoDecodedTraversal(below: string): void {
+    let decoded: string;
+    try {
+        decoded = decodeURIComponent(below).normalize('NFKC');
+    } catch {
+        throw new TypeError(MALFORMED_ENCODING);
+    }
+    for (let passes = 1; ; passes++) {
+        const next = lenientDecode(decoded).normalize('NFKC');
+        if (next === decoded) break;
+        if (passes === MAX_DECODE_PASSES) throw new TypeError(ESCAPES_BASE);
+        decoded = next;
+    }
+
+    const segments = decoded.split(SEPARATORS);
+    segments.forEach((segment, index) => {
+        const name = segment.split(/[;?#]/, 1)[0];
+        if (!name.includes('.') || !DOTS_AND_JUNK.test(name)) return;
+        const fileNameOfDots = /^\.{3,}$/.test(name) && index === segments.length - 1;
+        if (!fileNameOfDots) throw new TypeError(ESCAPES_BASE);
+    });
+}
+
+/**
+ * Resolves a request path against the client's `baseUrl` so that it can never land outside it.
+ * The input is judged as the WHATWG parser will read it (leading/trailing C0 controls and spaces ignored, tabs and
+ * newlines removed anywhere), and the final check is on the resolved href, not on the input: percent-encoded dots
+ * (`%2e%2e`) and backslashes are dot segments and slashes to the parser, whatever the input looks like.
+ * @throws {TypeError} If the path is absolute or protocol-relative, resolves outside the base path, could be read as a
+ *   step out of it by a lenient server (see assertNoDecodedTraversal), or has malformed percent-encoding.
+ */
+function resolveAgainstBase(path: unknown, base: URL): string {
+    if (typeof path !== 'string') {
+        throw new TypeError(`UltraTon: Expected the request URL to be a string, received ${path === null ? 'null' : typeof path}.`);
+    }
+    // Index scan, not /[\u0000- ]+$/: that regex retries from every position and goes quadratic on long control runs.
+    let start = 0;
+    let end = path.length;
+    while (start < end && path.charCodeAt(start) <= 0x20) start++;
+    while (end > start && path.charCodeAt(end - 1) <= 0x20) end--;
+    const parsed = path.slice(start, end).replace(/[\t\n\r]/g, '');
+    // A scheme makes it absolute (https:, javascript:, ...); two leading slashes in any mix with backslashes make it
+    // protocol-relative, since special schemes read '\' as '/'.
+    if (URL.canParse(parsed) || /^[\\/]{2}/.test(parsed)) throw new TypeError(MUST_BE_RELATIVE);
+    // One leading slash means "from the base", not "from the origin root".
+    const resolved = new URL(parsed.replace(/^[\\/]/, ''), base);
+    // base.href ends with '/', so this also rules out another host, port or scheme and sibling paths ('/v1-admin').
+    if (!resolved.href.startsWith(base.href)) throw new TypeError(ESCAPES_BASE);
+    // The URL is inside the base, but servers do not all read it the same way: some decode %2F/%5C (even twice) before
+    // resolving dot segments, IIS reads '\' as '/' and trims trailing dots and spaces, Tomcat/Spring drop ';params'.
+    assertNoDecodedTraversal(resolved.pathname.slice(base.pathname.length));
+    return resolved.href;
+}
+
+/**
+ * The UltraTon client. Configure it once; every request is validated, merged with the client's defaults and sent over
+ * HTTP/1.1 or, with `http2: true`, HTTP/2. Each client owns its connection pools: two clients never share a socket or a
+ * session, so a permissive `permitReservedIps` or a custom `tls` never reaches another client. Call `close()` when done.
+ */
 export class UltraTonClient {
-    // Internal testing interceptor
-    #transport?: typeof https.request | typeof http.request;
+    readonly #engine: Http1Engine | Http2Engine;
+    readonly #defaults: ClientDefaults;
+    readonly #baseUrl?: URL;
+    #closed = false;
 
     /**
-     * @param transportInterceptor - Optional transport layer interceptor used strictly for internal testing.
+     * @param options - Defaults for every request plus `baseUrl`, `http2`, `tls` and `userAgent`. Validated now: an
+     *   unknown key, a value of the wrong type or a `tls` key other than `ca`/`cert`/`key` throws a `TypeError`.
      */
-    constructor(transportInterceptor?: typeof https.request | typeof http.request) {
-        this.#transport = transportInterceptor;
+    constructor(options?: UltraTonClientOptions) {
+        const resolved = resolveClientOptions(options, `ultraton/${VERSION}`);
+        this.#defaults = resolved.defaults;
+        this.#baseUrl = resolved.baseUrl;
+
+        // The seams are read only once the options validated as an object, and only as own properties.
+        const internal = (options ?? {}) as InternalClientOptions;
+        const own = <K extends typeof kTransport | typeof kSessionManager>(key: K) =>
+            Object.hasOwn(internal, key) ? internal[key] : undefined;
+        this.#engine = resolved.http2
+            ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls))
+            : new Http1Engine(resolved.tls, own(kTransport));
     }
 
-    public async get<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'GET' });
+    public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('GET', url, options);
     }
 
-    public async post<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'POST', body });
+    public async post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('POST', url, options);
     }
 
-    public async put<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'PUT', body });
+    public async put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('PUT', url, options);
     }
 
-    public async patch<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'PATCH', body });
+    public async patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('PATCH', url, options);
     }
 
-    public async delete<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'DELETE' });
+    public async delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('DELETE', url, options);
     }
 
-    public async head<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'HEAD' });
+    public async head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('HEAD', url, options);
     }
 
-    public async options<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'OPTIONS' });
+    public async options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>('OPTIONS', url, options);
     }
 
-    private async _consumeResponseBuffer(
-        res: IncomingMessage,
-        req: ClientRequest,
-        reqOpts: SecureUltraTonRequestOptions,
-        executionTimer: NodeJS.Timeout | undefined
-    ): Promise<Buffer> {
-        const chunks: Buffer[] = [];
-        let currentBodySize = 0;
-
-        try {
-            // Leaving the loop early (throw) destroys `res`; a premature close or socket error throws here.
-            for await (const chunk of res) {
-                currentBodySize += chunk.length;
-                if (currentBodySize > reqOpts.maxBodySize) {
-                    req.destroy();
-                    throw new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`);
-                }
-                chunks.push(chunk);
-            }
-        } catch (err: unknown) {
-            if (err instanceof UltraTonMemoryError) throw err;
-            throw new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.');
-        } finally {
-            clearTimeout(executionTimer);
-        }
-
-        return Buffer.concat(chunks, currentBodySize);
+    /**
+     * Destroys every pooled socket and session of this client; requests still in flight on them fail. Any later
+     * request rejects with `SecureHttpError('UltraTon: Client is closed.')`. Calling it again does nothing.
+     */
+    public async close(): Promise<void> {
+        if (this.#closed) return;
+        this.#closed = true;
+        this.#engine.close();
     }
 
-    private _executeSingleNetworkHop(
-        urlObj: URL,
-        reqOpts: SecureUltraTonRequestOptions,
-        options: UltraTonRequestOptions,
-        currentTimeoutMs: number
-    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean }> {
-        return new Promise((resolve, reject) => {
-            let executionTimer: NodeJS.Timeout | undefined;
-
-            const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
-            
-            const req = transport(urlObj, {
-                ...reqOpts,
-                timeout: reqOpts.socketTimeoutMs,
-                agent: agentFor(reqOpts.permitReservedIps, urlObj.protocol),
-                lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
-                    resolveAndPinHost(lookupHostname, reqOpts.permitReservedIps)
-                        .then(ip => {
-                            const family = ip.includes(':') ? 6 : 4;
-                            const result = lookupOptions.all ? [{ address: ip, family }] : ip;
-                            callback(null, result, family);
-                        })
-                        .catch(err => {
-                            // Passing the error back into the Node HTTP machinery so it emits an 'error' event on req
-                            callback(err as NodeJS.ErrnoException, '', 4);
-                        });
-                }
-            });
-
-            if (currentTimeoutMs > 0) {
-                executionTimer = setTimeout(() => {
-                    req.destroy();
-                    reject(new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`));
-                }, currentTimeoutMs);
-            }
-
-            req.on('response', (res: IncomingMessage) => {
-                const isRedirect = res.statusCode !== undefined && HTTP_CODES_REDIRECTS.has(res.statusCode);
-                const location = res.headers.location;
-
-                if (isRedirect && location) {
-                    res.destroy(); // Dump incoming V8 buffers natively before recurse
-                    req.destroy(); // Kill socket cleanly
-                    clearTimeout(executionTimer);
-                    return resolve({
-                        statusCode: res.statusCode as number,
-                        headers: res.headers,
-                        data: Buffer.alloc(0),
-                        isRedirect: true
-                    });
-                }
-
-                this._consumeResponseBuffer(res, req as ClientRequest, reqOpts, executionTimer)
-                    .then(data => {
-                        resolve({
-                            statusCode: res.statusCode as number,
-                            headers: res.headers,
-                            data,
-                            isRedirect: false
-                        });
-                    })
-                    .catch(reject);
-            });
-
-            req.on('timeout', () => {
-                req.destroy();
-                clearTimeout(executionTimer);
-                reject(new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${reqOpts.socketTimeoutMs}ms.`));
-            });
-
-            req.on('error', (err: Error) => {
-                req.destroy();
-                clearTimeout(executionTimer);
-                reject(err);
-            });
-
-            if (options.body) req.write(options.body);
-
-            req.end();
-        });
-    }
-
-    private async _request<T = unknown>(url: string, options: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        const startTime = Date.now();
-        let redirectCount = 0;
-        let currentUrl = url;
-        let currentOptions = { ...options };
-
-        let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions(currentOptions);
-
-        while (true) {
-            const urlObj: URL = parseSafeUrl(currentUrl);
-
-            // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
-            // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
-            // For a literal the "hostname" is the literal itself, which no hostname entry of an allowlist can match.
-            const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
-            assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
-
-            let currentTimeoutMs = reqOpts.timeoutMs;
-            if (reqOpts.timeoutMs > 0) {
-                const elapsed = Date.now() - startTime;
-                currentTimeoutMs = Math.max(0, reqOpts.timeoutMs - elapsed);
-                if (currentTimeoutMs === 0) {
-                    throw new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`);
-                }
-            }
-
-            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions, currentTimeoutMs);
-
-            if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
-                if (redirectCount >= reqOpts.maxRedirects) {
-                    throw new UltraTonRedirectError(`UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`);
-                }
-
-                redirectCount++;
-
-                const nextUrlObj: URL = parseSafeUrl(hop.headers.location, currentUrl);
-
-                // A response fetched over TLS must never steer the request onto plaintext (e.g. the http loopback escape hatch).
-                if (urlObj.protocol === 'https:' && nextUrlObj.protocol === 'http:') {
-                    throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.');
-                }
-
-                // sanitizeHeaders already lowercased every key
-                const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
-
-                if (urlObj.origin !== nextUrlObj.origin) {
-                    currentOptions = { ...currentOptions, auth: undefined };
-                    delete nextHeaders['authorization'];
-                    delete nextHeaders['cookie'];
-                    delete nextHeaders['proxy-authorization'];
-                    delete nextHeaders['host'];
-                }
-
-                let nextMethod = reqOpts.method;
-                let nextBody = currentOptions.body;
-
-                if (hop.statusCode === 303 || ((hop.statusCode === 301 || hop.statusCode === 302) && nextMethod !== 'GET' && nextMethod !== 'HEAD')) {
-                    nextMethod = 'GET';
-                    nextBody = undefined;
-                    delete nextHeaders['content-length'];
-                    delete nextHeaders['content-type'];
-                    delete nextHeaders['transfer-encoding'];
-                }
-
-                currentUrl = nextUrlObj.href;
-                currentOptions = { ...currentOptions, method: nextMethod, headers: nextHeaders, body: nextBody };
-                reqOpts = buildSafeRequestOptions(currentOptions);
-
-                continue;
-            }
-
-            const parsedBody = parseSecurePayload<T>(hop.data, hop.headers['content-type']);
-            return {
-                statusCode: hop.statusCode,
-                headers: hop.headers,
-                body: parsedBody,
-                json(): T {
-                    try {
-                        // If body is already parsed (not a Buffer), return it as-is
-                        if (!(parsedBody instanceof Buffer)) {
-                            return parsedBody as T;
-                        }
-                        // If body is a Buffer, parse it
-                        if (hop.data.length === 0) return {} as T;
-                        return JSON.parse(parsedBody.toString('utf-8'), secureReviver) as T;
-                    } catch (e: unknown) {
-                        throw new UltraTonParseError(`UltraTon: Failed to parse JSON response payload.`);
-                    }
-                }
-            };
-        }
+    async #request<T>(method: string, url: string, options: unknown): Promise<UltraTonResponse<T>> {
+        if (this.#closed) throw new SecureHttpError('UltraTon: Client is closed.');
+        const target = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
+        // The caller's own options are validated (unknown keys, json/body, body type) and `json` serialized before any
+        // client default is merged in. The json content-type comes last, so a client default content-type is kept.
+        const requested = withMethod(method, options);
+        const merged = mergeClientDefaults(resolveRequestBody(requested), this.#defaults);
+        return this.#engine.request<T>(target, requested.json === undefined ? merged : withJsonContentType(merged));
     }
 }

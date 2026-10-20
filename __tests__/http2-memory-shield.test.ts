@@ -7,7 +7,7 @@
  *   4. Allows a second stream on the same session to succeed (multiplexing continuity).
  *
  * Strategy: inject a mock Http2SessionManager through the internal DI seam
- * (2nd constructor parameter of UltraTonHTTP2) and a mock connectFn into
+ * (the kSessionManager constructor option of UltraTonClient) and a mock connectFn into
  * Http2SessionManager. DNS lookup is mocked to return a safe public IP so
  * the pinner passes without hitting the network.
  */
@@ -16,8 +16,9 @@ import assert from "node:assert/strict";
 import EventEmitter from "node:events";
 import dnsPromises from "node:dns/promises";
 import http2 from "node:http2";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
+import { UltraTonClient } from "../src/http-client.ts";
+import { kSessionManager } from "../src/internal.ts";
 import { UltraTonMemoryError } from "../src/errors.ts";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +38,8 @@ interface MockSession extends EventEmitter {
   close(): void;
   destroy(): void;
   setTimeout(ms: number): void;
+  ref(): void;
+  unref(): void;
   request(_headers: unknown): MockStream;
 }
 
@@ -64,12 +67,14 @@ const createMockSession = (streamFactory: () => MockStream): MockSession => {
     session.destroyed = true;
   };
   session.setTimeout = () => {};
+  session.ref = () => {};
+  session.unref = () => {};
   session.request = () => streamFactory();
   return session;
 };
 
 /**
- * Builds an isolated UltraTonHTTP2 client using the DI constructor seam.
+ * Builds an isolated HTTP/2 UltraTonClient using the kSessionManager seam.
  * The injected Http2SessionManager uses a mock connectFn so no TCP socket
  * is ever opened. DNS lookup is mocked to emit a safe public IP.
  */
@@ -77,12 +82,12 @@ const buildTestClient = (
   streamFactory: () => MockStream,
   maxBodySize: number,
   t: { mock: { method: typeof mock.method } },
-): { client: UltraTonHTTP2; session: MockSession } => {
+): { client: UltraTonClient; session: MockSession } => {
   // Bypass the DNS pinner with a safe public IP (non-reserved)
-  t.mock.method(dnsPromises, "lookup", async () => ({
+  t.mock.method(dnsPromises, "lookup", async () => [{
     address: "93.184.216.34", // example.com public IP
     family: 4,
-  }));
+  }]);
 
   const session = createMockSession(streamFactory);
 
@@ -92,8 +97,8 @@ const buildTestClient = (
   // Build manager with DI connectFn — same pattern as http2-session-manager.test.ts
   const manager = new Http2SessionManager({}, mockConnect as any);
 
-  // Inject manager via the internal second constructor parameter
-  const client = new UltraTonHTTP2({ maxBodySize }, manager);
+  // Inject manager via the internal kSessionManager seam
+  const client = new UltraTonClient({ http2: true, maxBodySize, [kSessionManager]: manager } as any);
 
   return { client, session };
 };

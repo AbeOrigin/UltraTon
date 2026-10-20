@@ -1,6 +1,6 @@
 import dnsPromises from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
-import { SecureHttpError } from '../errors.ts';
+import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 
 const reservedIps = new BlockList();
 
@@ -49,6 +49,31 @@ export function isReservedIp(ip: string): boolean {
     if (family === 0) return false;
 
     return reservedIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+// What plain http may reach: 127.0.0.0/8 (BlockList also matches it against the IPv4-mapped ::ffff:127.0.0.0/104
+// forms) and ::1. Deliberately not the other IPv4 embeddings (::7f00:1, 64:ff9b::7f00:1): they are not loopback.
+const loopbackIps = new BlockList();
+loopbackIps.addSubnet('127.0.0.0', 8, 'ipv4');
+loopbackIps.addAddress('::1', 'ipv6');
+
+export function isLoopbackIp(ip: string): boolean {
+    const family = isIP(ip);
+    if (family === 0) return false;
+
+    return loopbackIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+/**
+ * Throws unless `ip` is a loopback address. Plain http is accepted only for loopback names, but a name such as
+ * `api.localhost` is resolved like any other and a resolver may answer it with any address: without this check a
+ * spoofed or forwarded answer would receive the request, credentials included, in cleartext. Names neither the IP
+ * nor the hostname. It does not replace the reserved-IP policy: loopback still needs `permitReservedIps`.
+ */
+export function assertLoopbackIp(ip: string): void {
+    if (!isLoopbackIp(ip)) {
+        throw new SecureHttpError('UltraTon: Plain http is only allowed to loopback addresses.', { code: 'ERR_ULTRATON_PLAIN_HTTP' });
+    }
 }
 
 /**
@@ -165,17 +190,53 @@ export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?:
 
     throw new SecureHttpError(
         'UltraTon: Target resolves to a prohibited internal/reserved network IP. ' +
-        'To allow internal targets set permitReservedIps (true or an allowlist of IPs, CIDRs or hostnames).'
+        'To allow internal targets set permitReservedIps (true or an allowlist of IPs, CIDRs or hostnames).',
+        { code: 'ERR_ULTRATON_RESERVED_IP' }
     );
 }
 
-export async function resolveAndPinHost(hostname: string, policy: ReservedIpPolicy = false): Promise<string> {
-    // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
-    const { address } = await dnsPromises.lookup(hostname, { family: 0 }).catch((err: NodeJS.ErrnoException) => {
-        // The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
-        throw new SecureHttpError(`UltraTon: Hostname resolution failed (${err.code || 'UNKNOWN_DNS_ERROR'}).`);
-    });
+/** One validated address, in the shape `dns.lookup(..., { all: true })` and a socket `lookup` callback use. */
+export interface PinnedAddress {
+    address: string;
+    family: 4 | 6;
+}
 
-    assertAllowedIp(address, policy, hostname);
-    return address;
+// The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
+// A network error like a refused connect: the name could not be reached, whatever the reason the resolver gave.
+const resolutionFailed = (code: string) =>
+    new UltraTonNetworkError(`UltraTon: Hostname resolution failed (${code}).`, { code });
+
+/**
+ * Every address `hostname` resolves to, each one judged by `policy`. If any of them is reserved and not allowed, the
+ * whole lookup is rejected (fail closed), so a caller that lets Node pick any address of the result (Happy Eyeballs)
+ * can only ever reach validated ones. An empty answer, or an entry that is not an IP address, is a resolution failure.
+ * An IP literal is judged as itself and never resolved, like Node itself never resolves one.
+ * With `plainHttp` (the hop is `http:`) every address must also be loopback (see `assertLoopbackIp`).
+ */
+export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolicy = false, plainHttp = false): Promise<PinnedAddress[]> {
+    const literal = isIP(hostname);
+    if (literal !== 0) {
+        if (plainHttp) assertLoopbackIp(hostname);
+        assertAllowedIp(hostname, policy, hostname);
+        return [{ address: hostname, family: literal as 4 | 6 }];
+    }
+
+    const answer: unknown = await dnsPromises.lookup(hostname, { all: true }).catch((err: NodeJS.ErrnoException) => {
+        throw resolutionFailed(err.code || 'UNKNOWN_DNS_ERROR');
+    });
+    if (!Array.isArray(answer) || answer.length === 0) throw resolutionFailed('ENODATA');
+
+    const pinned: PinnedAddress[] = [];
+    for (const entry of answer) {
+        const address = (entry as { address?: unknown } | null)?.address;
+        // isReservedIp() calls a non-IP "not reserved": never let one through as if it were a public address.
+        const family = typeof address === 'string' ? isIP(address) : 0;
+        if (family === 0) throw resolutionFailed('EBADRESP');
+        pinned.push({ address: address as string, family: family as 4 | 6 });
+    }
+    // Only once the whole answer is known to be well formed, and before anything is returned: all of it, or nothing.
+    // The loopback rule first, over the whole answer: a non-loopback address over http is refused as such, whatever the policy.
+    if (plainHttp) for (const { address } of pinned) assertLoopbackIp(address);
+    for (const { address } of pinned) assertAllowedIp(address, policy, hostname);
+    return pinned;
 }

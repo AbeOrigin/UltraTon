@@ -6,7 +6,8 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
 
     it('Should return standard options with all secure defaults injected when passed empty options', () => {
         const result = buildSafeRequestOptions({});
-        assert.deepStrictEqual(result, { 
+        // The result has no prototype (inherited properties never read as options): compare its own properties.
+        assert.deepStrictEqual({ ...result }, { 
             maxBodySize: 2097152, 
             socketTimeoutMs: 10000, 
             timeoutMs: 30000,
@@ -37,23 +38,20 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         assert.strictEqual(result.timeoutMs, 0);
     });
 
-    it('Should ruthlessly strip out malicious networking overrides (Strict Allowlist Check)', () => {
-        const result = buildSafeRequestOptions({
-            method: 'GET',
+    it('Should reject malicious networking overrides instead of passing or silently dropping them (Strict Allowlist Check)', () => {
+        const malicious: Record<string, unknown> = {
             agent: {}, // Malicious injected interceptor
             createConnection: () => {}, // Sandbox socket bypass
             rejectUnauthorized: false,  // TLS verification bypass (MITM enabling)
-        } as any);
+        };
 
-        assert.strictEqual(result.method, 'GET');
-        assert.strictEqual(result.maxBodySize, 2097152);
-        assert.strictEqual(result.socketTimeoutMs, 10000);
-        assert.strictEqual(result.timeoutMs, 30000);
-
-        // Security assertion: Malicious overrides dropped instantly at runtime
-        assert.strictEqual((result as any).agent, undefined);
-        assert.strictEqual((result as any).createConnection, undefined);
-        assert.strictEqual((result as any).rejectUnauthorized, undefined);
+        // Security assertion: none of them gets through, and none is ignored without telling the caller
+        for (const [key, value] of Object.entries(malicious)) {
+            assert.throws(
+                () => buildSafeRequestOptions({ method: 'GET', [key]: value } as any),
+                { name: 'TypeError', message: new RegExp(`^UltraTon: Unknown option '${key}'\\.`) },
+            );
+        }
     });
 
     it('Should throw synchronous TypeErrors when developers bypass TS compilation for strings', () => {

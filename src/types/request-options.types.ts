@@ -1,50 +1,65 @@
-import { SecureClientSessionOptions } from "node:http2";
-import { RequestOptions } from "node:https";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 
 export type { ReservedIpPolicy };
 
-type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'auth' | 'signal'>
-
-export interface UltraTonRequestOptions extends NativeHttpsOptions {
-    /** 
-     * The HTTP Method (e.g., 'GET', 'POST', 'PUT', 'DELETE'). 
-     * Default should be 'GET' if not provided.
-     */
-    readonly method?: string;
-
-    /** 
-     * Key-value pairs for HTTP headers. 
+/**
+ * The options of one request, the same for every method and both engines. A closed list: anything else throws a
+ * `TypeError` (with a hint for the common mistakes), it is never ignored.
+ */
+export interface UltraTonRequestOptions {
+    /**
+     * Key-value pairs for HTTP headers, as a plain object (a `Headers` or `Map` instance throws a `TypeError`).
+     * Pseudo-headers (keys starting with ':') are rejected, and so is 'host' on HTTP/2 (it is derived from the URL).
      */
     readonly headers?: Record<string, string | string[] | undefined>;
 
-    /** 
-     * The payload to send for POST/PUT/PATCH requests.
-     * We accept a Buffer or a string.
+    /**
+     * A JSON payload. It is serialized with `JSON.stringify` and sent with `content-type: application/json`
+     * unless a `content-type` header is already set, by the request or by the client's default `headers`.
+     * Cannot be combined with `body`.
      */
-    readonly body?: Buffer | string;
+    readonly json?: unknown;
 
     /**
-     * The maximum size of the response body in bytes.
-     * Default is 2MB.
+     * A raw payload. It is always sent with a `content-length` in bytes (never chunked). Cannot be combined with `json`.
+     */
+    readonly body?: string | Buffer | Uint8Array;
+
+    /**
+     * Credentials as `user:password`, sent as a Basic `authorization` header. Dropped when a redirect changes origin.
+     */
+    readonly auth?: string;
+
+    /**
+     * Aborts the request when the signal fires, in any phase (before connecting, while connecting or resolving DNS,
+     * waiting for the response, or mid-body). The request rejects with `signal.reason`, which is a DOMException
+     * `AbortError` when `abort()` was called without a reason. A signal that is already aborted rejects without connecting.
+     * Anything that is not an `AbortSignal` throws a `TypeError`.
+     */
+    readonly signal?: AbortSignal;
+
+    /**
+     * The maximum size of the response body in bytes: an integer from 0 to 2147483647 (anything else throws a
+     * `TypeError`). Default is 2MB.
      */
     readonly maxBodySize?: number;
 
     /**
-     * The maximum time to wait for the socket to connect in milliseconds.
-     * Default is 10000ms.
+     * The maximum time the connection may stay idle, in milliseconds: no bytes received for that long rejects with
+     * `UltraTonNetworkTimeoutError`. On HTTP/1 it is the socket's idle time; on HTTP/2 it is per stream.
+     * `0` disables it. An integer from 0 to 2147483647 (anything else throws a `TypeError`). Default is 10000ms.
      */
     readonly socketTimeoutMs?: number;
 
     /**
-     * The maximum time to wait for the request to complete in milliseconds.
-     * Default is 30000ms.
+     * The maximum time to wait for the request to complete in milliseconds, DNS and every redirect hop included.
+     * `0` disables it. An integer from 0 to 2147483647 (anything else throws a `TypeError`). Default is 30000ms.
      */
     readonly timeoutMs?: number;
 
     /**
-     * The maximum number of redirects to follow.
-     * Default is 0.
+     * The maximum number of redirects to follow: an integer from 0 to 20 (anything else throws a `TypeError`).
+     * Default is 0 (redirects are returned, not followed).
      */
     readonly maxRedirects?: number;
 
@@ -63,11 +78,19 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
     readonly permitReservedIps?: ReservedIpPolicy;
 }
 
+/** What the client methods hand to the engines: the caller's options plus the HTTP method they set. Not public. */
+export interface InternalRequestOptions extends UltraTonRequestOptions {
+    readonly method?: string;
+}
+
+/** Request options once `json` has been serialized: the body, if any, is the exact bytes that go on the wire. */
+export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'body'> & { readonly body?: Buffer };
+
 /**
  * Internal system type assigned after security fallbacks have been applied.
  * Enforces that critical execution constraints are mathematically guaranteed.
  */
-export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
+export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
     readonly maxBodySize: number;
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
@@ -75,65 +98,66 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
     readonly permitReservedIps: ReservedIpPolicy;
 }
 
-// HTTP2 Options
+/** A PEM certificate, key or CA: a string or Buffer, or a list of them. */
+export type TlsMaterial = string | Buffer | Array<string | Buffer>;
 
-/**
- * Deliberately a closed list: it does NOT extend node:https `RequestOptions`,
- * which would advertise ~40 options (agent, auth, rejectUnauthorized, ...) that
- * the HTTP/2 client ignores. Anything not listed here is dropped by the firewall.
- */
-export interface UltraTonRequestOptionsHttp2 {
-    readonly method?: string;
-    readonly body?: Buffer | string;
-    /** Pseudo-headers (keys starting with ':') and 'host' (derived from the URL) are rejected. */
-    readonly headers?: Record<string, string | string[] | undefined>;
-    readonly maxRedirects?: number;
-    readonly timeoutMs?: number;
-    readonly maxBodySize?: number;
-    /** Same SSRF opt-out (boolean or allowlist) as the HTTP/1 client. Default is false. */
-    readonly permitReservedIps?: ReservedIpPolicy;
+/** The `tls` constructor option once validated: only these keys ever reach `node:https` / `node:http2`. Not public. */
+export interface TlsOptions {
+    readonly ca?: TlsMaterial;
+    readonly cert?: TlsMaterial;
+    readonly key?: TlsMaterial;
 }
 
-
-
-export interface UltraTonOptionsHttp2 {
+/**
+ * The options of `new UltraTonClient(options)`. A closed list, validated like the per-request options: an unknown key or
+ * a value of the wrong type throws a `TypeError`. `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`,
+ * `maxRedirects` and `permitReservedIps` are defaults: a request that sets the same option wins, key by key (headers
+ * case-insensitively), and an option a request leaves `undefined` takes the client's value.
+ */
+export interface UltraTonClientOptions {
     /**
-     * If true, the session will be isolated to the current request.
-     * Default is false.
+     * An `https:` URL (or `http://localhost`) every request path is resolved against. With it set, request URLs must be
+     * relative (`'users/7'` or `'/users/7'`, both under the base path): absolute and protocol-relative URLs throw, and so
+     * does any path that resolves outside the base (`'../admin'`, `'%2e%2e/admin'`). A query string or fragment is not
+     * allowed in the base. Redirects are not bound to it; they follow `maxRedirects` (default 0).
      */
-    isolatePool?: boolean;
+    readonly baseUrl?: string;
 
-    /**
-     * TLS Settings for the session.
-     */
-    tlsSettings?: SecureClientSessionOptions;
+    /** Headers sent with every request, as a plain object. A request header with the same name (any case) replaces it. */
+    readonly headers?: Record<string, string | string[] | undefined>;
 
-    /**
-     * The maximum number of redirects to follow.
-     * Default is 0.
-     */
-    maxRedirects?: number;
+    /** Default `timeoutMs` for every request. See {@link UltraTonRequestOptions.timeoutMs}. */
+    readonly timeoutMs?: number;
 
-    /**
-     * The absolute time budget for the whole request in milliseconds, shared by every
-     * redirect hop (it is not reset per hop). DNS resolution and pool wait are charged
-     * before each hop starts; the TCP/TLS connect and the stream itself are bounded by
-     * what remains of the budget.
-     * Default is 30000ms.
-     */
-    timeoutMs?: number;
+    /** Default `socketTimeoutMs` for every request. See {@link UltraTonRequestOptions.socketTimeoutMs}. */
+    readonly socketTimeoutMs?: number;
 
-    /**
-     * The maximum size of any response body in bytes.
-     * Default is 2MB (2,097,152 bytes).
-     */
-    maxBodySize?: number;
+    /** Default `maxBodySize` for every request. See {@link UltraTonRequestOptions.maxBodySize}. */
+    readonly maxBodySize?: number;
+
+    /** Default `maxRedirects` for every request. See {@link UltraTonRequestOptions.maxRedirects}. */
+    readonly maxRedirects?: number;
 
     /**
-     * Allows resolution of internal/reserved IPs (like localhost or private network space).
-     * `true` allows all of them: set it ONLY if you are building an internal API client.
-     * An array allows just what it names: IPs, CIDRs and exact, case-insensitive hostnames (no wildcards).
-     * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
+     * Default `permitReservedIps` for every request. See {@link UltraTonRequestOptions.permitReservedIps}. A list is
+     * copied when the client is built, so changing your array afterwards does not change the client's policy.
      */
-    permitReservedIps?: ReservedIpPolicy;
+    readonly permitReservedIps?: ReservedIpPolicy;
+
+    /** Use HTTP/2 (TLS with ALPN `h2`, or h2c over plain http to a loopback name). Default false: HTTP/1.1. */
+    readonly http2?: boolean;
+
+    /**
+     * Extra trust and client certificates: `ca` (PEM CAs to trust, e.g. a private CA, in place of the system list),
+     * `cert` and `key` (a client certificate for mutual TLS). Nothing else is accepted: certificate verification can not
+     * be turned off (`rejectUnauthorized`), and SNI and hostname checks are not configurable.
+     */
+    readonly tls?: {
+        readonly ca?: TlsMaterial;
+        readonly cert?: TlsMaterial;
+        readonly key?: TlsMaterial;
+    };
+
+    /** The `user-agent` header sent by default. Default `ultraton/<version>`. Cannot be combined with a `user-agent` in `headers`. */
+    readonly userAgent?: string;
 }

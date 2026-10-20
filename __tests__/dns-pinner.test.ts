@@ -2,36 +2,36 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { assertAllowedIp, isReservedIp, policyKey, resolveAndPinHost } from '../src/security/dns-pinner.ts';
+import { assertAllowedIp, isLoopbackIp, isReservedIp, policyKey, resolveAndPinAll } from '../src/security/dns-pinner.ts';
 import { SecureHttpError } from '../src/errors.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
     
     it('Allowed: Public IPv4 (8.8.8.8) resolves successfully', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '8.8.8.8', family: 4 };
+            return [{ address: '8.8.8.8', family: 4 }];
         });
 
-        const ip = await resolveAndPinHost('public.api.com');
-        assert.equal(ip, '8.8.8.8', 'Resolver must allow externally routable IPv4 addresses');
+        const addresses = await resolveAndPinAll('public.api.com');
+        assert.deepEqual(addresses, [{ address: '8.8.8.8', family: 4 }], 'Resolver must allow externally routable IPv4 addresses');
     });
 
     it('Allowed: Public IPv6 (2001:4860:4860::8888) resolves successfully', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '2001:4860:4860::8888', family: 6 };
+            return [{ address: '2001:4860:4860::8888', family: 6 }];
         });
 
-        const ip = await resolveAndPinHost('ipv6.api.com');
-        assert.equal(ip, '2001:4860:4860::8888', 'Resolver must allow externally routable IPv6 addresses');
+        const addresses = await resolveAndPinAll('ipv6.api.com');
+        assert.deepEqual(addresses, [{ address: '2001:4860:4860::8888', family: 6 }], 'Resolver must allow externally routable IPv6 addresses');
     });
 
     it('Blocked (IPv4): AWS Metadata (169.254.169.254) throws SecureHttpError', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '169.254.169.254', family: 4 };
+            return [{ address: '169.254.169.254', family: 4 }];
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('metadata.aws.internal'),
+            () => resolveAndPinAll('metadata.aws.internal'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 assert.match((err as SecureHttpError).message, /prohibited internal\/reserved network IP/);
@@ -42,11 +42,11 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
 
     it('Blocked (IPv4): Localhost (127.0.0.1) throws SecureHttpError', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '127.0.0.1', family: 4 };
+            return [{ address: '127.0.0.1', family: 4 }];
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('localhost.rebound.com'),
+            () => resolveAndPinAll('localhost.rebound.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 assert.match((err as SecureHttpError).message, /prohibited internal\/reserved network IP/);
@@ -57,11 +57,11 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
 
     it('Blocked (IPv6): Localhost (::1) throws SecureHttpError', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '::1', family: 6 };
+            return [{ address: '::1', family: 6 }];
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('localhost6.rebound.com'),
+            () => resolveAndPinAll('localhost6.rebound.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 assert.match((err as SecureHttpError).message, /prohibited internal\/reserved network IP/);
@@ -72,11 +72,11 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
 
     it('Blocked (Mapped): IPv4-mapped AWS Metadata (::ffff:169.254.169.254) throws SecureHttpError', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => {
-            return { address: '::ffff:169.254.169.254', family: 6 };
+            return [{ address: '::ffff:169.254.169.254', family: 6 }];
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('mapped.aws.internal'),
+            () => resolveAndPinAll('mapped.aws.internal'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 assert.match((err as SecureHttpError).message, /prohibited internal\/reserved network IP/);
@@ -116,7 +116,7 @@ describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('ghost.domain.com'),
+            () => resolveAndPinAll('ghost.domain.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 // S5: the message must not become an oracle for the hostname that was looked up.
@@ -281,13 +281,103 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
         assert.notEqual(policyKey(['10.0.0.0/8']), policyKey(['10.0.0.0/9']));
     });
 
-    it('resolveAndPinHost hands the looked-up hostname to the policy', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '10.1.2.3', family: 4 }));
+    it('resolveAndPinAll hands the looked-up hostname to the policy', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '10.1.2.3', family: 4 }]);
+        const pinned = [{ address: '10.1.2.3', family: 4 }];
 
-        assert.equal(await resolveAndPinHost('api.internal', ['api.internal']), '10.1.2.3');
-        await assert.rejects(() => resolveAndPinHost('other.internal', ['api.internal']), SecureHttpError);
-        await assert.rejects(() => resolveAndPinHost('api.internal', []), SecureHttpError);
-        assert.equal(await resolveAndPinHost('anything.example', ['10.0.0.0/8']), '10.1.2.3');
+        assert.deepEqual(await resolveAndPinAll('api.internal', ['api.internal']), pinned);
+        await assert.rejects(() => resolveAndPinAll('other.internal', ['api.internal']), SecureHttpError);
+        await assert.rejects(() => resolveAndPinAll('api.internal', []), SecureHttpError);
+        assert.deepEqual(await resolveAndPinAll('anything.example', ['10.0.0.0/8']), pinned);
+    });
+
+    it('resolveAndPinAll asks for every address and returns them all when each one is allowed', async (t) => {
+        const lookup = t.mock.method(dnsPromises, 'lookup', async () => [
+            { address: '2606:4700::1111', family: 6 },
+            { address: '93.184.216.34', family: 4 },
+        ]);
+
+        assert.deepEqual(await resolveAndPinAll('dual.example'), [
+            { address: '2606:4700::1111', family: 6 },
+            { address: '93.184.216.34', family: 4 },
+        ]);
+        assert.deepEqual(lookup.mock.calls[0].arguments, ['dual.example', { all: true }]);
+    });
+
+    it('resolveAndPinAll fails closed when any one address is reserved, wherever it sits in the answer', async (t) => {
+        for (const answer of [
+            ['93.184.216.34', '10.0.0.1'],
+            ['10.0.0.1', '93.184.216.34'],
+            ['8.8.8.8', '1.1.1.1', '::ffff:169.254.169.254'],
+            ['2001:4860:4860::8888', 'fd00:ec2::254'],
+        ]) {
+            t.mock.method(dnsPromises, 'lookup', async () => answer.map(address => ({ address, family: address.includes(':') ? 6 : 4 })));
+            await assert.rejects(() => resolveAndPinAll('mixed.example'), (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.match(err.message, /prohibited internal\/reserved network IP/);
+                assert.doesNotMatch(err.message, /mixed\.example|10\.0\.0\.1|169\.254|fd00/);
+                return true;
+            }, answer.join(','));
+        }
+        // An allowlist must cover every reserved address of the answer, not just one of them.
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '::1', family: 6 }, { address: '127.0.0.1', family: 4 }]);
+        await assert.rejects(() => resolveAndPinAll('localhost', ['127.0.0.0/8']), SecureHttpError);
+        assert.equal((await resolveAndPinAll('localhost', ['127.0.0.0/8', '::1'])).length, 2);
+        assert.equal((await resolveAndPinAll('localhost', ['localhost'])).length, 2);
+    });
+
+    it('resolveAndPinAll rejects an empty answer and anything that is not an IP address', async (t) => {
+        for (const answer of [[], undefined, { address: '8.8.8.8', family: 4 }, [{ address: 'evil.example', family: 4 }]]) {
+            t.mock.method(dnsPromises, 'lookup', async () => answer);
+            await assert.rejects(() => resolveAndPinAll('odd.example'), (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.match(err.message, /^UltraTon: Hostname resolution failed \(.+\)\.$/);
+                assert.doesNotMatch(err.message, /odd\.example/);
+                return true;
+            }, JSON.stringify(answer));
+        }
+    });
+
+    it('isLoopbackIp: 127.0.0.0/8, ::1 and IPv4-mapped 127/8 only', () => {
+        for (const ip of ['127.0.0.1', '127.255.255.254', '::1', '0:0:0:0:0:0:0:1', '::ffff:127.0.0.1', '::ffff:7f00:1']) {
+            assert.equal(isLoopbackIp(ip), true, ip);
+        }
+        for (const ip of ['8.8.8.8', '10.0.0.1', '128.0.0.1', '0.0.0.0', '::', '::2', '::7f00:1', '::127.0.0.1', '64:ff9b::7f00:1', '::ffff:8.8.8.8', 'fe80::1', 'localhost', '']) {
+            assert.equal(isLoopbackIp(ip), false, ip);
+        }
+    });
+
+    it('resolveAndPinAll for a plain http hop requires every address to be loopback, on top of the policy', async (t) => {
+        const PLAIN = /^UltraTon: Plain http is only allowed to loopback addresses\.$/;
+        for (const answer of [['93.184.216.34'], ['127.0.0.1', '93.184.216.34'], ['93.184.216.34', '127.0.0.1'], ['::1', '10.0.0.1'], ['::7f00:1']]) {
+            t.mock.method(dnsPromises, 'lookup', async () => answer.map(address => ({ address, family: address.includes(':') ? 6 : 4 })));
+            await assert.rejects(() => resolveAndPinAll('api.localhost', true, true), (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.match(err.message, PLAIN);
+                assert.doesNotMatch(err.message, /api\.localhost|93\.184|10\.0\.0\.1|7f00/);
+                return true;
+            }, answer.join(','));
+        }
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '::1', family: 6 }, { address: '::ffff:127.0.0.1', family: 6 }]);
+        assert.equal((await resolveAndPinAll('api.localhost', true, true)).length, 2);
+        // Loopback still needs the policy.
+        await assert.rejects(() => resolveAndPinAll('api.localhost', false, true), /prohibited internal\/reserved/);
+        // Without plainHttp a public answer is fine.
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+        assert.equal((await resolveAndPinAll('api.localhost', false, false)).length, 1);
+        // Literals follow the same rule.
+        await assert.rejects(() => resolveAndPinAll('93.184.216.34', true, true), { message: 'UltraTon: Plain http is only allowed to loopback addresses.' });
+        assert.equal((await resolveAndPinAll('127.0.0.2', true, true)).length, 1);
+    });
+
+    it('resolveAndPinAll judges an IP literal as itself, without DNS', async (t) => {
+        const lookup = t.mock.method(dnsPromises, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+
+        assert.deepEqual(await resolveAndPinAll('8.8.8.8'), [{ address: '8.8.8.8', family: 4 }]);
+        assert.deepEqual(await resolveAndPinAll('::1', true), [{ address: '::1', family: 6 }]);
+        await assert.rejects(() => resolveAndPinAll('127.0.0.1'), SecureHttpError);
+        await assert.rejects(() => resolveAndPinAll('::1', ['localhost']), SecureHttpError);
+        assert.equal(lookup.mock.callCount(), 0);
     });
 
     it('a DNS failure message carries the error code but not the hostname', async (t) => {
@@ -296,7 +386,7 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
         });
 
         await assert.rejects(
-            () => resolveAndPinHost('ghost.domain.com'),
+            () => resolveAndPinAll('ghost.domain.com'),
             (err: unknown) => {
                 assert.ok(err instanceof SecureHttpError);
                 assert.equal(err.message, 'UltraTon: Hostname resolution failed (EAI_AGAIN).');

@@ -3,10 +3,11 @@ import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
+import { kTransport } from '../src/internal.ts';
 import https from 'node:https';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { SecureHttpError, UltraTonMemoryError } from '../src/errors.ts';
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError } from '../src/errors.ts';
 
 describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
@@ -22,7 +23,8 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
             
             (req as any).destroy = () => {};
             
-            (req as any).end = () => {
+            (req as any).end = (chunk?: any) => {
+                if (chunk) reqBody.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
                 if (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH') {
                     // Echo the body back structurally if needed
                     mockResponseData = Buffer.concat(reqBody);
@@ -45,53 +47,53 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const client = new UltraTonClient();
         await assert.rejects(
             client.get(`http://example.com/json`),
-            { message: 'UltraTon: Unsupported protocol "http:"' }
+            { message: 'UltraTon: Plain http is only allowed for loopback hosts; use https.', code: 'ERR_ULTRATON_PLAIN_HTTP' }
         );
     });
 
     it('Should successfully perform a basic GET request (https)', async () => {
         const fakeTransport = createMockTransport({ success: true }, 'GET');
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
         const response = await client.get(`https://localhost/json`);
         assert.strictEqual(response.statusCode, 200);
         
-        const parsedData = JSON.parse((response.body as Buffer).toString());
+        const parsedData = JSON.parse(response.text());
         assert.strictEqual(parsedData.success, true);
     });
 
     it('Should successfully perform a POST request', async () => {
         const fakeTransport = createMockTransport({}, 'POST', 201);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
-        const response = await client.post(`https://localhost/echo`, JSON.stringify({ test: 'post' }));
+        const response = await client.post(`https://localhost/echo`, { json: { test: 'post' } });
         assert.strictEqual(response.statusCode, 201);
         assert.strictEqual(response.headers['x-method-used'], 'POST');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'post' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'post' });
     });
 
     it('Should successfully perform a PUT request', async () => {
         const fakeTransport = createMockTransport({}, 'PUT', 201);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
-        const response = await client.put(`https://localhost/echo`, JSON.stringify({ test: 'put' }));
+        const response = await client.put(`https://localhost/echo`, { json: { test: 'put' } });
         assert.strictEqual(response.headers['x-method-used'], 'PUT');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'put' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'put' });
     });;
 
     it('Should successfully perform a PATCH request', async () => {
         const fakeTransport = createMockTransport({}, 'PATCH', 201);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
-        const response = await client.patch(`https://localhost/echo`, JSON.stringify({ test: 'patch' }));
+        const response = await client.patch(`https://localhost/echo`, { json: { test: 'patch' } });
         assert.strictEqual(response.headers['x-method-used'], 'PATCH');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'patch' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'patch' });
     });
 
     it('Should successfully perform a DELETE request', async () => {
         // empty body response
         const fakeTransport = createMockTransport('', 'DELETE', 204);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
         const response = await client.delete(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'DELETE');
@@ -100,7 +102,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform an OPTIONS request', async () => {
         const fakeTransport = createMockTransport('', 'OPTIONS', 204);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
         const response = await client.options(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'OPTIONS');
@@ -108,7 +110,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
     it('Should successfully perform a HEAD request', async () => {
         const fakeTransport = createMockTransport('', 'HEAD', 204);
-        const client = new UltraTonClient(fakeTransport as any);
+        const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
         
         const response = await client.head(`https://localhost/empty`);
         assert.strictEqual(response.headers['x-method-used'], 'HEAD');
@@ -139,7 +141,7 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
 
     it('Accepts a body exactly at maxBodySize', async () => {
         const res = await new UltraTonClient().get(`${base}/two-kb`, { maxBodySize: 2048, permitReservedIps: true });
-        assert.strictEqual((res.body as Buffer).length, 2048);
+        assert.strictEqual(res.data.length, 2048);
     });
 
     it('Rejects with UltraTonMemoryError once the body exceeds maxBodySize', async () => {
@@ -149,10 +151,11 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
         );
     });
 
-    it('Rejects with SecureHttpError when the server cuts the body short', async () => {
+    it('Rejects with UltraTonNetworkError when the server cuts the body short', async () => {
         await assert.rejects(
             new UltraTonClient().get(`${base}/truncated`, { permitReservedIps: true }),
-            (err: unknown) => err instanceof SecureHttpError && !(err instanceof UltraTonMemoryError)
+            // Not a timeout either: since 2.0 UltraTonNetworkTimeoutError is an UltraTonNetworkError too.
+            (err: unknown) => err instanceof UltraTonNetworkError && !(err instanceof UltraTonNetworkTimeoutError) && !(err instanceof UltraTonMemoryError)
         );
     });
 });

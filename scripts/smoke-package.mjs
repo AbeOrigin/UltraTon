@@ -15,19 +15,20 @@ const require = createRequire(import.meta.url);
 const VALUES = [
   'SecureHttpError',
   'UltraTonClient',
-  'UltraTonHTTP2',
   'UltraTonMemoryError',
+  'UltraTonNetworkError',
   'UltraTonNetworkTimeoutError',
   'UltraTonParseError',
   'UltraTonRedirectError',
 ];
 const TYPES = [
   'ReservedIpPolicy',
-  'UltraTonOptionsHttp2',
+  'UltraTonClientOptions',
   'UltraTonRequestOptions',
-  'UltraTonRequestOptionsHttp2',
   'UltraTonResponse',
 ];
+// Exports that existed before 2.0 and must stay gone.
+const REMOVED = ['UltraTonHTTP2'];
 
 const q = (s) => `"${s}"`; // npm is launched through the shell (npm.cmd on Windows), so quote arguments
 // --dry-run=false: `npm publish --dry-run` exports npm_config_dry_run=true to lifecycle scripts,
@@ -55,6 +56,8 @@ function check(name, fn) {
 function keysCheck(label, code, consumer) {
   const out = execFileSync(process.execPath, ['-e', code], { cwd: consumer, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   const got = JSON.parse(out);
+  const leaked = REMOVED.filter((name) => got.includes(name));
+  if (leaked.length) throw new Error(`${label}: removed exports are still present: ${JSON.stringify(leaked)}`);
   if (JSON.stringify(got) !== JSON.stringify(VALUES)) {
     throw new Error(`${label}: expected exports ${JSON.stringify(VALUES)}\n  got ${JSON.stringify(got)}`);
   }
@@ -93,10 +96,10 @@ try {
     npm(['install', tgz, '--no-audit', '--no-fund'], consumer);
   });
 
-  check('ESM import() exposes exactly the 7 value exports', () =>
+  check(`ESM import() exposes exactly the ${VALUES.length} value exports, without ${REMOVED.join(', ')}`, () =>
     keysCheck('import', "import('ultraton').then(m => console.log(JSON.stringify(Object.keys(m).sort())))", consumer));
 
-  check('CJS require() exposes exactly the 7 value exports', () =>
+  check(`CJS require() exposes exactly the ${VALUES.length} value exports, without ${REMOVED.join(', ')}`, () =>
     keysCheck('require', "console.log(JSON.stringify(Object.keys(require('ultraton')).sort()))", consumer));
 
   check('TypeScript (nodenext, strict) resolves values and types', () => {
@@ -110,9 +113,31 @@ try {
 export const values = [${VALUES.join(', ')}];
 export type Types = [${TYPES.map((t) => (t === 'UltraTonResponse' ? `${t}<unknown>` : t)).join(', ')}];
 
-const opts: UltraTonRequestOptions = { method: 'GET' };
+const opts: UltraTonRequestOptions = { json: { a: 1 }, timeoutMs: 1000 };
 const policy: ReservedIpPolicy = false;
 export { opts, policy };
+
+const clientOptions: UltraTonClientOptions = {
+  baseUrl: 'https://api.example.com/v1',
+  headers: { 'x-team': 'core' },
+  timeoutMs: 5000,
+  permitReservedIps: ['10.0.0.0/8'],
+  http2: true,
+  tls: { ca: '-----BEGIN CERTIFICATE-----', cert: [Buffer.from('pem')] },
+  userAgent: 'consumer/1.0',
+};
+const client = new UltraTonClient(clientOptions);
+export async function use(): Promise<number> {
+  const res: UltraTonResponse<{ id: number }> = await client.get<{ id: number }>('users/1', { headers: { 'x-req': '1' } });
+  await client.post('users', { json: { name: 'a' } });
+  await client.close();
+  return res.json().id + (res.ok ? res.statusCode : 0);
+}
+
+// @ts-expect-error certificate verification can never be turned off
+export const noVerify: UltraTonClientOptions = { tls: { rejectUnauthorized: false } };
+// @ts-expect-error per-request options do not take baseUrl
+export const perRequestBase: UltraTonRequestOptions = { baseUrl: 'https://x.example' };
 
 export function classify(err: unknown): string {
   if (err instanceof UltraTonMemoryError) return 'memory';

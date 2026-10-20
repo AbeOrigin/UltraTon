@@ -1,13 +1,16 @@
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { UltraTonClient } from "../src/http-client.ts";
 
-const client = new UltraTonHTTP2();
 // The h2c server from demo/http2.server.ts (run `npm run demo:http2:server` first).
-const url = "http://127.0.0.1:8080";
+// Loopback is a reserved address: the SSRF guard blocks it unless the client opts in.
+const client = new UltraTonClient({
+  http2: true,
+  baseUrl: "http://127.0.0.1:8080",
+  permitReservedIps: true,
+});
 
-async function makeGet(url: string, id: number) {
-  console.log(`[CLIENT] Starting request ${id} to ${url}`);
-  // Loopback is a reserved address: the SSRF guard blocks it unless the caller opts in.
-  const response = await client.get(url, { permitReservedIps: true });
+async function makeGet(path: string, id: number) {
+  console.log(`[CLIENT] Starting request ${id} to ${path}`);
+  const response = await client.get(path);
   console.log(`[CLIENT] Request ${id} finished. Status: ${response.statusCode}`);
   return response;
 }
@@ -21,7 +24,7 @@ async function main() {
   const requests = [];
 
   for (let i = 1; i <= requestCount; i++) {
-    requests.push(makeGet(url, i));
+    requests.push(makeGet(`/item/${i}`, i));
   }
 
   // Promise.all waits for all concurrent requests to complete.
@@ -31,6 +34,8 @@ async function main() {
   console.log(`\n✅ All ${results.length} requests completed successfully.`);
 }
 
-main().catch((err) => {
-  console.error("❌ Test failed:", err);
-});
+main()
+  .catch((err) => {
+    console.error("❌ Test failed:", err);
+  })
+  .finally(() => client.close()); // closes the client's HTTP/2 session so the process can exit

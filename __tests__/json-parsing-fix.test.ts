@@ -3,6 +3,7 @@ import assert from "node:assert";
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { UltraTonClient } from "../src/http-client.ts";
+import { kTransport } from "../src/internal.ts";
 import { UltraTonParseError } from "../src/errors.ts";
 
 describe("UltraTonClient - JSON Parsing Fix Validation", () => {
@@ -23,7 +24,8 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
       (req as any).destroy = () => {};
 
-      (req as any).end = () => {
+      (req as any).end = (chunk?: any) => {
+        if (chunk) reqBody.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         let dataBuffer: Buffer;
         if (Buffer.isBuffer(mockResponseData)) {
           dataBuffer = mockResponseData;
@@ -51,12 +53,12 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
     };
   };
 
-  it("Should correctly handle JSON parsing when body is already parsed", async () => {
+  it("Should leave data as a raw Buffer for application/json and parse it through json()", async () => {
     const fakeTransport = createMockTransport(
       { user: "abe", role: "architect" },
       "GET",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface UserShape {
       user: string;
@@ -67,7 +69,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     // Assert native response shape is unharmed
     assert.strictEqual(res.statusCode, 200);
-    assert.ok(!Buffer.isBuffer(res.body)); // Auto parsing kicked in
+    assert.ok(Buffer.isBuffer(res.data)); // No auto-parsing: data stays the raw Buffer
 
     // Test that json() method works correctly
     const parsedData = res.json();
@@ -80,7 +82,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       { message: "hello world" },
       "GET",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface MessageShape {
       message: string;
@@ -100,13 +102,14 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       200,
       "text/plain",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     const res = await client.get<string>("https://example.com/text");
 
-    // For non-JSON content, body should be a Buffer
-    assert.ok(Buffer.isBuffer(res.body));
-    assert.strictEqual(res.body.toString(), "plain text response");
+    // For non-JSON content, data is a Buffer and text() decodes it
+    assert.ok(Buffer.isBuffer(res.data));
+    assert.strictEqual(res.data.toString(), "plain text response");
+    assert.strictEqual(res.text(), "plain text response");
 
     // For text content, json() should throw a JSON parsing error
     assert.throws(
@@ -129,7 +132,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       204,
       "application/json",
     );
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface EmptyResponse {
       // Empty interface for testing
@@ -145,7 +148,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
   it("Should correctly handle mixed content scenarios", async () => {
     const fakeTransport = createMockTransport({ data: [1, 2, 3] }, "GET");
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     interface DataShape {
       data: number[];
@@ -153,8 +156,8 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     const res = await client.get<DataShape>("https://example.com/data");
 
-    // Test that both direct body access and json() work consistently
-    assert.ok(!Buffer.isBuffer(res.body)); // Should be parsed
+    // Test that both raw data access and json() work consistently
+    assert.deepStrictEqual(JSON.parse(res.data.toString()), { data: [1, 2, 3] });
     const parsedViaJson = res.json();
     assert.deepStrictEqual(parsedViaJson.data, [1, 2, 3]);
   });
@@ -168,18 +171,19 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
       200,
       "text/plain",
     ); // Use text/plain to force raw Buffer body
-    const client = new UltraTonClient(fakeTransport as any);
+    const client = new UltraTonClient({ [kTransport]: fakeTransport } as any);
 
     const res = await client.get<any>("https://example.com/malicious");
 
-    // Verify body is a Buffer
-    assert.ok(Buffer.isBuffer(res.body));
+    // Verify data is a Buffer
+    assert.ok(Buffer.isBuffer(res.data));
 
     // Parse via json()
     const parsed = res.json();
 
     // Verify the malicious key was stripped
     assert.strictEqual(parsed.user, "admin");
+    assert.deepStrictEqual(Object.keys(parsed), ["user"]);
     // Depending on the Node version, __proto__ might be a null-prototype object or undefined,
     // but the key should definitely not have the "polluted" value.
     assert.notStrictEqual(parsed.__proto__, { polluted: true });

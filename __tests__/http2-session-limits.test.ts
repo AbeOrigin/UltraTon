@@ -6,7 +6,7 @@ import type {
   SecureClientSessionOptions,
   connect,
 } from "node:http2";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
@@ -31,14 +31,15 @@ type MockConnectFn = (
 
 describe("Sprint 7 – Native Configuration Hardening", () => {
   it("passes paranoid limits to http2.connect", async (t) => {
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "1.2.3.4",
       family: 4,
-    }));
+    }]);
 
     const mockSession = {
       on: mock.fn(),
       setTimeout: mock.fn(),
+      unref: mock.fn(),
       closed: false,
       destroyed: false,
     } as unknown as ClientHttp2Session;
@@ -68,14 +69,15 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
   });
 
   it("allows overriding paranoid limits via overrideOptions", async (t) => {
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "1.2.3.4",
       family: 4,
-    }));
+    }]);
 
     const mockSession = {
       on: mock.fn(),
       setTimeout: mock.fn(),
+      unref: mock.fn(),
       closed: false,
       destroyed: false,
     } as unknown as ClientHttp2Session;

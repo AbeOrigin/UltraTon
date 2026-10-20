@@ -11,19 +11,32 @@ import {
   MAX_SESSION_MEMORY_MB,
 } from "../constants.ts";
 import { isIP } from "node:net";
+import type { LookupFunction } from "node:net";
 import {
   assertAllowedIp,
+  type PinnedAddress,
   policyKey,
   type ReservedIpPolicy,
-  resolveAndPinHost,
+  resolveAndPinAll,
 } from "../security/dns-pinner.ts";
-import { SecureHttpError } from "../errors.ts";
+import { SecureHttpError, toNetworkError } from "../errors.ts";
+import { incompleteResponse } from "../helpers/response.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
   createdAt: number;
-  /** The IP the session is pinned to; every caller is checked against it. */
-  ip: string;
+  /** Every address the session may have connected to (all validated); every caller is checked against all of them. */
+  ips: readonly string[];
+}
+
+/**
+ * Timings of the pool, overridable through the constructor for tests only (the client never passes them):
+ * `idleTimeoutMs` reaps a session with no stream in flight after that long without a frame (and, while a stream holds
+ * it, is the interval of the PING liveness check), and `maxLifespanMs` retires a session from the pool once it is that old.
+ */
+export interface SessionTimings {
+  readonly idleTimeoutMs?: number;
+  readonly maxLifespanMs?: number;
 }
 
 /** A DNS lookup plus connect in flight for one pool key, shared by every caller that arrives while it runs. */
@@ -80,18 +93,64 @@ const bareHostOf = (hostname: string): string => {
   return bareHost.replace(/^\[|\]$/g, "");
 };
 
+/**
+ * A socket `lookup` that answers only with `addresses`, already validated, and never asks DNS again: whichever address
+ * Node connects to, Happy Eyeballs included, is one of them. Answers on the next tick, as a real lookup would.
+ */
+const pinnedLookup =
+  (addresses: readonly PinnedAddress[]): LookupFunction =>
+  (_hostname, options, callback) => {
+    process.nextTick(() => {
+      if (options.all) callback(null, addresses.map((a) => ({ ...a })));
+      else callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
+
+/** Streams in flight per session, for `holdSession`. */
+const activeStreams = new WeakMap<ClientHttp2Session, number>();
+
+/**
+ * Keeps the process alive for as long as a request is using `session`: the first holder `ref()`s it and the last one to
+ * release it `unref()`s it again. A pooled session with nothing in flight does not hold the process open, so a script
+ * that never calls `close()` exits when its work is done instead of waiting out the session's idle timeout.
+ * @returns A function that releases the hold; calling it more than once does nothing.
+ */
+export function holdSession(session: ClientHttp2Session): () => void {
+  const count = activeStreams.get(session) ?? 0;
+  activeStreams.set(session, count + 1);
+  if (count === 0 && !session.destroyed) session.ref();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (activeStreams.get(session) ?? 1) - 1;
+    activeStreams.set(session, left);
+    if (left === 0 && !session.destroyed) session.unref();
+  };
+}
+
+/** How many requests currently hold `session` (see `holdSession`). */
+export const heldStreams = (session: ClientHttp2Session): number => activeStreams.get(session) ?? 0;
+
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
+  /** Sessions that got a GOAWAY: out of the pool, finishing their streams, still closed by closeAll(). Value: pool key. */
+  #draining: Map<ClientHttp2Session, string> = new Map();
   #pendingConnections: Map<string, Attempt> = new Map();
   readonly #tlsConfig?: SecureClientSessionOptions;
   readonly #connectFn: typeof nativeConnect;
+  readonly #idleTimeoutMs: number;
+  readonly #maxLifespanMs: number;
 
   constructor(
     tlsConfig: SecureClientSessionOptions = {},
     connectFn: typeof nativeConnect = nativeConnect,
+    timings: SessionTimings = {},
   ) {
     this.#tlsConfig = tlsConfig;
     this.#connectFn = connectFn;
+    this.#idleTimeoutMs = timings.idleTimeoutMs ?? IDLE_TIMEOUT;
+    this.#maxLifespanMs = timings.maxLifespanMs ?? MAX_SESSION_LIFESPAN;
   }
 
   /**
@@ -113,7 +172,11 @@ export class Http2SessionManager {
     for (const [key, entry] of this.#sessions.entries()) {
       this.#destroySession(key, entry.session);
     }
+    for (const [session, key] of [...this.#draining]) {
+      this.#destroySession(key, session);
+    }
     this.#sessions.clear();
+    this.#draining.clear();
     this.#pendingConnections.clear();
   }
 
@@ -140,13 +203,13 @@ export class Http2SessionManager {
     permitReservedIps: ReservedIpPolicy = false,
     signal?: AbortSignal,
   ): Promise<ClientHttp2Session> {
-    const { session, ip } = await this.#acquire(
+    const { session, ips } = await this.#acquire(
       hostname,
       overrideOptions,
       permitReservedIps,
       signal,
     );
-    assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
+    for (const ip of ips) assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
     return session;
   }
 
@@ -161,27 +224,17 @@ export class Http2SessionManager {
 
     if (entry) {
       const { session, createdAt } = entry;
-      const isExpired = Date.now() - createdAt > MAX_SESSION_LIFESPAN;
+      const isExpired = Date.now() - createdAt > this.#maxLifespanMs;
 
       if (!session.destroyed && !session.closed && !isExpired) {
         return entry;
       }
 
       if (isExpired) {
-        // Graceful shutdown: close prevents new streams but allows existing ones to finish.
-        try {
-          if (!session.closed && !session.destroyed) {
-            session.close();
-          }
-        } catch {
-          /* Session might have already transitioned state */
-        }
-        // Eagerly evict from the pool so concurrent callers arriving before the
-        // async 'close' event fires correctly hit the #pendingConnections
-        // deduplication gate instead of spawning a duplicate TCP connection.
-        if (this.#sessions.get(key)?.session === session) {
-          this.#sessions.delete(key);
-        }
+        // Graceful shutdown, like a GOAWAY: out of the pool at once (so concurrent callers arriving before the async
+        // 'close' event hit the #pendingConnections deduplication gate instead of spawning a duplicate connection),
+        // existing streams finish, and closeAll() still destroys it while they do.
+        this.#retireSession(key, session);
       }
     }
 
@@ -233,25 +286,50 @@ export class Http2SessionManager {
   ): Promise<SessionEntry> {
     const bareHost = bareHostOf(hostname);
 
+    // ponytail: getaddrinfo cannot be cancelled. A caller that gives up stops waiting, but its threadpool thread stays
+    // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
+    // timeout (c-ares), not done here because it ignores /etc/hosts.
+    // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
+    // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback.
+    const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
+    // Parsed, not compared as text: a scheme in any case ("HTTP://") is still plain http.
+    const addresses = await resolveAndPinAll(
+      bareHost,
+      permitReservedIps,
+      new URL(connectUrl).protocol === "http:",
+    );
+
+    const {
+      // Each of these would let the socket go somewhere other than the validated addresses.
+      host: _host,
+      port: _port,
+      path: _path,
+      socket: _socket,
+      createConnection: _createConnection,
+      lookup: _lookup,
+      servername: _servername,
+      ...baseOptions
+    } = {
+      ...this.#tlsConfig,
+      ...overrideOptions,
+    } as SecureClientSessionOptions & Record<string, unknown>;
     const connectionOptions: SecureClientSessionOptions & {
       maxHeaderListPairs?: number;
     } = {
       maxHeaderListPairs: MAX_HEADER_LIST_PAIRS,
       maxSessionMemory: MAX_SESSION_MEMORY_MB,
-      ...this.#tlsConfig,
-      ...overrideOptions,
+      ...baseOptions,
       settings: {
         maxHeaderListSize: MAX_HEADER_LIST_SIZE,
         ...this.#tlsConfig?.settings,
         ...overrideOptions?.settings,
       },
-      servername: bareHost,
+      // The connect URL keeps the name; this is the only way it becomes addresses (see pinnedLookup). Node never
+      // calls it for an IP literal, which connects to the literal resolveAndPinAll just judged.
+      lookup: pinnedLookup(addresses),
+      // SNI and the certificate check use the name. An IP literal is never sent as SNI (RFC 6066; Node's DEP0123).
+      ...(isIP(bareHost) === 0 ? { servername: bareHost } : {}),
     };
-
-    // ponytail: getaddrinfo cannot be cancelled. A caller that gives up stops waiting, but its threadpool thread stays
-    // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
-    // timeout (c-ares), not done here because it ignores /etc/hosts.
-    const pinnedHost = await resolveAndPinHost(bareHost, permitReservedIps);
 
     // Every caller timed out while the lookup hung: do not open a connection nobody will use.
     if (!wanted()) {
@@ -268,60 +346,101 @@ export class Http2SessionManager {
       pooled &&
       !pooled.session.closed &&
       !pooled.session.destroyed &&
-      Date.now() - pooled.createdAt <= MAX_SESSION_LIFESPAN
+      Date.now() - pooled.createdAt <= this.#maxLifespanMs
     ) {
       return pooled;
     }
 
-    // http2.connect() requires a full URL (e.g. "https://172.233.17.91"), not a
-    // bare IP. Reconstruct it using the original origin's scheme and port so the
-    // TCP connection targets the resolved IP while SNI (servername) stays as the
-    // original hostname for correct TLS certificate validation.
-    let connectUrl: string;
-    try {
-      const parsed = new URL(
-        hostname.includes("://") ? hostname : `https://${hostname}`,
-      );
-      const port = parsed.port ? `:${parsed.port}` : "";
-      // A bare IPv6 address is not a valid URL host: it needs its brackets back.
-      const host = isIP(pinnedHost) === 6 ? `[${pinnedHost}]` : pinnedHost;
-      connectUrl = `${parsed.protocol}//${host}${port}`;
-    } catch {
-      connectUrl = `https://${pinnedHost}`;
-    }
+    // The origin itself (scheme, name, port): http2.connect hands the name, the options and so `lookup` to
+    // net.connect (h2c) or tls.connect, where autoSelectFamily (on by default) races the validated addresses.
 
     let newSession: ClientHttp2Session;
     try {
       newSession = this.#connectFn(connectUrl, connectionOptions);
     } catch (err: unknown) {
-      throw new SecureHttpError(
-        `UltraTon: Failed to establish HTTP/2 connection: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
+      throw toNetworkError(err);
     }
 
     // Attach 'error' FIRST — before setTimeout or any other logic — to eliminate
     // the synchronous gap between session creation and error handler registration.
     newSession.on("error", () => this.#destroySession(key, newSession));
 
-    newSession.setTimeout(IDLE_TIMEOUT);
-    newSession.on("goaway", () => this.#destroySession(key, newSession));
+    newSession.setTimeout(this.#idleTimeoutMs);
+    // Idle until a request holds it (holdSession): a pooled session must not keep the process alive by itself.
+    newSession.unref();
+    // A GOAWAY lets the streams it covers finish: destroying the session here would end them early, and a stream
+    // whose body was cut could look complete. Take it out of the pool so new requests open a fresh session, and close
+    // it gracefully (Node also destroys it by itself when the GOAWAY carries an error code).
+    newSession.on("goaway", () => this.#retireSession(key, newSession));
     newSession.on("close", () => {
+      this.#draining.delete(newSession);
       if (this.#sessions.get(key)?.session === newSession) {
         this.#sessions.delete(key);
       }
     });
-    newSession.on("timeout", () => this.#destroySession(key, newSession));
+    // The idle timeout reaps a session nobody uses. A stream may legitimately wait longer than that for its response
+    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is not reaped: it is
+    // checked for liveness instead. Each idle period without a frame sends a PING; a live peer ACKs it at once, however
+    // long it takes to answer the request. A PING still unanswered at the next check means the connection is dead (a
+    // peer that vanished without FIN or RST): the session is destroyed and its streams fail as a reset connection,
+    // so it never pins the pool. The timer is re-armed by hand because Node only refreshes it on the next frame, and a
+    // stream that is given up may never be followed by one.
+    // A closing session (GOAWAY, lifespan expiry, retire()) is out of the pool, so it cannot pin it, and Node cancels
+    // every PING on it: it is never pinged nor killed here. Its streams keep their own timeouts, and closeAll() still
+    // destroys it. A cancelled PING (ERR_HTTP2_PING_CANCEL, or a ping() that throws) proves nothing either way.
+    let pingUnanswered = false;
+    newSession.on("timeout", () => {
+      if (heldStreams(newSession) === 0) return this.#destroySession(key, newSession);
+      if (!newSession.closed) {
+        if (pingUnanswered) {
+          if (!newSession.destroyed) newSession.destroy(incompleteResponse());
+          return;
+        }
+        pingUnanswered = true;
+        try {
+          newSession.ping((err) => {
+            if (!err || (err as NodeJS.ErrnoException).code === "ERR_HTTP2_PING_CANCEL") pingUnanswered = false;
+          });
+        } catch {
+          pingUnanswered = false;
+        }
+      }
+      newSession.setTimeout(this.#idleTimeoutMs);
+    });
 
     const entry: SessionEntry = {
       session: newSession,
       createdAt: Date.now(),
-      ip: pinnedHost,
+      ips: addresses.map(({ address }) => address),
     };
     this.#sessions.set(key, entry);
 
     return entry;
+  }
+
+  /**
+   * Takes `session` out of the pool (see #retireSession) if it is pooled here: the next request opens a new session,
+   * streams already on this one finish, and closeAll() still destroys it. Used when a stream on it was given up
+   * because of a timeout, which may mean the connection is dead.
+   */
+  public retire(session: ClientHttp2Session): void {
+    for (const [key, entry] of this.#sessions) {
+      if (entry.session === session) return this.#retireSession(key, session);
+    }
+  }
+
+  /** Removes a session from the pool and closes it gracefully: open streams finish, no new ones start. */
+  #retireSession(key: string, session: ClientHttp2Session): void {
+    if (this.#sessions.get(key)?.session === session) {
+      this.#sessions.delete(key);
+    }
+    if (session.destroyed) return;
+    this.#draining.set(session, key);
+    try {
+      if (!session.closed) session.close();
+    } catch {
+      /* Session might have already transitioned state */
+    }
   }
 
   /**

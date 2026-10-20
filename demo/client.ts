@@ -1,15 +1,13 @@
 import { UltraTonClient } from '../src/http-client.ts';
 
-// 1) Instantiate the client (UltraTonClient takes no arguments directly)
-const client = new UltraTonClient();
-
-// 2) Configuration boundaries are strictly enforced per-request in this architecture
-const testOptions = {
-  maxBodySize: 1024 * 1024 * 5, // 5MB absolute limit
-  timeoutMs: 2000,              // 2-second strict complete cycle timeout
-  maxRedirects: 3,              // Cap on redirect hops
-  permitReservedIps: true       // REQUIRED: Allow testing against localhost server
-};
+// Configure once: these defaults apply to every request (a request can still override any of them).
+const client = new UltraTonClient({
+  baseUrl: 'http://localhost:3000', // request paths are relative to it and can never escape it
+  maxBodySize: 1024 * 1024 * 5,     // 5MB absolute limit
+  timeoutMs: 2000,                  // 2-second strict complete cycle timeout
+  maxRedirects: 3,                  // Cap on redirect hops
+  permitReservedIps: true           // REQUIRED: Allow testing against localhost server
+});
 
 async function runTests() {
   console.log('🛡️ Starting UltraTon Hostile Environment Tests...\n');
@@ -17,8 +15,7 @@ async function runTests() {
   // 1. OOM Attack Test
   try {
     console.log('Testing: [GET] /attack/oom (Validating maxBodySize kill switch)');
-    // 3) Use .get instead of .request, passing options in the second argument
-    await client.get('http://localhost:3000/attack/oom', testOptions);
+    await client.get('/attack/oom');
     console.error('❌ FAIL: OOM Test returned a full response. Memory shield bypassed!');
   } catch (error: any) {
     if (error.name === 'UltraTonMemoryError' || (error.message && error.message.includes('size'))) {
@@ -31,7 +28,7 @@ async function runTests() {
   // 2. Slowloris / Tarpit Test
   try {
     console.log('Testing: [GET] /attack/slowloris (Validating strict timeout sockets)');
-    await client.get('http://localhost:3000/attack/slowloris', testOptions);
+    await client.get('/attack/slowloris');
     console.error('❌ FAIL: Slowloris connection stayed alive past timeout boundary!');
   } catch (error: any) {
     // Expected to time out and return UltraTonNetworkTimeoutError
@@ -45,7 +42,7 @@ async function runTests() {
   // 3. Infinite Redirect Loop Test
   try {
     console.log('Testing: [GET] /attack/redirect-loop (Validating MAX_REDIRECTS_CEILING)');
-    await client.get('http://localhost:3000/attack/redirect-loop', testOptions);
+    await client.get('/attack/redirect-loop');
     console.error('❌ FAIL: Escaped redirect boundary and completed request!');
   } catch (error: any) {
     // Expected to fail with UltraTonRedirectError
@@ -59,8 +56,7 @@ async function runTests() {
   // 4. SSRF & Cross-Domain Credential Leak Test
   try {
     console.log('Testing: [GET] /attack/ssrf-initial (Validating Authorization header stripping)');
-    await client.get('http://localhost:3000/attack/ssrf-initial', {
-      ...testOptions,
+    await client.get('/attack/ssrf-initial', {
       headers: {
         'Authorization': 'Bearer SUPER_SECRET_ENTERPRISE_TOKEN'
       }
@@ -81,6 +77,8 @@ async function runTests() {
   console.log('🏁 All hostile integrations tested.');
 }
 
-runTests().catch(err => {
-  console.error('Fatal Runner Exception:', err);
-});
+runTests()
+  .catch(err => {
+    console.error('Fatal Runner Exception:', err);
+  })
+  .finally(() => client.close()); // releases the client's pooled sockets

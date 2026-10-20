@@ -27,26 +27,29 @@ import {
   type IncomingHttpHeaders,
   type ServerHttp2Stream,
 } from "node:http2";
-import { type AddressInfo, isIP } from "node:net";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
+import http from "node:http";
+import net, { type AddressInfo, isIP } from "node:net";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
   SecureHttpError,
+  UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
 } from "../src/errors.ts";
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { UltraTonClient } from "../src/http-client.ts";
+import { kSessionManager } from "../src/internal.ts";
 
 const buildClient = (t: { mock: { method: typeof mock.method } }) => {
-  t.mock.method(dnsPromises, "lookup", async () => ({
+  t.mock.method(dnsPromises, "lookup", async () => [{
     address: "93.184.216.34",
     family: 4,
-  }));
+  }]);
 
   const connect = mock.fn(() => {
     throw new Error("connectFn must not be reached");
   });
   const manager = new Http2SessionManager({}, connect as any);
 
-  return { client: new UltraTonHTTP2({}, manager), connect };
+  return { client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any), connect };
 };
 
 describe("HTTP/2 validation firewall", () => {
@@ -163,7 +166,7 @@ const startFixture = async (t: TestContext) => {
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     manager,
     connect,
     accepted: () => accepted,
@@ -176,6 +179,8 @@ const fakeSession = () =>
     closed: false,
     destroyed: false,
     setTimeout: () => {},
+    ref: () => {},
+    unref: () => {},
     close() {
       this.closed = true;
       this.emit("close");
@@ -185,8 +190,8 @@ const fakeSession = () =>
     },
   });
 
-// No test using this may reach a real resolver: IP literals are echoed back,
-// any other hostname fails fast instead of touching the network.
+// No test using this may reach a real resolver: IP literals are echoed back (the client
+// judges a literal without DNS anyway), any other hostname fails fast instead of touching the network.
 const mockIpLiteralDns = () => {
   mock.method(dnsPromises, "lookup", async (host: string) => {
     const family = isIP(host);
@@ -195,7 +200,7 @@ const mockIpLiteralDns = () => {
         code: "ENOTFOUND",
       });
     }
-    return { address: host, family };
+    return [{ address: host, family }];
   });
 };
 
@@ -227,7 +232,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const res = await client.get(url, { permitReservedIps: true });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(res.text(), "H2-INTERNAL");
   });
 
   it("connects to a reserved IP covered by a CIDR allowlist", async (t) => {
@@ -236,7 +241,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const res = await client.get(url, { permitReservedIps: ["127.0.0.0/8"] });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(res.text(), "H2-INTERNAL");
     assert.strictEqual(connect.mock.callCount(), 1);
   });
 
@@ -254,7 +259,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
 
   it("applies the client-wide allowlist when a request sets none", async (t) => {
     const { manager, url, connect } = await startFixture(t);
-    const client = new UltraTonHTTP2({ permitReservedIps: ["127.0.0.0/8"] }, manager);
+    const client = new UltraTonClient({ http2: true, permitReservedIps: ["127.0.0.0/8"], [kSessionManager]: manager } as any);
 
     const res = await client.get(url);
 
@@ -387,11 +392,11 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
         permitReservedIps: true,
         maxRedirects: 1,
       }),
-      /Unsupported protocol/,
+      { message: "UltraTon: Plain http is only allowed for loopback hosts; use https.", code: "ERR_ULTRATON_PLAIN_HTTP" },
     );
   });
 
-  it("brackets IPv6 pinned addresses in the connect URL", async () => {
+  it("connects to an IPv6 literal by its bracketed URL, without sending it as SNI", async () => {
     const connect = mock.fn((_url: string, _options: unknown) => fakeSession());
     const manager = new Http2SessionManager({}, connect as any);
 
@@ -400,17 +405,25 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     assert.strictEqual(connect.mock.callCount(), 1);
     const [url, options] = connect.mock.calls[0].arguments;
     assert.strictEqual(url, "https://[::1]:8443");
-    assert.strictEqual((options as any).servername, "::1");
+    assert.strictEqual((options as any).servername, undefined);
   });
 });
 
 describe("HTTP/2 hostname entries in permitReservedIps", () => {
   // "localhost" resolves to the fixture's loopback address; any other host is echoed, as for IP literals.
   const mockLocalhostDns = (t: TestContext) =>
-    t.mock.method(dnsPromises, "lookup", async (host: string) => ({
+    t.mock.method(dnsPromises, "lookup", async (host: string) => [{
       address: host === "localhost" ? "127.0.0.1" : host,
       family: 4,
-    }));
+    }]);
+
+  /** What the `lookup` connect option of the `n`th connect answers when Node asks it for every address. */
+  const pinnedAnswer = (connect: { mock: { calls: Array<{ arguments: unknown[] }> } }, n = 0) =>
+    new Promise<unknown>((resolve, reject) =>
+      (connect.mock.calls[n].arguments[1] as any).lookup("localhost", { all: true }, (err: unknown, list: unknown) =>
+        err ? reject(err) : resolve(list),
+      ),
+    );
 
   it("reaches a reserved IP through the hostname the allowlist names", async (t) => {
     mockLocalhostDns(t);
@@ -419,10 +432,11 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
     const res = await client.get(`http://localhost:${port}/`, { permitReservedIps: ["localhost"] });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
-    // The connection went to the pinned address, not to the name.
+    assert.strictEqual(res.text(), "H2-INTERNAL");
+    // Connected by name, but the name only ever became the pinned (validated) address.
     assert.strictEqual(connect.mock.callCount(), 1);
-    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://127.0.0.1:${port}`);
+    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://localhost:${port}`);
+    assert.deepStrictEqual(await pinnedAnswer(connect), [{ address: "127.0.0.1", family: 4 }]);
   });
 
   it("blocks a redirect from the allowed hostname to a reserved IP literal without connecting", async (t) => {
@@ -440,10 +454,10 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
         return true;
       },
     );
-    // The second hop was resolved and judged as the literal it is, and no connection was opened for it.
+    // The second hop was judged as the literal it is (without DNS), and no connection was opened for it.
     assert.deepStrictEqual(
       lookup.mock.calls.map((call) => call.arguments[0]),
-      ["localhost", "127.0.0.1"],
+      ["localhost"],
     );
     assert.strictEqual(connect.mock.callCount(), 1, "only the first hop connected");
   });
@@ -452,10 +466,10 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
 describe("HTTP/2 redirects never downgrade from https to http", () => {
   it("rejects an https to http redirect even with permitReservedIps, before opening another stream", async (t) => {
     // The first hop's hostname must resolve without touching the network.
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "93.184.216.34",
       family: 4,
-    }));
+    }]);
 
     // A session whose every stream answers 302 to a plaintext loopback service.
     const authorities: unknown[] = [];
@@ -480,7 +494,7 @@ describe("HTTP/2 redirects never downgrade from https to http", () => {
     const connect = t.mock.fn(() => session);
     const manager = new Http2SessionManager({}, connect as any);
     t.after(() => manager.closeAll());
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
 
     await assert.rejects(
       client.get("https://example.com/downgrade", {
@@ -489,7 +503,8 @@ describe("HTTP/2 redirects never downgrade from https to http", () => {
       }),
       (err: unknown) =>
         err instanceof SecureHttpError &&
-        /Redirect from https to http is not allowed/.test(err.message),
+        /Redirect from https to http is not allowed/.test(err.message) &&
+        err.code === "ERR_ULTRATON_DOWNGRADE",
     );
     // Only the original https hop ever reached a session; nothing was asked of 127.0.0.1:1.
     assert.deepStrictEqual(authorities, ["example.com"]);
@@ -542,7 +557,7 @@ const startServers = (t: TestContext) => {
   });
 
   return {
-    client: new UltraTonHTTP2({}, manager),
+    client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any),
     listen: async (onStream: OnStream) => {
       const server = createServer();
       server.on("stream", onStream);
@@ -635,7 +650,7 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
     const options = { permitReservedIps: true, maxRedirects: 1 };
 
     const roomy = await client.get(url, { ...options, timeoutMs: 1000 });
-    assert.strictEqual(String(roomy.body), "done");
+    assert.strictEqual(roomy.text(), "done");
 
     await assert.rejects(client.get(url, { ...options, timeoutMs: 250 }), (err: unknown) => {
       assert.ok(err instanceof UltraTonNetworkTimeoutError);
@@ -676,7 +691,7 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
  * `timeout` so a regression is reported as a failure instead of hanging the run.
  */
 describe("HTTP/2 DNS resolution timeout budget", () => {
-  const PUBLIC_IP = { address: "93.184.216.34", family: 4 };
+  const PUBLIC_IP = [{ address: "93.184.216.34", family: 4 }];
   const neverResolves = () => new Promise<never>(() => {});
 
   const buildHangingDns = (t: TestContext) => {
@@ -685,7 +700,7 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
       throw new Error("connect refused on purpose");
     });
     const manager = new Http2SessionManager({}, connect as any);
-    return { lookup, connect, manager, client: new UltraTonHTTP2({}, manager) };
+    return { lookup, connect, manager, client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any) };
   };
 
   /** Rejects with the error and when it did, so a request that wrongly succeeds fails the test. */
@@ -726,8 +741,8 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     await assert.rejects(
       client.get("https://hang.test/", { timeoutMs: 2000 }),
       (err: unknown) => {
-        assert.ok(err instanceof SecureHttpError);
-        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /Connection failed/);
         assert.doesNotMatch(err.message, /hang\.test/, "the hostname must not be echoed into the message");
         return true;
       },
@@ -786,8 +801,8 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
       client.get("https://slow.test/", { timeoutMs: 0 }),
       (err: unknown) => {
         // Reaching the connect step proves the slow lookup was waited for, not timed out.
-        assert.ok(err instanceof SecureHttpError);
-        assert.match(err.message, /Failed to establish HTTP\/2 connection/);
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /Connection failed/);
         return true;
       },
     );
@@ -854,7 +869,7 @@ describe("HTTP/2 DNS resolution timeout budget", () => {
     const connect = t.mock.fn(() => session);
     const manager = new Http2SessionManager({}, connect as any);
     t.after(() => manager.closeAll());
-    const client = new UltraTonHTTP2({}, manager);
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
     const start = Date.now();
 
     // 150ms of the 400ms budget is left for hop 2. A hop that got the full budget again would wait until ~650ms.
@@ -882,7 +897,7 @@ describe("HTTP/2 concurrent connection attempts for one pool key", () => {
     const answers: Array<() => void> = [];
     t.mock.method(dnsPromises, "lookup", (() =>
       new Promise((resolve) => {
-        answers.push(() => resolve({ address: "127.0.0.1", family: 4 }));
+        answers.push(() => resolve([{ address: "127.0.0.1", family: 4 }]));
       })) as any);
     const origin = `http://race.test:${port}`;
     const giveUp = new AbortController();
@@ -911,5 +926,176 @@ describe("HTTP/2 concurrent connection attempts for one pool key", () => {
     manager.closeAll();
     await until(() => openSessions() === 0);
     assert.strictEqual(openSessions(), 0, "a session survived closeAll()");
+  });
+});
+
+/**
+ * Real sockets: a refused connection or a failed TLS handshake must reach the caller as UltraTonNetworkError with the
+ * original code and cause, and a message that names neither the pinned IP nor the port.
+ */
+describe("HTTP/2 network errors are actionable and never echo addresses", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  const freshClient = (t: TestContext) => {
+    const manager = new Http2SessionManager();
+    t.after(() => manager.closeAll());
+    return new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
+  };
+
+  const assertNoAddress = (message: string, port: number) => {
+    assert.ok(!message.includes("127.0.0.1"), `message leaks the IP: ${message}`);
+    assert.ok(!message.includes(String(port)), `message leaks the port: ${message}`);
+  };
+
+  it("ECONNREFUSED on a closed port becomes UltraTonNetworkError with code and cause", async (t) => {
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    await assert.rejects(
+      freshClient(t).get(`http://127.0.0.1:${port}/`, { permitReservedIps: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.ok(err instanceof SecureHttpError);
+        assert.strictEqual(err.code, "ECONNREFUSED");
+        assert.strictEqual((err.cause as NodeJS.ErrnoException).code, "ECONNREFUSED");
+        assert.strictEqual(err.message, "UltraTon: Connection failed (ECONNREFUSED).");
+        assertNoAddress(err.message, port);
+        return true;
+      },
+    );
+  });
+
+  it("a TLS handshake against a plain server becomes UltraTonNetworkError with a TLS message and no IP", async (t) => {
+    const server = http.createServer((_req, res) => res.end("plain"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    t.after(async () => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+
+    await assert.rejects(
+      freshClient(t).get(`https://127.0.0.1:${port}/`, { permitReservedIps: true }),
+      (err: unknown) => {
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.match(err.message, /^UltraTon: TLS handshake failed \(.+\)\.$/);
+        assert.ok(err.code, "keeps the original code");
+        assert.ok(err.cause instanceof Error, "keeps the original error as cause");
+        assertNoAddress(err.message, port);
+        return true;
+      },
+    );
+  });
+
+  it("does not wrap the reserved-IP rejection", async (t) => {
+    await assert.rejects(freshClient(t).get("http://127.0.0.1:1/"), (err: unknown) => {
+      assert.ok(err instanceof SecureHttpError);
+      assert.ok(!(err instanceof UltraTonNetworkError));
+      return true;
+    });
+  });
+});
+
+/**
+ * A response that was lost or cut short must never resolve as if it were whole: no status means no response,
+ * and a stream that closes before a clean end holds a truncated body.
+ */
+describe("HTTP/2 never resolves a status-less or truncated response", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  /** h2c server on 127.0.0.1 whose stream handler is supplied by the test. */
+  const serve = async (t: TestContext, onStream: (stream: ServerHttp2Stream, killSocket: () => void) => void) => {
+    const server = createServer();
+    // Raw sockets: the http2 session refuses direct socket access, and a destroyed socket sends no GOAWAY or RST_STREAM.
+    const sockets = new Set<net.Socket>();
+    server.on("connection", (socket) => sockets.add(socket));
+    const killSocket = () => sockets.forEach((socket) => socket.destroy());
+    server.on("stream", (stream) => onStream(stream, killSocket));
+    server.on("session", (session) => session.on("error", () => {}));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const manager = new Http2SessionManager();
+    t.after(async () => {
+      manager.closeAll();
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
+    return { url: `http://127.0.0.1:${port}/`, client: new UltraTonClient({ http2: true, [kSessionManager]: manager } as any), port };
+  };
+
+  const rejectsAsNetworkError = (promise: Promise<unknown>, port: number) =>
+    assert.rejects(promise, (err: unknown) => {
+      assert.ok(err instanceof UltraTonNetworkError, `got ${String(err)}`);
+      assert.ok(err.code, "has a code");
+      assert.ok(!err.message.includes("127.0.0.1") && !err.message.includes(String(port)), err.message);
+      return true;
+    });
+
+  it("rejects when the socket is destroyed after the request but before any response", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (_stream, killSocket) => {
+      killSocket();
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("rejects when the socket is destroyed after part of the body (no truncated 200)", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (stream, killSocket) => {
+      stream.respond({ ":status": 200, "content-type": "text/plain" });
+      stream.write("partial", () => killSocket());
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("rejects when the server resets the stream mid-body", { timeout: 5000 }, async (t) => {
+    const { client, url, port } = await serve(t, (stream) => {
+      stream.respond({ ":status": 200, "content-type": "text/plain" });
+      stream.on("error", () => {});
+      stream.write("partial", () => stream.destroy(new Error("reset"))); // RST_STREAM(INTERNAL_ERROR) with no END_STREAM
+    });
+    await rejectsAsNetworkError(client.get(url, { permitReservedIps: true }), port);
+  });
+
+  it("still resolves normal responses, including HEAD and empty bodies", { timeout: 5000 }, async (t) => {
+    const { client, url } = await serve(t, (stream) => {
+      stream.respond({ ":status": 204 });
+      stream.end();
+    });
+    const empty = await client.get(url, { permitReservedIps: true });
+    assert.strictEqual(empty.statusCode, 204);
+    const head = await client.head(url, { permitReservedIps: true });
+    assert.strictEqual(head.statusCode, 204);
+  });
+
+  it("maps 15 concurrent requests to a refused port without MaxListenersExceededWarning", { timeout: 5000 }, async (t) => {
+    const probe = net.createServer();
+    await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+    const { port } = probe.address() as AddressInfo;
+    await new Promise<void>((resolve) => probe.close(() => resolve()));
+
+    const manager = new Http2SessionManager();
+    t.after(() => manager.closeAll());
+    const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
+    const warnings: string[] = [];
+    const onWarning = (w: Error) => warnings.push(w.name);
+    process.on("warning", onWarning);
+    try {
+      const results = await Promise.allSettled(
+        Array.from({ length: 15 }, () => client.get(`http://127.0.0.1:${port}/`, { permitReservedIps: true })),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve)); // warnings are emitted on nextTick
+      for (const r of results) {
+        assert.strictEqual(r.status, "rejected");
+        const err = (r as PromiseRejectedResult).reason;
+        assert.ok(err instanceof UltraTonNetworkError);
+        assert.strictEqual(err.code, "ECONNREFUSED");
+      }
+      assert.ok(!warnings.includes("MaxListenersExceededWarning"), warnings.join(","));
+    } finally {
+      process.off("warning", onWarning);
+    }
   });
 });

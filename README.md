@@ -40,9 +40,10 @@ async function run() {
             }
         });
 
-        console.log(`Status: ${response.statusCode}`);
-        // application/json responses arrive already parsed; any other content type is a Buffer.
-        console.log(response.body);
+        console.log(`Status: ${response.statusCode} (ok: ${response.ok})`);
+        // `data` is always the raw Buffer. `json()` and `text()` decode it on demand.
+        const { items } = response.json();
+        console.log(items, response.text().length, response.data.length);
     } catch (error) {
         console.error('Request failed:', error);
     }
@@ -53,9 +54,13 @@ run();
 
 ## Breaking changes (unreleased)
 
-- **`data` is now `body`.** Responses expose `body: T | Buffer` instead of `data`, which no longer exists. A response with an `application/json` content type is parsed automatically (`__proto__`, `constructor` and `prototype` keys are stripped), and an invalid JSON payload with that content type rejects with `UltraTonParseError`. Any other content type, and any JSON payload over 5MB, is returned as a raw `Buffer`.
-- **The `timeout` option is removed.** It never had any effect. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
-- **`http://127.0.0.1` and `http://localhost` now need `permitReservedIps: true`.** Plain HTTP is still accepted for them, but they are reserved addresses, so the SSRF guard rejects them unless you opt in.
+- **Response shape.** Responses expose `statusCode: number` (never `undefined`), `ok` (200-299), `headers` (no HTTP/2 pseudo-headers), `data: Buffer` (as in 1.x, never auto-parsed), `json<T>()` and `text()`. `json()` parses lazily on every call regardless of content-type, strips `__proto__`, `constructor` and `prototype` keys at every depth, returns `{}` for an empty body (1.0.3 threw) and throws `UltraTonParseError` (with `cause`) on invalid JSON. A malformed JSON response no longer rejects the request itself.
+- **The `timeout` option is removed.** It never had any effect, and it now throws. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
+- **Methods are `(url, options)`.** Send a payload with `post(url, { json: { a: 1 } })` or `post(url, { body })` (`string`, `Buffer` or `Uint8Array`), never both. Bodies always go out with a `content-length`, never chunked.
+- **Unknown options throw.** An option outside the documented list (`headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `signal`, `auth`, `json`, `body`) throws a `TypeError`, with a hint for the usual suspects (`timeout`, `params`, `data`, `rejectUnauthorized`...), instead of being silently ignored.
+- **Invalid option values throw.** `headers` must be a plain object (a `Headers` or `Map` throws), `signal` an `AbortSignal`, `timeoutMs`, `socketTimeoutMs` and `maxBodySize` integers from 0 to 2147483647 and `maxRedirects` an integer from 0 to 20. An out-of-range value throws a `TypeError` naming the range instead of silently using the default.
+- **Errors.** `UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, DNS failures are `UltraTonNetworkError` with the resolver's `code`, and policy rejections carry a `code`: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP` or `ERR_ULTRATON_DOWNGRADE`.
+- **Loopback names need `permitReservedIps`.** Plain HTTP is accepted for every loopback name (`localhost`, `*.localhost`, `127.0.0.0/8` literals and `[::1]`) and only ever reaches loopback addresses: if such a name resolves to anything else, the request is rejected (`UltraTon: Plain http is only allowed to loopback addresses.`). Loopback addresses are reserved, so the SSRF guard also rejects them unless you opt in. `localhost` usually resolves to both `::1` and `127.0.0.1`, and every address must be allowed: use `true`, `['localhost']`, or a list covering both, such as `['127.0.0.0/8', '::1']`.
 
 ## Security Goals & Roadmap
 

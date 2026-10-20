@@ -8,3 +8,6 @@ export const MAX_SESSION_MEMORY_MB = 4; // 4 MB
 
 export const IDLE_TIMEOUT = 10000;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;
+
+/** The package version, sent in the default `user-agent`. A test keeps it equal to `package.json` `version`. */
+export const VERSION = '1.0.3';
