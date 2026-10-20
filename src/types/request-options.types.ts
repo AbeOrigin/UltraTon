@@ -261,4 +261,28 @@ export interface UltraTonClientOptions {
 
     /** The `user-agent` header sent by default. Default `ultraton/<version>`. Cannot be combined with a `user-agent` in `headers`. */
     readonly userAgent?: string;
+
+    /**
+     * An outbound proxy for `https:` targets, as a URL (`'http://egress.corp:3128'`) or {@link UltraTonProxyOptions}.
+     * Each request is tunnelled with CONNECT to the IP UltraTon resolved and validated, so the proxy cannot resolve the
+     * name to anything else; TLS then runs to the target through the tunnel and checks its certificate against the
+     * hostname. Plain `http:` targets (loopback only) never use it. Never read from `HTTP_PROXY`/`HTTPS_PROXY`.
+     */
+    readonly proxy?: string | UltraTonProxyOptions;
+}
+
+/** The `proxy` client option in full. */
+export interface UltraTonProxyOptions {
+    /** `http:` or `https:` (TLS to the proxy itself), origin only: no credentials, path, query or fragment. */
+    readonly url: string;
+    /** Credentials as `user:password`, sent as Basic `proxy-authorization` on the CONNECT only, never to a target. */
+    readonly auth?: string;
+    /** PEM CAs that an `https:` proxy's certificate is checked against, in place of the system list. Never trusted for targets. */
+    readonly ca?: TlsMaterial;
+    /**
+     * Who resolves the target's name. `'local'` (default): UltraTon resolves and validates it and sends the IP in the
+     * CONNECT. `'proxy'`: the name is sent and the proxy resolves it, for proxies that filter by name (Squid ACLs,
+     * Smokescreen); DNS pinning is then up to the proxy, and only IP literals are still judged by UltraTon.
+     */
+    readonly resolve?: 'local' | 'proxy';
 }

@@ -65,6 +65,7 @@ await api.close(); // when the client is no longer needed
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
+| `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound proxy for `https:` targets, tunnelled with CONNECT to the validated IP (see [Proxy](#proxy)). |
 | `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
 
 **Request options** are the second argument of every method:
@@ -246,6 +247,32 @@ await api.get('health', { retry: 0 });                               // off for 
 
 Every attempt is a full request: a new connection resolves and validates DNS again, so a rebinding between attempts is blocked. A request's `retry` merges over the client's field by field. `stream()` retries until the headers arrive. `fetch()` never retries, because libraries that take a fetch bring their own retries. If `onRetry` throws, the request ends with that error.
 
+### Proxy
+
+`proxy` sends every `https:` request through an HTTP CONNECT proxy, on both engines. The SSRF checks run before the proxy is ever contacted, and the proxy cannot point the connection anywhere else:
+
+```ts
+const client = new UltraTonClient({
+  proxy: { url: 'http://egress.corp:3128', auth: process.env.PROXY_AUTH }, // auth is 'user:password'
+});
+```
+
+- **Pinning through the proxy.** UltraTon resolves the name and validates every address, then sends `CONNECT <ip>:<port>`: the proxy gets an IP, never a name it could resolve to something else. TLS runs to the target through the tunnel, and its certificate is checked against the hostname as on a direct connection. If the proxy cannot reach one address, the next validated one is tried.
+- **Credentials** in `auth` go on the CONNECT only, as `proxy-authorization`, and never reach a target. Credentials in the URL are rejected.
+- **An `https:` proxy** (TLS to the proxy itself) is checked against the system CAs, or against `proxy.ca`. The `tls.ca` you set for targets is never trusted for the proxy, and `proxy.ca` is never trusted for targets.
+- **Refusals** (407, 403, 502, …) reject with `UltraTonNetworkError` and code `ERR_ULTRATON_PROXY`. The message carries the status and never the proxy address. `retry` does not retry them; a connection to the proxy that drops (`ECONNRESET`, `ETIMEDOUT`) is retried like any other. A proxy that cannot be reached at all fails at once instead of being tried for every address.
+- **Plain `http:` targets** (loopback only) never use the proxy. Proxies are never read from `HTTP_PROXY`/`HTTPS_PROXY`. For internal hosts that must not go through the proxy, use a second client without it.
+
+**Proxies that filter by hostname.** Squid ACLs or Smokescreen allowlists reject a CONNECT by IP. `resolve: 'proxy'` sends the name instead:
+
+```ts
+new UltraTonClient({ proxy: { url: 'http://smokescreen:4750', resolve: 'proxy' } });
+```
+
+> ⚠️ With `resolve: 'proxy'` the proxy resolves the name, so **SSRF protection for hostnames depends on the proxy**. UltraTon still rejects reserved IP literals, bad schemes and credentials in URLs, but it cannot pin DNS. Use it only with a proxy that enforces its own egress policy.
+
+SOCKS5 proxies are not supported yet; they are planned.
+
 ### baseUrl
 
 With `baseUrl` set, request URLs must be relative. `'users/7'` and `'/users/7'` both resolve under the base path. An absolute or protocol-relative URL throws.
@@ -254,7 +281,7 @@ A path that would land outside the base throws as well. That includes encoded an
 
 ## Limits and things to know
 
-- **Proxies are not used.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool.
+- **Proxies are only used when you set `proxy`.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool. Only HTTP CONNECT proxies are supported, not SOCKS (yet). The CONNECT handshake for each address gives up after 10 s, or sooner through `timeoutMs`, `signal` or `close()`; `socketTimeoutMs` only starts once the tunnel is up.
 - **The allowlist keeps IPv4 and IPv6 apart.** An IPv6 entry never covers an IPv4 address, and an IPv6 address that embeds an IPv4 (`::ffff:10.0.0.1`, NAT64) is judged only by your IPv4 entries. A hostname entry trusts whatever that name resolves to, so prefer IPs or CIDRs.
 - **Redirects into allowlisted ranges are followed.** A public server can redirect to an address your `permitReservedIps` allows. Keep allowlists narrow, or keep `maxRedirects: 0` on clients that allow private ranges.
 - **Redirects are not bound to `baseUrl`.** A followed redirect can go to another host, and every hop is still checked against the SSRF policy. Redirects are off by default.
