@@ -80,11 +80,13 @@ jobs:
         rm -f compat/ultraton-*.tgz
         npm pack --pack-destination compat
 
+    # No install scripts ever run for third-party code: none of the pinned packages needs one, and a malicious
+    # future version that adds one gets nowhere.
     - name: Install compat dependencies and the tarball
       working-directory: compat
       run: |
-        npm ci
-        npm install --no-save ./ultraton-*.tgz
+        npm ci --ignore-scripts
+        npm install --no-save --ignore-scripts ./ultraton-*.tgz
 
     - name: Run compat tests
       working-directory: compat

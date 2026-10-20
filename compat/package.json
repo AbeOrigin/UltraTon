@@ -2,7 +2,7 @@
   "name": "ultraton-compat",
   "private": true,
   "type": "module",
-  "description": "Integration tests of the published ultraton package with real third-party clients. Never part of the ultraton tarball. Install the packed tarball first, from the repository root: rm -f compat/ultraton-*.tgz && npm pack --pack-destination compat, then in compat/: npm ci && npm install --no-save ./ultraton-*.tgz",
+  "description": "Integration tests of the published ultraton package with real third-party clients. Never part of the ultraton tarball. Install the packed tarball first, from the repository root: rm -f compat/ultraton-*.tgz && npm pack --pack-destination compat, then in compat/: npm ci --ignore-scripts && npm install --no-save --ignore-scripts ./ultraton-*.tgz",
   "scripts": {
     "test": "node --import ../__tests__/fixtures/loopback-only.ts --test \"*.test.ts\""
   },
