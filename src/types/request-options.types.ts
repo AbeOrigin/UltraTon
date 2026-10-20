@@ -26,14 +26,25 @@ export interface UltraTonRequestOptions {
     /**
      * A JSON payload. It is serialized with `JSON.stringify` and sent with `content-type: application/json`
      * unless a `content-type` header is already set, by the request or by the client's default `headers`.
-     * Cannot be combined with `body`.
+     * Cannot be combined with `form` or `body`.
      */
     readonly json?: unknown;
 
     /**
-     * A raw payload. It is always sent with a `content-length` in bytes (never chunked). Cannot be combined with `json`.
+     * Form fields, sent urlencoded (`application/x-www-form-urlencoded;charset=UTF-8`) with the same rules as `query`:
+     * an array repeats its key, `undefined` is skipped, and `null` or nested objects throw a `TypeError`. The request's
+     * own `content-type` header is kept; a client default one is replaced. Cannot be combined with `json` or `body`.
      */
-    readonly body?: string | Buffer | Uint8Array;
+    readonly form?: Readonly<Record<string, QueryValue | readonly QueryValue[] | undefined>> | URLSearchParams;
+
+    /**
+     * The payload as bytes, always sent with a `content-length` (never chunked). A `URLSearchParams` is sent urlencoded,
+     * a `FormData` as `multipart/form-data` with its boundary, and a `Blob` (or `File`) with its `type`, if it has one, as content-type.
+     * Those content-types replace a client default one; the request's own `content-type` header is kept, except with a
+     * `FormData`, where it throws a `TypeError` (the boundary must match the body). Everything is read into memory
+     * before sending, a large `File` included. Cannot be combined with `json` or `form`.
+     */
+    readonly body?: string | Buffer | Uint8Array | Blob | FormData | URLSearchParams;
 
     /**
      * Credentials as `user:password`, sent as a Basic `authorization` header. Dropped when a redirect changes origin.
@@ -115,8 +126,8 @@ export interface InternalRequestOptions extends UltraTonRequestOptions {
     readonly method?: string;
 }
 
-/** Request options once `json` has been serialized: the body, if any, is the exact bytes that go on the wire. */
-export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'body'> & { readonly body?: Buffer };
+/** Request options once `json`, `form` or `body` has been encoded: the body, if any, is the exact bytes that go on the wire. */
+export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'form' | 'body'> & { readonly body?: Buffer };
 
 /**
  * Internal system type assigned after security fallbacks have been applied.

@@ -72,7 +72,8 @@ await api.close(); // when the client is no longer needed
 | Option | Type | Default |
 |---|---|---|
 | `json` | `unknown` | Serialized, and sent with `content-type: application/json` unless you set one. |
-| `body` | `string \| Buffer \| Uint8Array` | Raw payload. Cannot be combined with `json`. GET and HEAD cannot have a body. |
+| `form` | plain object or `URLSearchParams` | Sent urlencoded, with the same rules as `query`. |
+| `body` | `string \| Buffer \| Uint8Array \| Blob \| FormData \| URLSearchParams` | A `FormData` goes as multipart with its boundary, a `Blob` with its `type`. Only one of `json`, `form` and `body`. GET and HEAD cannot have a body. |
 | `headers` | plain object | — |
 | `query` | plain object or `URLSearchParams` | Appended to the URL's own query. Arrays repeat the key, `undefined` is skipped, `null` and nested objects throw. |
 | `auth` | `'user:password'` | Sent as Basic auth. Dropped on a cross-origin redirect. |
@@ -177,6 +178,19 @@ setTimeout(() => controller.abort(), 1000);
 await api.get('search?q=x', { signal: controller.signal }); // rejects with controller.signal.reason
 ```
 
+**Send a form or upload a file.** `form` sends urlencoded fields (OAuth token endpoints, older APIs). A `FormData` body goes as `multipart/form-data`, with the boundary set for you:
+
+```ts
+const token = await client.post(tokenUrl, { form: { grant_type: 'client_credentials', scope: 'read' } });
+
+const fd = new FormData();
+fd.append('title', 'Q3 report');
+fd.append('file', await fs.openAsBlob('report.pdf', { type: 'application/pdf' }), 'report.pdf');
+await client.post(uploadUrl, { body: fd });
+```
+
+Your own `content-type` header is kept for `form`, `URLSearchParams` and `Blob`. With a `FormData` it throws, because the header has to carry the boundary of the body. A `content-type` in the client's default headers is replaced by the one the body implies: a form, a `FormData` or a `Blob` with a `type` (for `json`, or a `Blob` without a type, it is kept). The whole body is read into memory before sending, a large file included.
+
 **Use it as `fetch`, or hand it to a library.** `client.fetch` takes the same arguments as `fetch` and returns a standard `Response`. Every request still goes through the client's SSRF policy and limits. It is bound to the client, so libraries that accept a custom fetch get the protection without code changes:
 
 ```ts
@@ -223,7 +237,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is.
-- **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. Request bodies are always buffered (no upload streaming).
+- **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. Request bodies are always buffered (no upload streaming): a `File` or `Blob` body is read whole into memory first.
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
 
