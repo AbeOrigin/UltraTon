@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-10-20
+
+Everyday features on the same security model, all additive: `query`, safe response decompression, `client.stream()` and `client.fetch()`. No breaking changes. One behaviour change: requests now send `accept-encoding: gzip, deflate, br` and decode compressed responses by default (`decompress: false` turns it off).
+
 ### Added
 
 - **`client.fetch(input, init)`.** A `fetch()` that goes through the client and returns a standard `Response`. It is bound to the client, so it can be passed to any library that accepts a fetch implementation.
