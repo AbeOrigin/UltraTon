@@ -89,6 +89,18 @@ describe('HTTP/2 session idle timeout', () => {
         await within((async () => { while (closedConnections() < 1) await new Promise(r => setTimeout(r, 10)); })(), 2000, 'server saw the close');
     });
 
+    it('still reaps the session once a stream that outlived the idle timeout is given up (no frame follows)', async (t) => {
+        const { origin } = await slowServer(t);
+        const { client, pooled } = clientWith(t, { idleTimeoutMs: 150 });
+
+        const pending = client.get(`${origin}/slow/60000`, { socketTimeoutMs: 400, timeoutMs: 0 });
+        pending.catch(() => {});
+        await new Promise(r => setTimeout(r, 50));
+        const session = await pooled(origin);
+        await assert.rejects(pending, { name: 'UltraTonNetworkTimeoutError' });
+        await within(once(session, 'close'), 2000, 'idle session reaped after the stream was given up');
+    });
+
     it('reaps a session that was only ever idle', async (t) => {
         const { origin } = await slowServer(t);
         const { client, pooled } = clientWith(t, { idleTimeoutMs: 150 });

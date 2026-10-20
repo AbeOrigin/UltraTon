@@ -378,10 +378,12 @@ export class Http2SessionManager {
       }
     });
     // The idle timeout reaps a session nobody uses. A stream may legitimately wait longer than that for its response
-    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is left alone: Node
-    // re-arms the timer on the next frame, and the session is reaped once it has been idle with no stream held.
+    // (its own limits are socketTimeoutMs and timeoutMs, 0 disabling them), so a held session is left alone and
+    // looked at again one idle period later: Node only re-arms the timer on the next frame, and a stream that is
+    // given up (abort, timeout) may never be followed by one, which would leave the session pooled for good.
     newSession.on("timeout", () => {
       if (heldStreams(newSession) === 0) this.#destroySession(key, newSession);
+      else newSession.setTimeout(this.#idleTimeoutMs);
     });
 
     const entry: SessionEntry = {
