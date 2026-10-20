@@ -291,10 +291,11 @@ export class Http2SessionManager {
     // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
     // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback.
     const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
+    // Parsed, not compared as text: a scheme in any case ("HTTP://") is still plain http.
     const addresses = await resolveAndPinAll(
       bareHost,
       permitReservedIps,
-      connectUrl.startsWith("http://"),
+      new URL(connectUrl).protocol === "http:",
     );
 
     const {

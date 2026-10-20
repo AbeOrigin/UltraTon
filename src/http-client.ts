@@ -27,12 +27,22 @@ const MAX_DECODE_PASSES = 5;
 const SEPARATORS = /[/\\\u2215\u29F5]/;
 /** A segment made only of dots plus spaces and control characters, which lenient servers trim (Windows/IIS). */
 const DOTS_AND_JUNK = /^[.\u0000-\u0020\u007F-\u009F]*$/;
-// Non-fatal: bytes that are not UTF-8 become U+FFFD instead of throwing.
-const utf8 = new TextDecoder();
+// Fatal: a run of bytes that is not UTF-8 throws instead of becoming U+FFFD.
+const utf8 = new TextDecoder('utf-8', { fatal: true });
 
-/** Decodes every valid `%XX` run and leaves anything else as is, the way lenient servers decode a second time. */
+/**
+ * Decodes every `%XX` run and leaves anything else as is (a bare '%' not followed by two hex digits stays literal, so
+ * '100%' is fine), the way lenient servers decode a second time. A run that is not UTF-8, such as the double-encoded
+ * overlong dots of '%25c0%25ae', is something a lenient server may read as anything, so it throws ESCAPES_BASE.
+ */
 function lenientDecode(text: string): string {
-    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => utf8.decode(Buffer.from(run.replace(/%/g, ''), 'hex')));
+    return text.replace(/(?:%[0-9A-Fa-f]{2})+/g, run => {
+        try {
+            return utf8.decode(Buffer.from(run.replace(/%/g, ''), 'hex'));
+        } catch {
+            throw new TypeError(ESCAPES_BASE);
+        }
+    });
 }
 
 /**

@@ -5,6 +5,7 @@ import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
 import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
+import { createResponse } from '../src/helpers/response.ts';
 import { kSessionManager } from '../src/internal.ts';
 import { UltraTonClient } from '../src/http-client.ts';
 
@@ -162,3 +163,48 @@ for (const [name, start] of [['HTTP/1', startHttp1], ['HTTP/2', startHttp2]] as 
         });
     });
 }
+
+describe('response headers named __proto__ are kept as data', () => {
+    it('createResponse copies an own __proto__ key as an own property, prototype untouched', () => {
+        // node:http2 hands headers over on a null-prototype object, where __proto__ is an ordinary key.
+        const raw = Object.assign(Object.create(null), { ':status': 200, 'x-ok': '1' });
+        Object.defineProperty(raw, '__proto__', { value: 'evil', enumerable: true, writable: true, configurable: true });
+        const res = createResponse(200, raw, Buffer.alloc(0));
+        assert.strictEqual(Object.getPrototypeOf(res.headers), Object.prototype);
+        assert.ok(Object.hasOwn(res.headers, '__proto__'));
+        assert.strictEqual(Object.getOwnPropertyDescriptor(res.headers, '__proto__')?.value, 'evil');
+        assert.strictEqual(res.headers['x-ok'], '1');
+        assert.strictEqual(res.headers[':status'], undefined);
+    });
+
+    it('an object value (set-cookie style array) under __proto__ never becomes the prototype', () => {
+        const raw = Object.create(null);
+        Object.defineProperty(raw, '__proto__', { value: ['a', 'b'], enumerable: true, writable: true, configurable: true });
+        const res = createResponse(200, raw, Buffer.alloc(0));
+        assert.strictEqual(Object.getPrototypeOf(res.headers), Object.prototype);
+        assert.deepStrictEqual(Object.getOwnPropertyDescriptor(res.headers, '__proto__')?.value, ['a', 'b']);
+        assert.strictEqual((res.headers as any).length, undefined, 'not an array');
+    });
+
+    it('HTTP/2: a server header named __proto__ reaches the caller as data', async () => {
+        const server = createServer();
+        server.on('stream', (stream) => {
+            const headers: Record<string, unknown> = { ':status': 200, 'x-ok': '1' };
+            Object.defineProperty(headers, '__proto__', { value: 'evil', enumerable: true, writable: true, configurable: true });
+            stream.respond(headers as any);
+            stream.end('ok');
+        });
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        const manager = new Http2SessionManager();
+        const client = new UltraTonClient({ http2: true, [kSessionManager]: manager } as any);
+        try {
+            const res = await client.get(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`, { permitReservedIps: true });
+            assert.strictEqual(Object.getPrototypeOf(res.headers), Object.prototype);
+            assert.strictEqual(Object.getOwnPropertyDescriptor(res.headers, '__proto__')?.value, 'evil');
+            assert.strictEqual(res.headers['x-ok'], '1');
+        } finally {
+            manager.closeAll();
+            await new Promise<void>(r => server.close(() => r()));
+        }
+    });
+});

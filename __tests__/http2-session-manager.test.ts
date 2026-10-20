@@ -48,6 +48,19 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         assert.equal(args[1].servername, 'example.com', 'SNI/authority must be preserved');
     });
 
+    it('an http origin is plain http whatever the case of its scheme: every address must be loopback', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+        mockConnect = mock.fn(() => createMockSession());
+        const manager = new Http2SessionManager({}, mockConnect as any);
+
+        await assert.rejects(manager.getSession('HTTP://api.localhost:1', undefined, true), (err: Error & { code?: string }) => {
+            assert.equal(err.message, 'UltraTon: Plain http is only allowed to loopback addresses.');
+            assert.equal(err.code, 'ERR_ULTRATON_PLAIN_HTTP');
+            return true;
+        });
+        assert.equal(mockConnect.mock.callCount(), 0, 'never connected');
+    });
+
     it('Forced Rotation: session is strictly recreated after MAX_SESSION_LIFESPAN', async (t) => {
         let currentTime = 1000000;
         global.Date.now = () => currentTime;

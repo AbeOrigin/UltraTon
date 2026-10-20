@@ -368,6 +368,8 @@ for (const [name, http2, start] of engines) {
                 '..%00/admin', '..%20/admin', '..%09/admin', '...%2fadmin', '.. ./admin', '..%2e%20/admin', '..%7f/admin',
                 // an encoded query or fragment ends the segment for some servers
                 '..%3f/admin', '..%23', '..%3fx=1/admin',
+                // a later decoding pass that is not UTF-8: double-encoded overlong dots, a lone continuation byte
+                '%25c0%25ae%25c0%25ae/admin', '%25c0%25ae%25c0%25ae%252fadmin', 'x/%25ff/y',
             ];
             for (const path of traversals) {
                 await assert.rejects(client.get(path), (err: Error) => {
@@ -386,6 +388,9 @@ for (const [name, http2, start] of engines) {
             assert.equal((await client.get('.well-known/x')).json<Echo>().path, '/api/v1/.well-known/x');
             assert.equal((await client.get('files/...')).json<Echo>().path, '/api/v1/files/...');
             assert.equal((await client.get('100%25')).json<Echo>().path, '/api/v1/100%25');
+            assert.equal((await client.get('100%25%25x')).json<Echo>().path, '/api/v1/100%25%25x');
+            // A later pass that is valid UTF-8 still decodes (and is judged) normally.
+            assert.equal((await client.get('caf%25C3%25A9')).json<Echo>().path, '/api/v1/caf%25C3%25A9');
             assert.equal((await client.get('a..b/c.d./..e')).json<Echo>().path, '/api/v1/a..b/c.d./..e');
         });
 

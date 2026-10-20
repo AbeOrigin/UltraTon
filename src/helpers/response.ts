@@ -37,9 +37,12 @@ export function createResponse<T = unknown>(
   rawHeaders: IncomingHttpHeaders,
   data: Buffer,
 ): UltraTonResponse<T> {
+  // Defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be ignored) instead
+  // of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as data.
   const headers: IncomingHttpHeaders = {};
   for (const key of Object.keys(rawHeaders)) {
-    if (!key.startsWith(":")) headers[key] = rawHeaders[key];
+    if (key.startsWith(":")) continue;
+    Object.defineProperty(headers, key, { value: rawHeaders[key], enumerable: true, writable: true, configurable: true });
   }
 
   return {
