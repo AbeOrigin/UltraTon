@@ -229,7 +229,7 @@ export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Arra
         },
     });
     const decoders = (codingError ? [] : (codings as string[])).map(coding => {
-        const decoder = DECODERS.get(coding)!();
+        const decoder = createDecoder(coding);
         decoder.once('error', err => { decodeFailure ??= err; });
         return decoder;
     });
