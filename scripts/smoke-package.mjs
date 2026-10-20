@@ -167,7 +167,9 @@ export function classify(err: unknown): string {
         files: ['consumer.ts'],
       }),
     );
-    const tsc = require.resolve('typescript/lib/tsc.js');
+    // The package's own bin, not an internal path: TypeScript 7 no longer exports lib/tsc.js.
+    const tsPackage = require.resolve('typescript/package.json');
+    const tsc = path.join(path.dirname(tsPackage), require(tsPackage).bin.tsc);
     execFileSync(process.execPath, [tsc, '-p', consumer], { cwd: consumer, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   });
 } catch (err) {
