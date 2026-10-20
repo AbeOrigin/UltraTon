@@ -8,7 +8,7 @@ import { Readable } from 'node:stream';
 import dnsPromises from 'node:dns/promises';
 import net from 'node:net';
 import type { AddressInfo } from 'node:net';
-import { UltraTonClient } from '../src/http-client.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
 import { SecureHttpError, UltraTonNetworkError } from '../src/errors.ts';
 
 // Real sockets on purpose: Node skips the custom `lookup` for IP literals, so mocks cannot catch this class of bug.

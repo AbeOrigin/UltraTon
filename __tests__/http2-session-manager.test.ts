@@ -2,7 +2,7 @@ import { describe, it, mock, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import EventEmitter from 'node:events';
 import dnsPromises from 'node:dns/promises';
-import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { MAX_SESSION_LIFESPAN } from '../src/constants.ts';
 import { SecureHttpError } from '../src/errors.ts';
 

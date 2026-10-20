@@ -1,16 +1,16 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
-import { buildSafeRequestOptions, resolveRequestBody, withMethod } from "./helpers/request-options.ts";
-import { parseSafeUrl } from "./helpers/url-parser.ts";
-import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
-import type { UltraTonResponse } from "./types/request-response.ts";
-import { assertAllowedIp, policyKey, resolveAndPinHost } from "./security/dns-pinner.ts";
-import type { ReservedIpPolicy } from "./security/dns-pinner.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "../errors.ts";
+import { buildSafeRequestOptions, resolveRequestBody, withMethod } from "../helpers/request-options.ts";
+import { parseSafeUrl } from "../helpers/url-parser.ts";
+import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, UltraTonRequestOptions } from "../types/request-options.types.ts";
+import type { UltraTonResponse } from "../types/request-response.ts";
+import { assertAllowedIp, policyKey, resolveAndPinHost } from "../security/dns-pinner.ts";
+import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
-import { HTTP_CODES_REDIRECTS } from './constants.ts';
-import { createResponse } from './helpers/response.ts';
+import { HTTP_CODES_REDIRECTS } from '../constants.ts';
+import { createResponse } from '../helpers/response.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.

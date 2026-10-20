@@ -16,8 +16,8 @@ import assert from "node:assert/strict";
 import EventEmitter from "node:events";
 import dnsPromises from "node:dns/promises";
 import http2 from "node:http2";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
+import { UltraTonHTTP2 } from "../src/engines/http2.ts";
 import { UltraTonMemoryError } from "../src/errors.ts";
 
 // ---------------------------------------------------------------------------

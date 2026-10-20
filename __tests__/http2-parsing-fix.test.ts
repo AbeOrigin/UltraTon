@@ -2,9 +2,9 @@ import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
-import { UltraTonHTTP2 } from '../src/http2-client.ts';
+import { UltraTonHTTP2 } from '../src/engines/http2.ts';
 
 /**
  * Real h2c server on 127.0.0.1 that answers every request with `application/json`

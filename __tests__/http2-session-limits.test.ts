@@ -6,7 +6,7 @@ import type {
   SecureClientSessionOptions,
   connect,
 } from "node:http2";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,

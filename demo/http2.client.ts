@@ -1,4 +1,4 @@
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { UltraTonHTTP2 } from "../src/engines/http2.ts";
 
 const client = new UltraTonHTTP2();
 // The h2c server from demo/http2.server.ts (run `npm run demo:http2:server` first).

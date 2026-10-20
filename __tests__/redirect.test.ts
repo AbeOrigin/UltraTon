@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { UltraTonClient } from '../src/http-client.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
 import { SecureHttpError, UltraTonNetworkTimeoutError, UltraTonRedirectError } from '../src/errors.ts';
 import https from 'node:https';
 

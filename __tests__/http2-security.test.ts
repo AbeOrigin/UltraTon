@@ -29,13 +29,13 @@ import {
 } from "node:http2";
 import http from "node:http";
 import net, { type AddressInfo, isIP } from "node:net";
-import { Http2SessionManager } from "../src/classes/http-session-mannager.ts";
+import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
   SecureHttpError,
   UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
 } from "../src/errors.ts";
-import { UltraTonHTTP2 } from "../src/http2-client.ts";
+import { UltraTonHTTP2 } from "../src/engines/http2.ts";
 
 const buildClient = (t: { mock: { method: typeof mock.method } }) => {
   t.mock.method(dnsPromises, "lookup", async () => ({

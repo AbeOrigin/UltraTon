@@ -6,15 +6,15 @@ import type {
   IncomingHttpHeaders,
   OutgoingHttpHeaders,
 } from "node:http2";
-import type { UltraTonResponse } from "./types/request-response.ts";
-import { Http2SessionManager } from "./classes/http-session-mannager.ts";
+import type { UltraTonResponse } from "../types/request-response.ts";
+import { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
   InternalRequestOptions,
   ResolvedRequestOptions,
   SecureUltraTonRequestOptions,
   UltraTonOptionsHttp2,
   UltraTonRequestOptionsHttp2,
-} from "./types/request-options.types.ts";
+} from "../types/request-options.types.ts";
 import {
   SecureHttpError,
   UltraTonMemoryError,
@@ -22,16 +22,16 @@ import {
   UltraTonNetworkTimeoutError,
   UltraTonRedirectError,
   toNetworkError,
-} from "./errors.ts";
-import { HTTP_CODES_REDIRECTS } from "./constants.ts";
-import { createResponse } from "./helpers/response.ts";
+} from "../errors.ts";
+import { HTTP_CODES_REDIRECTS } from "../constants.ts";
+import { createResponse } from "../helpers/response.ts";
 import {
   basicAuthorization,
   buildSafeRequestOptions,
   resolveRequestBody,
   withMethod,
-} from "./helpers/request-options.ts";
-import { parseSafeUrl } from "./helpers/url-parser.ts";
+} from "../helpers/request-options.ts";
+import { parseSafeUrl } from "../helpers/url-parser.ts";
 
 const globalPool = new Http2SessionManager();
 

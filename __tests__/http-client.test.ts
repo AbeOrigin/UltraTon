@@ -2,7 +2,7 @@ import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { EventEmitter } from 'node:events';
 import { Readable } from 'node:stream';
-import { UltraTonClient } from '../src/http-client.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
 import https from 'node:https';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';

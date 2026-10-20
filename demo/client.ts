@@ -1,4 +1,4 @@
-import { UltraTonClient } from '../src/http-client.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
 
 // 1) Instantiate the client (UltraTonClient takes no arguments directly)
 const client = new UltraTonClient();

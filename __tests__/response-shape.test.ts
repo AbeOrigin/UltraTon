@@ -3,10 +3,10 @@ import assert from 'node:assert';
 import http from 'node:http';
 import { createServer } from 'node:http2';
 import type { AddressInfo } from 'node:net';
-import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { UltraTonParseError } from '../src/errors.ts';
-import { UltraTonHTTP2 } from '../src/http2-client.ts';
-import { UltraTonClient } from '../src/http-client.ts';
+import { UltraTonHTTP2 } from '../src/engines/http2.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
 
 const MULTIBYTE = 'héllo wörld ✓ 日本語 🚀';
 const BIG_BYTES = 5 * 1024 * 1024 + 1024; // over the old 5 MB auto-parse threshold

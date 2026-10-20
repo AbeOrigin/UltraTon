@@ -8,9 +8,9 @@ import dnsPromises from 'node:dns/promises';
 import http from 'node:http';
 import { createServer as createH2Server, type Http2Server, type IncomingHttpHeaders, type ServerHttp2Stream } from 'node:http2';
 import { type AddressInfo, isIP } from 'node:net';
-import { UltraTonClient } from '../src/http-client.ts';
-import { UltraTonHTTP2 } from '../src/http2-client.ts';
-import { Http2SessionManager } from '../src/classes/http-session-mannager.ts';
+import { UltraTonClient } from '../src/engines/http1.ts';
+import { UltraTonHTTP2 } from '../src/engines/http2.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import { buildSafeRequestOptions } from '../src/helpers/request-options.ts';
 
 type Echo = { method: string; headers: Record<string, string | undefined>; body: string };

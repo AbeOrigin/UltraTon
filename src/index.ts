@@ -1,7 +1,7 @@
 // Public entry point of the package. No default export, so that
 // `require('ultraton')` yields a clean namespace.
-export { UltraTonClient } from './http-client.ts';
-export { UltraTonHTTP2 } from './http2-client.ts';
+export { UltraTonClient } from './engines/http1.ts';
+export { UltraTonHTTP2 } from './engines/http2.ts';
 export {
   SecureHttpError,
   UltraTonNetworkError,
