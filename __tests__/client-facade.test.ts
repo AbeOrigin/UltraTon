@@ -242,6 +242,72 @@ for (const [name, http2, start] of engines) {
             });
             assert.equal(f.accepted(), 1);
         });
+
+        it('a request in flight when close() runs rejects with "Client is closed", not a network error', async (t) => {
+            const f = await start(t);
+            const client = new UltraTonClient({ http2, permitReservedIps: true });
+
+            const pending = client.get(`${f.base}/slow/1000`);
+            await until(() => f.accepted() === 1);
+            await new Promise(r => setTimeout(r, 50)); // let the request reach the server
+            await client.close();
+
+            await assert.rejects(pending, (err: Error) => {
+                assert.ok(err instanceof SecureHttpError && !(err instanceof UltraTonNetworkError), `${err.name}: ${err.message}`);
+                assert.equal(err.message, 'UltraTon: Client is closed.');
+                return true;
+            });
+        });
+
+        it('rejects percent-encoded and ;-param traversal under baseUrl; encoded slashes inside a segment still work', async (t) => {
+            const f = await start(t);
+            const client = clientFor(t, { http2, permitReservedIps: true, baseUrl: `${f.base}/api/v1/` });
+
+            for (const path of ['..%2fadmin', '..%2F..%2Fadmin', '%2e%2e%2fadmin', '%2e%2E%2fadmin', '..%5cadmin', '..;/admin', 'x/..;jsessionid=1/..;/admin', '.;/admin', 'a/%2e%2e%2f%2e%2e%2fadmin']) {
+                await assert.rejects(client.get(path), (err: Error) => {
+                    assert.ok(err instanceof TypeError, `${JSON.stringify(path)} -> ${err.message}`);
+                    assert.equal(err.message, 'UltraTon: Request path escapes baseUrl.');
+                    return true;
+                });
+            }
+            await assert.rejects(client.get('bad%zzencoding'), { name: 'TypeError', message: 'UltraTon: Request path has malformed percent-encoding.' });
+            assert.equal(f.accepted(), 0);
+
+            assert.equal((await client.get('group%2Fproject/issues')).json<Echo>().path, '/api/v1/group%2Fproject/issues');
+            assert.equal((await client.get('a/b/c;v=1')).json<Echo>().path, '/api/v1/a/b/c;v=1');
+            assert.equal((await client.get('.well-known/x')).json<Echo>().path, '/api/v1/.well-known/x');
+        });
+
+        it('a null request option throws instead of taking the client default', async (t) => {
+            const f = await start(t);
+            const client = clientFor(t, { http2, permitReservedIps: true, timeoutMs: 1000, maxBodySize: 1000 });
+
+            await assert.rejects(client.get(`${f.base}/`, { permitReservedIps: null as any }), /^TypeError: UltraTon: Expected 'permitReservedIps' to be a boolean/);
+            await assert.rejects(client.get(`${f.base}/`, { timeoutMs: null as any }), /^TypeError: UltraTon: Expected 'timeoutMs' to be a number/);
+            await assert.rejects(client.get(`${f.base}/`, { maxBodySize: null as any }), /^TypeError: UltraTon: Expected 'maxBodySize' to be a number/);
+            assert.equal(f.accepted(), 0);
+        });
+
+        it('options inherited from Object.prototype are ignored (constructor and request)', async (t) => {
+            const f = await start(t);
+            const proto = Object.prototype as Record<string, unknown>;
+            proto.baseUrl = 'https://evil.example/';
+            proto.permitReservedIps = true;
+            try {
+                const client = clientFor(t, { http2 });
+                // No baseUrl crept in (an absolute URL is still accepted) and the default policy still blocks loopback.
+                await assert.rejects(client.get(`${f.base}/`), (err: Error) => {
+                    assert.ok(err instanceof SecureHttpError, `${err.name}: ${err.message}`);
+                    assert.match(err.message, /prohibited internal\/reserved/);
+                    return true;
+                });
+                await assert.rejects(client.get(`${f.base}/`, {}), /prohibited internal\/reserved/);
+                assert.equal(f.accepted(), 0);
+            } finally {
+                delete proto.baseUrl;
+                delete proto.permitReservedIps;
+            }
+        });
     });
 }
 
@@ -283,6 +349,23 @@ describe('UltraTonClient tls', () => {
             const res = await client.get(url);
             assert.equal(res.statusCode, 200);
             assert.equal(res.text(), 'tls-ok');
+        });
+
+        it(`${label}: with tls.ca set, a host the certificate does not name is still rejected`, async (t) => {
+            // 127.0.0.2 is loopback but not in the fixture's SAN (localhost, 127.0.0.1, ::1).
+            const server = http2
+                ? createSecureServer({ cert: CA, key: KEY }, (_req, res) => res.end('tls-ok'))
+                : https.createServer({ cert: CA, key: KEY }, (_req, res) => res.end('tls-ok'));
+            track(server as http.Server, t);
+            await new Promise<void>(r => server.listen(0, '127.0.0.2', r));
+            const url = `https://127.0.0.2:${(server.address() as AddressInfo).port}/`;
+
+            const client = clientFor(t, { http2, permitReservedIps: true, tls: { ca: CA } });
+            await assert.rejects(client.get(url), (err: Error) => {
+                assert.ok(err instanceof UltraTonNetworkError, `${err.name}: ${err.message}`);
+                assert.equal(err.message, 'UltraTon: TLS handshake failed (ERR_TLS_CERT_ALTNAME_INVALID).');
+                return true;
+            });
         });
 
         it(`${label}: another client's tls never applies (the self-signed cert is rejected)`, async (t) => {

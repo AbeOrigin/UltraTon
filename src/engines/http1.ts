@@ -85,6 +85,8 @@ export class Http1Engine {
             }
         } catch (err: unknown) {
             if (err instanceof UltraTonMemoryError) throw err;
+            // close() destroyed the socket mid-body: say so instead of reporting a reset connection.
+            if (this.#closed) throw clientClosed();
             const code = (err as NodeJS.ErrnoException | undefined)?.code;
             // A caller abort is not a network fault: keep it a plain SecureHttpError, as before.
             if ((err as Error | undefined)?.name === 'AbortError') {
@@ -185,8 +187,9 @@ export class Http1Engine {
             req.on('error', (err: Error) => {
                 req.destroy();
                 clearTimeout(executionTimer);
+                // close() destroyed the socket: that is the reason, not the reset it causes.
                 // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
-                reject(toNetworkError(err));
+                reject(this.#closed ? clientClosed() : toNetworkError(err));
             });
 
             req.end(body);

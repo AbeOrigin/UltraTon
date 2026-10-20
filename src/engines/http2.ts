@@ -49,6 +49,11 @@ export class Http2Engine {
     this.#sessionManager.closeAll();
   }
 
+  /** A failure caused by close() reports the closed client, not the reset or cancel it caused. */
+  #orClosed(err: unknown): unknown {
+    return this.#closed ? clientClosed() : err;
+  }
+
   /**
    * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
    */
@@ -81,11 +86,16 @@ export class Http2Engine {
 
       // DNS and the pool wait run under the same budget as the stream: a nameserver that never answers must not
       // outlive timeoutMs. The budget left here is what bounds session acquisition; it is measured again below.
-      const session = await this.#acquireSession(
-        origin,
-        reqOpts,
-        this.#remainingBudget(reqOpts.timeoutMs, startTime),
-      );
+      let session: ClientHttp2Session;
+      try {
+        session = await this.#acquireSession(
+          origin,
+          reqOpts,
+          this.#remainingBudget(reqOpts.timeoutMs, startTime),
+        );
+      } catch (err: unknown) {
+        throw this.#orClosed(err);
+      }
       // close() ran while DNS or the connect was pending: the session just pooled would outlive it.
       if (this.#closed) {
         this.#sessionManager.closeAll();
@@ -289,7 +299,7 @@ export class Http2Engine {
           body && body.length > 0 ? { endStream: false } : undefined,
         );
       } catch (err: unknown) {
-        return reject(toNetworkError(err));
+        return reject(this.#orClosed(toNetworkError(err)));
       }
 
       // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
@@ -358,7 +368,7 @@ export class Http2Engine {
           statusCode === undefined ||
           Number.isNaN(statusCode)
         ) {
-          return reject(lostResponse());
+          return reject(this.#orClosed(lostResponse()));
         }
 
         resolve(createResponse<T>(statusCode, responseHeaders, Buffer.concat(chunks)));
@@ -372,7 +382,7 @@ export class Http2Engine {
         // ERR_HTTP2_STREAM_CANCEL whose cause is the real error: report that one.
         const { code, cause } = err as NodeJS.ErrnoException;
         // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
-        reject(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));
+        reject(this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err)));
       });
 
       // Closed before a clean end and without an error event (e.g. the socket was destroyed): the response is lost.
@@ -380,7 +390,7 @@ export class Http2Engine {
         if (settled) return;
         settled = true;
         clearTimeout(streamTimer);
-        reject(lostResponse());
+        reject(this.#orClosed(lostResponse()));
       });
 
       if (body && body.length > 0) {

@@ -19,13 +19,15 @@ interface InternalClientOptions extends UltraTonClientOptions {
 
 const MUST_BE_RELATIVE = 'UltraTon: With baseUrl set, request paths must be relative.';
 const ESCAPES_BASE = 'UltraTon: Request path escapes baseUrl.';
+const MALFORMED_ENCODING = 'UltraTon: Request path has malformed percent-encoding.';
 
 /**
  * Resolves a request path against the client's `baseUrl` so that it can never land outside it.
  * The input is judged as the WHATWG parser will read it (leading/trailing C0 controls and spaces ignored, tabs and
  * newlines removed anywhere), and the final check is on the resolved href, not on the input: percent-encoded dots
  * (`%2e%2e`) and backslashes are dot segments and slashes to the parser, whatever the input looks like.
- * @throws {TypeError} If the path is absolute or protocol-relative, or resolves outside the base path.
+ * @throws {TypeError} If the path is absolute or protocol-relative, resolves outside the base path, has a '.' or '..'
+ *   segment once percent-decoded (with '\' as a separator and ';params' stripped), or has malformed percent-encoding.
  */
 function resolveAgainstBase(path: unknown, base: URL): string {
     if (typeof path !== 'string') {
@@ -39,6 +41,20 @@ function resolveAgainstBase(path: unknown, base: URL): string {
     const resolved = new URL(parsed.replace(/^[\\/]/, ''), base);
     // base.href ends with '/', so this also rules out another host, port or scheme and sibling paths ('/v1-admin').
     if (!resolved.href.startsWith(base.href)) throw new TypeError(ESCAPES_BASE);
+    // The URL is inside the base, but servers do not all read it the same way: some decode %2F/%5C before resolving dot
+    // segments, IIS reads '\' as '/', Tomcat/Spring drop ';params' ('..;' is '..'). Judge the part below the base as such
+    // a server would: decoded once, split on both slashes, params stripped. An encoded slash inside an ordinary segment
+    // (GitLab's 'group%2Fproject') stays allowed.
+    let below: string;
+    try {
+        below = decodeURIComponent(resolved.pathname.slice(base.pathname.length));
+    } catch {
+        throw new TypeError(MALFORMED_ENCODING);
+    }
+    for (const segment of below.split(/[\\/]/)) {
+        const name = segment.split(';', 1)[0];
+        if (name === '.' || name === '..') throw new TypeError(ESCAPES_BASE);
+    }
     return resolved.href;
 }
 
@@ -62,11 +78,13 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
 
-        // The seams are read only once the options validated as an object.
+        // The seams are read only once the options validated as an object, and only as own properties.
         const internal = (options ?? {}) as InternalClientOptions;
+        const own = <K extends typeof kTransport | typeof kSessionManager>(key: K) =>
+            Object.hasOwn(internal, key) ? internal[key] : undefined;
         this.#engine = resolved.http2
-            ? new Http2Engine(internal[kSessionManager] ?? new Http2SessionManager(resolved.tls))
-            : new Http1Engine(resolved.tls, internal[kTransport]);
+            ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls))
+            : new Http1Engine(resolved.tls, own(kTransport));
     }
 
     public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {

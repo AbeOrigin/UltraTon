@@ -6,7 +6,8 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
 
     it('Should return standard options with all secure defaults injected when passed empty options', () => {
         const result = buildSafeRequestOptions({});
-        assert.deepStrictEqual(result, { 
+        // The result has no prototype (inherited properties never read as options): compare its own properties.
+        assert.deepStrictEqual({ ...result }, { 
             maxBodySize: 2097152, 
             socketTimeoutMs: 10000, 
             timeoutMs: 30000,

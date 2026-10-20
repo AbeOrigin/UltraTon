@@ -189,19 +189,30 @@ function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
 }
 
 /**
+ * A copy of the object's own enumerable properties on a null-prototype object. Every options object is read through
+ * one: a property inherited from a polluted `Object.prototype` (`baseUrl`, `tls`, `permitReservedIps`, `auth`, ...)
+ * must never be taken for an option.
+ */
+function ownOptions<T extends object>(options: T): T {
+    const own = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(options)) own[key] = (options as Record<string, unknown>)[key];
+    return own as T;
+}
+
+/**
  * Builds the options of one request from what a client method (`get`, `post`, ...) received: the caller's options object
  * plus the method. A caller-supplied `method` throws instead of being silently overridden, and so does an `options` that
  * is not an object (typically the old `post(url, body)` call shape).
  */
 export function withMethod(method: string, options: unknown): InternalRequestOptions {
-    if (options === undefined) return { method };
+    if (options === undefined) return ownOptions({ method });
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
         throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json } or { body }.");
     }
     if (Object.hasOwn(options, 'method')) {
         throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
     }
-    return { ...options, method };
+    return ownOptions({ ...options, method });
 }
 
 /**
@@ -211,6 +222,7 @@ export function withMethod(method: string, options: unknown): InternalRequestOpt
  * @throws {TypeError} On an unknown option, `json` together with `body`, a `body` of the wrong type or a `json` that cannot be serialized.
  */
 export function resolveRequestBody(options: InternalRequestOptions): ResolvedRequestOptions {
+    options = ownOptions(options);
     assertKnownOptions(options);
     assertBodyOptions(options);
     if ((options.json !== undefined || options.body !== undefined) && (options.method === 'GET' || options.method === 'HEAD')) {
@@ -259,10 +271,12 @@ export function basicAuthorization(auth: string): string {
  * Throws TypeError synchronously on malformed security primitives to fail loud.
  */
 export function buildSafeRequestOptions(options: InternalRequestOptions): SecureUltraTonRequestOptions {
+    options = ownOptions(options);
     assertKnownOptions(options);
     assertBodyOptions(options);
 
-    const safeOptions: Record<string, unknown> = {};
+    // No prototype either: an option it leaves out (auth, signal, headers) reads as undefined, never as an inherited value.
+    const safeOptions: Record<string, unknown> = Object.create(null);
 
     if (validateType('method', options.method, 'string')) safeOptions.method = options.method;
     if (validateType('auth', options.auth, 'string')) safeOptions.auth = options.auth;
@@ -314,7 +328,7 @@ function tlsMaterial(propName: string, value: unknown): TlsMaterial | undefined 
  */
 function tlsOptions(value: unknown): TlsOptions {
     if (!validateType('tls', value, 'object')) return {};
-    const raw = value as Record<string, unknown>;
+    const raw = ownOptions(value as Record<string, unknown>);
     for (const key of Object.keys(raw)) {
         if ((TLS_OPTION_KEYS as readonly string[]).includes(key)) continue;
         const hint = key === 'rejectUnauthorized' ? `${NO_VERIFY_OFF} tls: { ca }.` : ` Valid tls options: ${TLS_OPTION_KEYS.join(', ')}.`;
@@ -342,7 +356,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
         throw new TypeError('UltraTon: Client options must be an object.');
     }
-    const raw = options as Record<string, unknown>;
+    const raw = ownOptions(options as Record<string, unknown>);
     for (const key of Object.keys(raw)) {
         if (CLIENT_KEYS.has(key)) continue;
         const hint = CLIENT_OPTION_HINTS.get(key) ?? ` Valid options: ${CLIENT_OPTION_KEYS.join(', ')}.`;
@@ -402,19 +416,27 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
 }
 
 /**
- * Fills in what a request left `undefined` from the client defaults, key by key. Headers merge case-insensitively and
- * the request wins; a request header set to `undefined` keeps the default, like any other option. Run it after
+ * Fills in what a request left `undefined` from the client defaults, key by key. Only `undefined` falls back: `null`
+ * (or any other wrong type) stays and is rejected by the request firewall. Headers merge case-insensitively and the
+ * request wins; a request header set to `undefined` keeps the default, like any other option. Run it after
  * `resolveRequestBody`, so the caller's own options are what gets checked for unknown keys and `json`/`body`.
+ * Every option is an own property of the result (`undefined` when unset), so later copies with `{ ...spread }` never
+ * fall through to `Object.prototype`.
  */
 export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: ClientDefaults): ResolvedRequestOptions {
+    const own = ownOptions(options);
+    const or = <V>(value: V | undefined, fallback: V | undefined) => (value === undefined ? fallback : value);
     return {
-        ...options,
-        headers: mergeHeaders(defaults.headers, options.headers),
-        timeoutMs: options.timeoutMs ?? defaults.timeoutMs,
-        socketTimeoutMs: options.socketTimeoutMs ?? defaults.socketTimeoutMs,
-        maxBodySize: options.maxBodySize ?? defaults.maxBodySize,
-        maxRedirects: options.maxRedirects ?? defaults.maxRedirects,
-        permitReservedIps: options.permitReservedIps ?? defaults.permitReservedIps,
+        method: own.method,
+        headers: mergeHeaders(defaults.headers, own.headers),
+        timeoutMs: or(own.timeoutMs, defaults.timeoutMs),
+        socketTimeoutMs: or(own.socketTimeoutMs, defaults.socketTimeoutMs),
+        maxBodySize: or(own.maxBodySize, defaults.maxBodySize),
+        maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
+        permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
+        signal: own.signal,
+        auth: own.auth,
+        body: own.body,
     };
 }
 
