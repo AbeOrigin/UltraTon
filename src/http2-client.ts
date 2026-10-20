@@ -18,12 +18,11 @@ import {
   UltraTonMemoryError,
   UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
-  UltraTonParseError,
   UltraTonRedirectError,
   toNetworkError,
 } from "./errors.ts";
 import { HTTP_CODES_REDIRECTS } from "./constants.ts";
-import { parseSecurePayload, secureReviver } from "./helpers/payload-parser.ts";
+import { createResponse } from "./helpers/response.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 
@@ -360,12 +359,7 @@ export class UltraTonHTTP2 {
           clearTimeout(streamTimer);
           stream.close();
 
-          return resolve({
-            statusCode,
-            headers: responseHeaders,
-            body: Buffer.alloc(0),
-            json: (): T => ({}) as T,
-          });
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
         }
       });
 
@@ -409,38 +403,7 @@ export class UltraTonHTTP2 {
           return reject(lostResponse());
         }
 
-        const data = Buffer.concat(chunks);
-        let parsedBody: T | Buffer;
-        try {
-          parsedBody = parseSecurePayload<T>(
-            data,
-            responseHeaders["content-type"],
-          );
-        } catch (err: unknown) {
-          // This is an event listener, not the executor: a throw here would be an uncaught exception.
-          return reject(err);
-        }
-
-        resolve({
-          statusCode,
-          headers: responseHeaders,
-          body: parsedBody,
-          json: (): T => {
-            try {
-              // If body is already parsed (not a Buffer), return it as-is
-              if (!(parsedBody instanceof Buffer)) {
-                return parsedBody as T;
-              }
-              // If body is a Buffer, parse it
-              if (data.length === 0) return {} as T;
-              return JSON.parse(data.toString("utf-8"), secureReviver) as T;
-            } catch (e: unknown) {
-              throw new UltraTonParseError(
-                `UltraTon: Failed to parse JSON response payload.`,
-              );
-            }
-          },
-        });
+        resolve(createResponse<T>(statusCode, responseHeaders, Buffer.concat(chunks)));
       });
 
       stream.on("error", (err: Error) => {

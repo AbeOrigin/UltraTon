@@ -229,7 +229,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const res = await client.get(url, { permitReservedIps: true });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(res.text(), "H2-INTERNAL");
   });
 
   it("connects to a reserved IP covered by a CIDR allowlist", async (t) => {
@@ -238,7 +238,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     const res = await client.get(url, { permitReservedIps: ["127.0.0.0/8"] });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(res.text(), "H2-INTERNAL");
     assert.strictEqual(connect.mock.callCount(), 1);
   });
 
@@ -421,7 +421,7 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
     const res = await client.get(`http://localhost:${port}/`, { permitReservedIps: ["localhost"] });
 
     assert.strictEqual(res.statusCode, 200);
-    assert.strictEqual(String(res.body), "H2-INTERNAL");
+    assert.strictEqual(res.text(), "H2-INTERNAL");
     // The connection went to the pinned address, not to the name.
     assert.strictEqual(connect.mock.callCount(), 1);
     assert.strictEqual(connect.mock.calls[0].arguments[0], `http://127.0.0.1:${port}`);
@@ -637,7 +637,7 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
     const options = { permitReservedIps: true, maxRedirects: 1 };
 
     const roomy = await client.get(url, { ...options, timeoutMs: 1000 });
-    assert.strictEqual(String(roomy.body), "done");
+    assert.strictEqual(roomy.text(), "done");
 
     await assert.rejects(client.get(url, { ...options, timeoutMs: 250 }), (err: unknown) => {
       assert.ok(err instanceof UltraTonNetworkTimeoutError);

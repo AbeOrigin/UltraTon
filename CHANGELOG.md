@@ -19,12 +19,12 @@ Everything below has been merged since 1.0.3 and is not yet published. It includ
 - **`https` to `http` redirects (S3, medium).** They are rejected in both clients on every hop, so a response can no longer push a permitted client to the plaintext loopback escape hatch (#4).
 - **Error messages no longer echo hostnames or IPs (S5, low).** The reserved-IP and DNS-failure errors name the `permitReservedIps` option and contain neither the IP nor the hostname. The phrase `prohibited internal/reserved network IP` is kept (#4).
 - **HTTP/2 hardening to HTTP/1 parity.** Options and headers are validated before connecting, including CRLF/NUL, caller-supplied pseudo-headers and a caller `host` header. `parseSafeUrl` runs on every hop. Every pooled session is re-checked against `permitReservedIps`, and the pool key includes that policy. One absolute `timeoutMs` budget is shared across redirect hops. `host` is dropped on cross-origin redirects in both clients (#3).
-- **Malformed JSON crashed the process (HTTP/2).** A server answering `application/json` with an invalid body caused an uncaught exception. The request now rejects with `UltraTonParseError` (#3).
+- **Malformed JSON crashed the process (HTTP/2).** A server answering `application/json` with an invalid body caused an uncaught exception. Responses are no longer parsed at request time at all: the request resolves, and `json()` throws `UltraTonParseError` on invalid JSON (#3).
 - **HTTP/2 session races.** A concurrent retry could open sessions that `closeAll()` could not reach, and a pooled session could be overwritten by a concurrent attempt. Both are fixed (#3, #4).
 
 ### Added
 
-- **HTTP/2 engine.** `UltraTonHTTP2` with a session manager: session pooling, HPACK and memory limits, and automatic `application/json` parsing for bodies up to 5 MB with `__proto__`, `constructor` and `prototype` keys stripped (#3).
+- **HTTP/2 engine.** `UltraTonHTTP2` with a session manager: session pooling and HPACK and memory limits (#3).
 - **`permitReservedIps` allowlist (S4).** Besides `true`/`false`, it accepts a list of IPs, CIDRs or hostnames, for example `['10.0.0.0/8', 'api.internal']`. An IPv6 CIDR never covers native IPv4, IPv6 addresses that embed an IPv4 (mapped, compatible, NAT64) are judged only by that IPv4, a hostname entry trusts that name's DNS, and redirects into allowlisted ranges are followed (#4).
 - **`UltraTonNetworkError`.** Socket, connect and TLS failures (`ECONNREFUSED`, `ECONNRESET`, certificate and handshake errors) reject with it in both engines. It carries `code` (the original `err.code`, or `UNKNOWN`) and `cause` (the original error), and `SecureHttpError` now accepts `{ cause, code }`.
 - **Public package entry.** A single `ultraton` entry exports `UltraTonClient`, `UltraTonHTTP2`, `SecureHttpError`, `UltraTonNetworkError`, `UltraTonMemoryError`, `UltraTonNetworkTimeoutError`, `UltraTonParseError`, `UltraTonRedirectError` and the types `ReservedIpPolicy`, `UltraTonOptionsHttp2`, `UltraTonRequestOptions`, `UltraTonRequestOptionsHttp2` and `UltraTonResponse`. `package.json` `exports` now declares `types` and `default`.
@@ -34,10 +34,13 @@ Everything below has been merged since 1.0.3 and is not yet published. It includ
 
 ### Changed
 
-- **Breaking: `data` is now `body`.** Responses expose `body: T | Buffer` instead of `data`. `application/json` bodies are parsed automatically, and invalid JSON with that content type rejects with `UltraTonParseError` (#3). This also changes JSON handling for HTTP/1 users:
-  - Both `body` and `json()` now parse with a reviver that drops `__proto__`, `constructor` and `prototype` keys at every depth, where 1.0.3's `json()` was a plain `JSON.parse`. A legitimate field named `constructor` or `prototype` silently disappears from the result.
-  - JSON bodies over 5 MB are not parsed automatically: `body` stays a `Buffer` (hence `T | Buffer`), and `json()` still parses it on demand.
-  - An empty JSON body now gives `{}`, where 1.0.3's `json()` threw `UltraTonParseError`.
+- **Breaking: new response shape.** Responses are now `{ statusCode, ok, headers, data, json<T>(), text() }`:
+  - `data` is still a `Buffer`, as in 1.x. There is no auto-parsing: `application/json` bodies are not parsed at request time, so a malformed JSON response resolves and only `json()` throws `UltraTonParseError` (with the original error as `cause`).
+  - `json<T>()` is lazy, parses on every call whatever the `content-type` (so `application/problem+json` works), and strips `__proto__`, `constructor` and `prototype` keys at every depth, where 1.0.3's `json()` was a plain `JSON.parse`. A legitimate field named `constructor` or `prototype` silently disappears from the result. An empty body gives `{}`, where 1.0.3's `json()` threw `UltraTonParseError`.
+  - New: `text()` (UTF-8) and `ok` (`true` for 200-299).
+  - `statusCode` is always a `number`; it used to be typed `number | undefined`.
+  - `headers` no longer contains HTTP/2 pseudo-headers such as `:status`.
+  - There is no size threshold: a body of any size within `maxBodySize` is available as `data` and parseable with `json()` (#3).
 - **Breaking: loopback IP literals need a permit.** `http://127.0.0.1` and its numeric forms (such as `http://2130706433`) now require `permitReservedIps`. They used to work through the URL-parser escape hatch. `http://localhost` was already blocked via DNS before this change (#1, #3).
 - **Breaking: narrower HTTP/2 option types.** `UltraTonRequestOptionsHttp2` no longer extends `RequestOptions`, because the HTTP/2 client ignored those options (#3).
 - **Behaviour: network and TLS errors no longer contain the address.** Raw Node errors such as `connect ECONNREFUSED 10.0.0.5:8080` (HTTP/1) and the `UltraTon stream error: ...` / `Failed to establish HTTP/2 connection: ...` wrappers (HTTP/2) are replaced by `UltraTonNetworkError` with the message `UltraTon: Connection failed (<code>).` or `UltraTon: TLS handshake failed (<code>).`. The IP and port are only reachable through `error.cause`, so do not log `cause` to untrusted sinks. `AbortError` and existing `SecureHttpError` subclasses are not wrapped.

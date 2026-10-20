@@ -39,20 +39,23 @@ describe('UltraTonClient - generic JSON Parsing (Sprint 5)', () => {
         
         // Assert native response shape is unharmed
         assert.strictEqual(res.statusCode, 200);
-        assert.ok(!Buffer.isBuffer(res.body)); // Auto parsing kicked in
+        assert.ok(Buffer.isBuffer(res.data)); // No auto-parsing: data stays the raw Buffer
         
-        // Assert the parsed data extraction works inline
-        const jsonBody = res.body as UserShape;
+        // Assert the lazy, typed extraction works
+        const jsonBody: UserShape = res.json();
         assert.strictEqual(jsonBody.user, 'abe');
         assert.strictEqual(jsonBody.role, 'architect');
     });
 
-    it('Should cleanly trap native SyntaxError and throw UltraTonParseError upon malformed payload during request', async () => {
+    it('Should cleanly trap native SyntaxError and throw UltraTonParseError upon malformed payload from json()', async () => {
         const client = new UltraTonClient(createSmartMockTransport() as any);
         
-        await assert.rejects(
-            client.get('https://example.com/invalid-json'),
-            (err: any) => err instanceof UltraTonParseError && err.message.includes('Failed to parse JSON')
+        // The request itself resolves: parsing is lazy
+        const res = await client.get('https://example.com/invalid-json');
+        assert.strictEqual(res.statusCode, 200);
+        assert.throws(
+            () => res.json(),
+            (err: any) => err instanceof UltraTonParseError && err.message.includes('Failed to parse JSON') && err.cause instanceof SyntaxError
         );
     });
 

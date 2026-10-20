@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonParseError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
 import { buildSafeRequestOptions } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
@@ -10,7 +10,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from './constants.ts';
-import { parseSecurePayload, secureReviver } from './helpers/payload-parser.ts';
+import { createResponse } from './helpers/response.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -262,25 +262,7 @@ export class UltraTonClient {
                 continue;
             }
 
-            const parsedBody = parseSecurePayload<T>(hop.data, hop.headers['content-type']);
-            return {
-                statusCode: hop.statusCode,
-                headers: hop.headers,
-                body: parsedBody,
-                json(): T {
-                    try {
-                        // If body is already parsed (not a Buffer), return it as-is
-                        if (!(parsedBody instanceof Buffer)) {
-                            return parsedBody as T;
-                        }
-                        // If body is a Buffer, parse it
-                        if (hop.data.length === 0) return {} as T;
-                        return JSON.parse(parsedBody.toString('utf-8'), secureReviver) as T;
-                    } catch (e: unknown) {
-                        throw new UltraTonParseError(`UltraTon: Failed to parse JSON response payload.`);
-                    }
-                }
-            };
+            return createResponse<T>(hop.statusCode, hop.headers, hop.data);
         }
     }
 }

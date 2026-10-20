@@ -53,12 +53,12 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
 
     it('Still reaches a reserved IP literal when permitReservedIps is true', async () => {
         const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: true });
-        assert.equal((res.body as Buffer).toString(), 'INTERNAL');
+        assert.equal(res.text(), 'INTERNAL');
     });
 
     it('permitReservedIps: a CIDR allowlist reaches a reserved IP literal inside it', async () => {
         const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/`, { permitReservedIps: ['127.0.0.0/8'] });
-        assert.equal((res.body as Buffer).toString(), 'INTERNAL');
+        assert.equal(res.text(), 'INTERNAL');
     });
 
     it('permitReservedIps: a CIDR allowlist that excludes the target blocks it without connecting', async () => {
@@ -120,7 +120,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         const otherPort = (other.address() as AddressInfo).port;
         try {
             const reached = await new UltraTonClient().get(`http://localhost:${port}/`, { permitReservedIps: ['localhost'] });
-            assert.equal((reached.body as Buffer).toString(), 'INTERNAL');
+            assert.equal(reached.text(), 'INTERNAL');
 
             hits = 0;
             await assert.rejects(
@@ -156,7 +156,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         try {
             lastAuth = 'unset';
             const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, { auth: 'user:secret', maxRedirects: 1, permitReservedIps: true });
-            assert.equal((res.body as Buffer).toString(), 'OTHER');
+            assert.equal(res.text(), 'OTHER');
             assert.equal(lastAuth, undefined);
         } finally {
             other.close();
@@ -174,7 +174,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
                 maxRedirects: 1,
                 permitReservedIps: true
             });
-            assert.equal((res.body as Buffer).toString(), 'OTHER');
+            assert.equal(res.text(), 'OTHER');
             // HTTP/1 still honours a custom Host on the first hop...
             assert.equal(lastHost, 'attacker.example');
             // ...but it must not follow the request to another origin.
@@ -196,7 +196,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         try {
             lastAuth = 'unset';
             const res = await new UltraTonClient().get(`http://127.0.0.1:${port}/cross-origin/${otherPort}`, { auth: 'user:secret', maxRedirects: 2, permitReservedIps: true });
-            assert.equal((res.body as Buffer).toString(), 'INTERNAL');
+            assert.equal(res.text(), 'INTERNAL');
             assert.deepEqual(authSeenByB, [undefined]);
             assert.equal(lastAuth, undefined);
         } finally {
@@ -233,7 +233,7 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
 
         // (B) permitReservedIps: true connects, and the socket goes back to the pool.
         const allowed = await client.get(url, { permitReservedIps: true });
-        assert.equal((allowed.body as Buffer).toString(), 'INTERNAL');
+        assert.equal(allowed.text(), 'INTERNAL');
         assert.equal(connections(), 1);
 
         // (C) the identical default-deny request must NOT ride (B)'s pooled socket.

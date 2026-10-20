@@ -51,7 +51,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
     };
   };
 
-  it("Should correctly handle JSON parsing when body is already parsed", async () => {
+  it("Should leave data as a raw Buffer for application/json and parse it through json()", async () => {
     const fakeTransport = createMockTransport(
       { user: "abe", role: "architect" },
       "GET",
@@ -67,7 +67,7 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     // Assert native response shape is unharmed
     assert.strictEqual(res.statusCode, 200);
-    assert.ok(!Buffer.isBuffer(res.body)); // Auto parsing kicked in
+    assert.ok(Buffer.isBuffer(res.data)); // No auto-parsing: data stays the raw Buffer
 
     // Test that json() method works correctly
     const parsedData = res.json();
@@ -104,9 +104,10 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     const res = await client.get<string>("https://example.com/text");
 
-    // For non-JSON content, body should be a Buffer
-    assert.ok(Buffer.isBuffer(res.body));
-    assert.strictEqual(res.body.toString(), "plain text response");
+    // For non-JSON content, data is a Buffer and text() decodes it
+    assert.ok(Buffer.isBuffer(res.data));
+    assert.strictEqual(res.data.toString(), "plain text response");
+    assert.strictEqual(res.text(), "plain text response");
 
     // For text content, json() should throw a JSON parsing error
     assert.throws(
@@ -153,8 +154,8 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     const res = await client.get<DataShape>("https://example.com/data");
 
-    // Test that both direct body access and json() work consistently
-    assert.ok(!Buffer.isBuffer(res.body)); // Should be parsed
+    // Test that both raw data access and json() work consistently
+    assert.deepStrictEqual(JSON.parse(res.data.toString()), { data: [1, 2, 3] });
     const parsedViaJson = res.json();
     assert.deepStrictEqual(parsedViaJson.data, [1, 2, 3]);
   });
@@ -172,14 +173,15 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
     const res = await client.get<any>("https://example.com/malicious");
 
-    // Verify body is a Buffer
-    assert.ok(Buffer.isBuffer(res.body));
+    // Verify data is a Buffer
+    assert.ok(Buffer.isBuffer(res.data));
 
     // Parse via json()
     const parsed = res.json();
 
     // Verify the malicious key was stripped
     assert.strictEqual(parsed.user, "admin");
+    assert.deepStrictEqual(Object.keys(parsed), ["user"]);
     // Depending on the Node version, __proto__ might be a null-prototype object or undefined,
     // but the key should definitely not have the "polluted" value.
     assert.notStrictEqual(parsed.__proto__, { polluted: true });

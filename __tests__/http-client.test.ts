@@ -56,7 +56,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const response = await client.get(`https://localhost/json`);
         assert.strictEqual(response.statusCode, 200);
         
-        const parsedData = JSON.parse((response.body as Buffer).toString());
+        const parsedData = JSON.parse(response.text());
         assert.strictEqual(parsedData.success, true);
     });
 
@@ -67,7 +67,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const response = await client.post(`https://localhost/echo`, JSON.stringify({ test: 'post' }));
         assert.strictEqual(response.statusCode, 201);
         assert.strictEqual(response.headers['x-method-used'], 'POST');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'post' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'post' });
     });
 
     it('Should successfully perform a PUT request', async () => {
@@ -76,7 +76,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
 
         const response = await client.put(`https://localhost/echo`, JSON.stringify({ test: 'put' }));
         assert.strictEqual(response.headers['x-method-used'], 'PUT');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'put' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'put' });
     });;
 
     it('Should successfully perform a PATCH request', async () => {
@@ -85,7 +85,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         
         const response = await client.patch(`https://localhost/echo`, JSON.stringify({ test: 'patch' }));
         assert.strictEqual(response.headers['x-method-used'], 'PATCH');
-        assert.deepStrictEqual(JSON.parse((response.body as Buffer).toString()), { test: 'patch' });
+        assert.deepStrictEqual(JSON.parse(response.text()), { test: 'patch' });
     });
 
     it('Should successfully perform a DELETE request', async () => {
@@ -139,7 +139,7 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
 
     it('Accepts a body exactly at maxBodySize', async () => {
         const res = await new UltraTonClient().get(`${base}/two-kb`, { maxBodySize: 2048, permitReservedIps: true });
-        assert.strictEqual((res.body as Buffer).length, 2048);
+        assert.strictEqual(res.data.length, 2048);
     });
 
     it('Rejects with UltraTonMemoryError once the body exceeds maxBodySize', async () => {
