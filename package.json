@@ -23,7 +23,7 @@
   "scripts": {
     "build": "node -e \"import('node:fs').then(f=>f.rmSync('dist',{recursive:true,force:true,maxRetries:3,retryDelay:100}))\" && tsc",
     "build:strict": "tsc --noEmit --strict",
-    "test": "node --test __tests__/**/*.test.ts",
+    "test": "node --import ./__tests__/fixtures/loopback-only.ts --test __tests__/**/*.test.ts",
     "test:package": "node scripts/smoke-package.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm test && npm run test:package",
