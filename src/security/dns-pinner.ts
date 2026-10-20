@@ -127,7 +127,7 @@ function compileAllowlist(entries: readonly string[], key: string): CompiledAllo
 }
 
 /** The 8 groups of an IPv6 address in any spelling (compressed, expanded, dotted tail); `undefined` if it does not parse. */
-function ipv6Groups(ip: string): number[] | undefined {
+export function ipv6Groups(ip: string): number[] | undefined {
     let text = ip.split('%')[0];
     const tail4 = /\d+\.\d+\.\d+\.\d+$/.exec(text)?.[0];
     if (tail4 !== undefined) {

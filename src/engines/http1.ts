@@ -12,7 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
-import { kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
+import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
 import { isIP } from 'node:net';
 import tls from 'node:tls';
 import type { Duplex } from 'node:stream';
@@ -336,6 +336,7 @@ export class Http1Engine {
             // For a literal the "hostname" is the literal itself, which no hostname entry of an allowlist can match.
             const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
             assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
+            if (this.#proxy && urlObj.protocol === 'https:') assertTunnelable(this.#proxy, bareHostname);
 
             let currentTimeoutMs = reqOpts.timeoutMs;
             if (reqOpts.timeoutMs > 0) {

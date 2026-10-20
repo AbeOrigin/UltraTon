@@ -263,25 +263,36 @@ export interface UltraTonClientOptions {
     readonly userAgent?: string;
 
     /**
-     * An outbound proxy for `https:` targets, as a URL (`'http://egress.corp:3128'`) or {@link UltraTonProxyOptions}.
-     * Each request is tunnelled with CONNECT to the IP UltraTon resolved and validated, so the proxy cannot resolve the
-     * name to anything else; TLS then runs to the target through the tunnel and checks its certificate against the
-     * hostname. Plain `http:` targets (loopback only) never use it. Never read from `HTTP_PROXY`/`HTTPS_PROXY`.
+     * An outbound proxy for `https:` targets, as a URL (`'http://egress.corp:3128'`, `'socks5://bastion:1080'`) or
+     * {@link UltraTonProxyOptions}. Each request is tunnelled (HTTP CONNECT or SOCKS5) to the IP UltraTon resolved and
+     * validated, so the proxy cannot resolve the name to anything else (unless you opt into `resolve: 'proxy'` or a
+     * `socks5h:` URL); TLS then runs to the target through the tunnel and checks its certificate against the target.
+     * Plain `http:` targets (loopback only) never use it. Never read from `HTTP_PROXY`/`HTTPS_PROXY`.
      */
     readonly proxy?: string | UltraTonProxyOptions;
 }
 
 /** The `proxy` client option in full. */
 export interface UltraTonProxyOptions {
-    /** `http:` or `https:` (TLS to the proxy itself), origin only: no credentials, path, query or fragment. */
+    /**
+     * The proxy, origin only (no credentials, path, query or fragment): `http:` or `https:` (TLS to the proxy itself)
+     * for an HTTP CONNECT proxy, `socks5:` for a SOCKS5 proxy (default port 1080), or `socks5h:` for a SOCKS5 proxy
+     * that resolves names itself (the same as `resolve: 'proxy'`).
+     */
     readonly url: string;
-    /** Credentials as `user:password`, sent as Basic `proxy-authorization` on the CONNECT only, never to a target. */
+    /**
+     * Credentials as `user:password`, never sent to a target: Basic `proxy-authorization` on the CONNECT, or SOCKS5
+     * username/password (RFC 1929, each part 1 to 255 bytes).
+     */
     readonly auth?: string;
-    /** PEM CAs that an `https:` proxy's certificate is checked against, in place of the system list. Never trusted for targets. */
+    /**
+     * PEM CAs that an `https:` proxy's certificate is checked against, in place of the system list. Never trusted for
+     * targets. Not accepted with a SOCKS5 proxy, which has no TLS of its own.
+     */
     readonly ca?: TlsMaterial;
     /**
      * Who resolves the target's name. `'local'` (default): UltraTon resolves and validates it and sends the IP in the
-     * CONNECT. `'proxy'`: the name is sent and the proxy resolves it, for proxies that filter by name (Squid ACLs,
+     * CONNECT (or as a SOCKS5 IPv4/IPv6 address). `'proxy'`: the name is sent and the proxy resolves it, for proxies that filter by name (Squid ACLs,
      * Smokescreen); DNS pinning is then up to the proxy, and only IP literals are still judged by UltraTon.
      */
     readonly resolve?: 'local' | 'proxy';

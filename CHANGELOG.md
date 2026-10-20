@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SOCKS5 proxies.** `proxy` also takes a `socks5:` URL (default port 1080), on both engines, with the same guarantees as an HTTP CONNECT proxy.
+  - UltraTon resolves and validates the name and sends the IP as the SOCKS5 address (IPv4 or IPv6), never the name. TLS runs to the target over the tunnel with the certificate checked against it.
+  - `auth` is SOCKS5 username/password (RFC 1929, each part 1 to 255 bytes, checked when the client is built).
+  - `socks5h:` sends the name instead, as `resolve: 'proxy'`; `socks5h:` with `resolve: 'local'` throws, and so does `proxy.ca` with a SOCKS5 proxy.
+  - A refusal rejects with `ERR_ULTRATON_PROXY` and the SOCKS5 reason. A refused login, no acceptable method, the proxy's ruleset and 'command not supported' are final; any other reply moves on to the next validated address. SOCKS5 credentials travel to the proxy in cleartext, as the protocol has no encryption.
+  - Not supported: SOCKS4/4a, `BIND`, `UDP ASSOCIATE`, GSSAPI.
 - **Outbound proxy: the `proxy` client option**, a URL (`'http://egress.corp:3128'`) or `{ url, auth, ca, resolve }`, on both engines.
   - Every `https:` request is tunnelled with CONNECT **to the IP UltraTon resolved and validated**, never to a name the proxy could resolve elsewhere, so DNS pinning holds through the proxy. If the proxy cannot reach one address, the next validated one is tried. TLS runs to the target over the tunnel, with SNI and the certificate checked against the hostname.
   - SSRF checks run before the proxy is contacted. Redirects go through the tunnel again, validated again.
@@ -18,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The CONNECT handshake has a 10 s deadline per address, and the request's `timeoutMs`, `signal` and `close()` end it sooner.
   - `resolve: 'proxy'` sends the hostname instead, for proxies that filter by name (Squid, Smokescreen). DNS pinning is then up to the proxy; reserved IP literals are still rejected.
   - Plain `http:` targets (loopback) never use the proxy. Proxies are never read from the environment. `close()` closes the tunnels.
-  - New public type `UltraTonProxyOptions`. SOCKS5 is not supported yet.
+  - New public type `UltraTonProxyOptions`.
 - **Retries: the `retry` option**, on the client and per request, off by default.
   - `retry: n` retries up to `n` times (0 to 10). An object sets `limit`, `methods`, `statusCodes`, `maxDelayMs` and `onRetry`, and a request's `retry` merges over the client's field by field.
   - Defaults: the methods GET, PUT, DELETE, HEAD and OPTIONS (never POST or PATCH unless listed) and the statuses 408, 429, 502, 503 and 504. The network failures `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN` and `EPIPE` are retried, and so is the idle timeout. When the retries run out on a status, the last response is returned.
