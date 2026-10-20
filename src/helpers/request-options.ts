@@ -1,5 +1,5 @@
 import { isIP } from "node:net";
-import type { UltraTonRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy } from "../types/request-options.types.ts";
+import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy } from "../types/request-options.types.ts";
 import { MAX_REDIRECTS_CEILING } from "../constants.ts";
 const INT32_MAX = 2147483647;
 
@@ -118,13 +118,118 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
     return sanitized;
 }
 
+/** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
+const REQUEST_OPTION_KEYS = ['headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
+/** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
+const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
+
+const QUERY_HINT = " Put the query string in the URL.";
+const TLS_HINT = " TLS is configured with the 'tls' option of the client constructor.";
+const BASE_URL_HINT = " 'baseUrl' is an option of the client constructor, not of a request.";
+// A Map, not an object: an option named 'constructor' or '__proto__' must not find a hint through the prototype chain.
+const OPTION_HINTS = new Map<string, string>([
+    ['timeout', " Use 'timeoutMs' (milliseconds)."],
+    ['baseURL', BASE_URL_HINT],
+    ['prefixUrl', BASE_URL_HINT],
+    ['data', " Use 'json' for a JSON payload or 'body' for a string or Buffer."],
+    ['params', QUERY_HINT],
+    ['query', QUERY_HINT],
+    ['searchParams', QUERY_HINT],
+    ['agent', TLS_HINT],
+    ['ca', TLS_HINT],
+    ['rejectUnauthorized', " Disabling certificate verification is not supported; to trust a private CA use the 'tls' option of the client constructor."],
+]);
+
+/** @throws {TypeError} For any own key outside the allowlist, whatever its value (`undefined` included). */
+function assertKnownOptions(options: object): void {
+    for (const key of Object.keys(options)) {
+        if (ACCEPTED_KEYS.has(key)) continue;
+        const hint = OPTION_HINTS.get(key) ?? ` Valid options: ${REQUEST_OPTION_KEYS.join(', ')}.`;
+        throw new TypeError(`UltraTon: Unknown option '${key}'.${hint}`);
+    }
+}
+
+/** @throws {TypeError} If both `json` and `body` are set, or `body` is not a string, Buffer or Uint8Array. */
+function assertBodyOptions(options: { json?: unknown; body?: unknown }): void {
+    if (options.json !== undefined && options.body !== undefined) {
+        throw new TypeError("UltraTon: Use either 'json' or 'body', not both.");
+    }
+    if (options.body !== undefined && typeof options.body !== 'string' && !(options.body instanceof Uint8Array)) {
+        throw new TypeError(`UltraTon: Expected 'body' to be a string, Buffer or Uint8Array, received ${options.body === null ? 'null' : typeof options.body}. Use 'json' to send an object.`);
+    }
+}
+
+/**
+ * Builds the options of one request from what a client method (`get`, `post`, ...) received: the caller's options object
+ * plus the method. A caller-supplied `method` throws instead of being silently overridden, and so does an `options` that
+ * is not an object (typically the old `post(url, body)` call shape).
+ */
+export function withMethod(method: string, options: unknown): InternalRequestOptions {
+    if (options === undefined) return { method };
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) {
+        throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json } or { body }.");
+    }
+    if (Object.hasOwn(options, 'method')) {
+        throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
+    }
+    return { ...options, method };
+}
+
+/**
+ * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized (and
+ * sets `content-type: application/json` unless the caller already set one), a string/Uint8Array `body` becomes a Buffer.
+ * Run it on the user-supplied options, before any internal enrichment.
+ * @throws {TypeError} On an unknown option, `json` together with `body`, a `body` of the wrong type or a `json` that cannot be serialized.
+ */
+export function resolveRequestBody(options: InternalRequestOptions): ResolvedRequestOptions {
+    assertKnownOptions(options);
+    assertBodyOptions(options);
+
+    const { json, body, ...rest } = options;
+    if (json === undefined) {
+        if (body === undefined) return rest;
+        return { ...rest, body: Buffer.isBuffer(body) ? body : Buffer.from(body as string | Uint8Array) };
+    }
+
+    let serialized: string | undefined;
+    try {
+        serialized = JSON.stringify(json);
+    } catch (err: unknown) {
+        throw new TypeError(`UltraTon: 'json' could not be serialized: ${err instanceof Error ? err.message : 'unknown error'}.`);
+    }
+    if (serialized === undefined) {
+        throw new TypeError("UltraTon: 'json' could not be serialized: functions and symbols have no JSON representation.");
+    }
+
+    // headers is only checked for shape by buildSafeRequestOptions later; here, anything that is not a plain object is left alone.
+    const headers: unknown = rest.headers;
+    let withType: unknown = headers;
+    if (headers === undefined) {
+        withType = { 'content-type': 'application/json' };
+    } else if (typeof headers === 'object' && headers !== null && !Array.isArray(headers)) {
+        const map = headers as Record<string, unknown>;
+        const hasContentType = Object.keys(map).some(key => key.toLowerCase() === 'content-type' && map[key] !== undefined);
+        if (!hasContentType) withType = { ...map, 'content-type': 'application/json' };
+    }
+
+    return { ...rest, headers: withType as ResolvedRequestOptions['headers'], body: Buffer.from(serialized) };
+}
+
+/** `auth` as the value of a Basic `authorization` header, the same encoding `node:http` applies to its own `auth` option. */
+export function basicAuthorization(auth: string): string {
+    return `Basic ${Buffer.from(auth).toString('base64')}`;
+}
+
 /**
  * Acts as an absolute firewall between the user's input and the native Node.js HTTP stack.
- * Extracts ONLY explicitly approved properties. Drops all potential socket injections
+ * Extracts ONLY explicitly approved properties and throws on any other key. Drops all potential socket injections
  * and enforces strict runtime primitive types to prevent C++ thread exhaustion or V8 crashes.
  * Throws TypeError synchronously on malformed security primitives to fail loud.
  */
-export function buildSafeRequestOptions(options: UltraTonRequestOptions): SecureUltraTonRequestOptions {
+export function buildSafeRequestOptions(options: InternalRequestOptions): SecureUltraTonRequestOptions {
+    assertKnownOptions(options);
+    assertBodyOptions(options);
+
     const safeOptions: Record<string, unknown> = {};
 
     if (validateType('method', options.method, 'string')) safeOptions.method = options.method;

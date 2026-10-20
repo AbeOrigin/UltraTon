@@ -22,7 +22,8 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
             
             (req as any).destroy = () => {};
             
-            (req as any).end = () => {
+            (req as any).end = (chunk?: any) => {
+                if (chunk) reqBody.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
                 if (options.method === 'POST' || options.method === 'PUT' || options.method === 'PATCH') {
                     // Echo the body back structurally if needed
                     mockResponseData = Buffer.concat(reqBody);
@@ -64,7 +65,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const fakeTransport = createMockTransport({}, 'POST', 201);
         const client = new UltraTonClient(fakeTransport as any);
         
-        const response = await client.post(`https://localhost/echo`, JSON.stringify({ test: 'post' }));
+        const response = await client.post(`https://localhost/echo`, { json: { test: 'post' } });
         assert.strictEqual(response.statusCode, 201);
         assert.strictEqual(response.headers['x-method-used'], 'POST');
         assert.deepStrictEqual(JSON.parse(response.text()), { test: 'post' });
@@ -74,7 +75,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const fakeTransport = createMockTransport({}, 'PUT', 201);
         const client = new UltraTonClient(fakeTransport as any);
 
-        const response = await client.put(`https://localhost/echo`, JSON.stringify({ test: 'put' }));
+        const response = await client.put(`https://localhost/echo`, { json: { test: 'put' } });
         assert.strictEqual(response.headers['x-method-used'], 'PUT');
         assert.deepStrictEqual(JSON.parse(response.text()), { test: 'put' });
     });;
@@ -83,7 +84,7 @@ describe('UltraTonClient - Sprint 1 & 2 Protocol Lockdown', () => {
         const fakeTransport = createMockTransport({}, 'PATCH', 201);
         const client = new UltraTonClient(fakeTransport as any);
         
-        const response = await client.patch(`https://localhost/echo`, JSON.stringify({ test: 'patch' }));
+        const response = await client.patch(`https://localhost/echo`, { json: { test: 'patch' } });
         assert.strictEqual(response.headers['x-method-used'], 'PATCH');
         assert.deepStrictEqual(JSON.parse(response.text()), { test: 'patch' });
     });

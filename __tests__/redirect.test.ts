@@ -19,7 +19,8 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
             
             (req as any).destroy = () => {};
             
-            (req as any).end = () => {
+            (req as any).end = (chunk?: any) => {
+                if (chunk) reqBody.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
                 const res = Readable.from([Buffer.from(JSON.stringify({}))]);
 
                 // MOCK ROUTING TABLE
@@ -207,7 +208,8 @@ describe('UltraTonClient - Sprint 4 Anti-SSRF & Redirects', () => {
 
     it('Should downgrade POST to GET on 303 and strip smuggling headers and body', async () => {
         const client = new UltraTonClient(createSmartMockTransport() as any);
-        const res = await client.post('https://example.com/smuggle-start', 'massive-payload', {
+        const res = await client.post('https://example.com/smuggle-start', {
+            body: 'massive-payload',
             maxRedirects: 1,
             headers: {
                 'Content-Type': 'text/plain',

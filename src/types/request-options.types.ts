@@ -1,28 +1,39 @@
 import { SecureClientSessionOptions } from "node:http2";
-import { RequestOptions } from "node:https";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 
 export type { ReservedIpPolicy };
 
-type NativeHttpsOptions = Pick<RequestOptions, 'method' | 'headers' | 'auth' | 'signal'>
-
-export interface UltraTonRequestOptions extends NativeHttpsOptions {
-    /** 
-     * The HTTP Method (e.g., 'GET', 'POST', 'PUT', 'DELETE'). 
-     * Default should be 'GET' if not provided.
-     */
-    readonly method?: string;
-
-    /** 
-     * Key-value pairs for HTTP headers. 
+/**
+ * The options of one request, the same for every method and both engines. A closed list: anything else throws a
+ * `TypeError` (with a hint for the common mistakes), it is never ignored.
+ */
+export interface UltraTonRequestOptions {
+    /**
+     * Key-value pairs for HTTP headers.
+     * Pseudo-headers (keys starting with ':') are rejected, and so is 'host' on HTTP/2 (it is derived from the URL).
      */
     readonly headers?: Record<string, string | string[] | undefined>;
 
-    /** 
-     * The payload to send for POST/PUT/PATCH requests.
-     * We accept a Buffer or a string.
+    /**
+     * A JSON payload. It is serialized with `JSON.stringify` and sent with `content-type: application/json`
+     * unless a `content-type` header is already set. Cannot be combined with `body`.
      */
-    readonly body?: Buffer | string;
+    readonly json?: unknown;
+
+    /**
+     * A raw payload. It is always sent with a `content-length` in bytes (never chunked). Cannot be combined with `json`.
+     */
+    readonly body?: string | Buffer | Uint8Array;
+
+    /**
+     * Credentials as `user:password`, sent as a Basic `authorization` header. Dropped when a redirect changes origin.
+     */
+    readonly auth?: string;
+
+    /**
+     * Aborts the request when the signal fires.
+     */
+    readonly signal?: AbortSignal;
 
     /**
      * The maximum size of the response body in bytes.
@@ -63,11 +74,19 @@ export interface UltraTonRequestOptions extends NativeHttpsOptions {
     readonly permitReservedIps?: ReservedIpPolicy;
 }
 
+/** What the client methods hand to the engines: the caller's options plus the HTTP method they set. Not public. */
+export interface InternalRequestOptions extends UltraTonRequestOptions {
+    readonly method?: string;
+}
+
+/** Request options once `json` has been serialized: the body, if any, is the exact bytes that go on the wire. */
+export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'body'> & { readonly body?: Buffer };
+
 /**
  * Internal system type assigned after security fallbacks have been applied.
  * Enforces that critical execution constraints are mathematically guaranteed.
  */
-export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
+export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
     readonly maxBodySize: number;
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
@@ -77,24 +96,8 @@ export interface SecureUltraTonRequestOptions extends UltraTonRequestOptions {
 
 // HTTP2 Options
 
-/**
- * Deliberately a closed list: it does NOT extend node:https `RequestOptions`,
- * which would advertise ~40 options (agent, auth, rejectUnauthorized, ...) that
- * the HTTP/2 client ignores. Anything not listed here is dropped by the firewall.
- */
-export interface UltraTonRequestOptionsHttp2 {
-    readonly method?: string;
-    readonly body?: Buffer | string;
-    /** Pseudo-headers (keys starting with ':') and 'host' (derived from the URL) are rejected. */
-    readonly headers?: Record<string, string | string[] | undefined>;
-    readonly maxRedirects?: number;
-    readonly timeoutMs?: number;
-    readonly maxBodySize?: number;
-    /** Same SSRF opt-out (boolean or allowlist) as the HTTP/1 client. Default is false. */
-    readonly permitReservedIps?: ReservedIpPolicy;
-}
-
-
+/** The per-request options are the same on both engines; kept as an alias until the public types are settled. */
+export type UltraTonRequestOptionsHttp2 = UltraTonRequestOptions;
 
 export interface UltraTonOptionsHttp2 {
     /**

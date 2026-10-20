@@ -9,6 +9,8 @@ import type {
 import type { UltraTonResponse } from "./types/request-response.ts";
 import { Http2SessionManager } from "./classes/http-session-mannager.ts";
 import type {
+  InternalRequestOptions,
+  ResolvedRequestOptions,
   SecureUltraTonRequestOptions,
   UltraTonOptionsHttp2,
   UltraTonRequestOptionsHttp2,
@@ -23,7 +25,12 @@ import {
 } from "./errors.ts";
 import { HTTP_CODES_REDIRECTS } from "./constants.ts";
 import { createResponse } from "./helpers/response.ts";
-import { buildSafeRequestOptions } from "./helpers/request-options.ts";
+import {
+  basicAuthorization,
+  buildSafeRequestOptions,
+  resolveRequestBody,
+  withMethod,
+} from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
 
 const globalPool = new Http2SessionManager();
@@ -58,62 +65,72 @@ export class UltraTonHTTP2 {
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "GET" });
+    return this._request<T>(url, withMethod("GET", options));
   }
 
   public async post<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "POST" });
+    return this._request<T>(url, withMethod("POST", options));
   }
 
   public async put<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "PUT" });
+    return this._request<T>(url, withMethod("PUT", options));
   }
 
   public async patch<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "PATCH" });
+    return this._request<T>(url, withMethod("PATCH", options));
   }
 
   public async delete<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "DELETE" });
+    return this._request<T>(url, withMethod("DELETE", options));
   }
 
   public async head<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "HEAD" });
+    return this._request<T>(url, withMethod("HEAD", options));
   }
 
   public async options<T = unknown>(
     url: string,
     options?: UltraTonRequestOptionsHttp2,
   ): Promise<UltraTonResponse<T>> {
-    return this._request<T>(url, { ...options, method: "OPTIONS" });
+    return this._request<T>(url, withMethod("OPTIONS", options));
   }
 
   private async _request<T = unknown>(
     targetUrl: string,
-    options: UltraTonRequestOptionsHttp2 = {},
+    options: InternalRequestOptions,
   ): Promise<UltraTonResponse<T>> {
     // One clock for the whole redirect chain: timeoutMs is a budget shared by every hop.
     const startTime = Date.now();
     let currentUrl = targetUrl;
-    let currentOptions = { ...options };
+    // Validate before touching the network: invalid input must fail without connecting. The caller's own options are
+    // checked (unknown keys, json/body, body type) and `json` is serialized before any client-wide default is merged in.
+    let currentOptions: ResolvedRequestOptions = resolveRequestBody(options);
     let redirectCount = 0;
-    // Validate before touching the network: invalid input must fail without connecting.
     let reqOpts = this.#buildRequestOptions(currentOptions);
+
+    // `auth` has no HTTP/2 equivalent of node:http's option, so it becomes a Basic authorization header like there (an
+    // explicit authorization header wins). Moving it into the headers is what lets a cross-origin redirect strip it.
+    if (reqOpts.auth) {
+      const headers = { ...reqOpts.headers };
+      headers["authorization"] ??= basicAuthorization(reqOpts.auth);
+      currentOptions = { ...currentOptions, headers, auth: undefined };
+      reqOpts = this.#buildRequestOptions(currentOptions);
+    }
 
     while (true) {
       const parsedUrl = parseSafeUrl(currentUrl);
@@ -133,10 +150,9 @@ export class UltraTonHTTP2 {
         ...reqOpts.headers,
       };
 
-      if (currentOptions.body) {
-        safeHeaders["content-length"] = Buffer.byteLength(
-          currentOptions.body,
-        ).toString();
+      // Always present with a body, and the real byte length wins over anything the caller put in the header.
+      if (currentOptions.body !== undefined) {
+        safeHeaders["content-length"] = String(currentOptions.body.length);
       }
 
       const method = (reqOpts.method || "GET").toUpperCase();
@@ -293,7 +309,7 @@ export class UltraTonHTTP2 {
    * falls back to the client-wide value.
    */
   #buildRequestOptions(
-    options: UltraTonRequestOptionsHttp2,
+    options: ResolvedRequestOptions,
   ): SecureUltraTonRequestOptions {
     const g = this.#globalOptions;
     const safe = buildSafeRequestOptions({
@@ -315,7 +331,7 @@ export class UltraTonHTTP2 {
   #executeStream<T = unknown>(
     session: ClientHttp2Session,
     pseudoHeaders: OutgoingHttpHeaders,
-    body: Buffer | string | undefined,
+    body: Buffer | undefined,
     remainingMs: number,
     timeoutMs: number,
     maxBodySize: number,
@@ -425,7 +441,7 @@ export class UltraTonHTTP2 {
         reject(lostResponse());
       });
 
-      if (body) {
+      if (body && body.length > 0) {
         stream.write(body);
       }
 

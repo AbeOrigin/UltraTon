@@ -1,8 +1,8 @@
 import { IncomingMessage, ClientRequest } from "node:http";
 import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "./errors.ts";
-import { buildSafeRequestOptions } from "./helpers/request-options.ts";
+import { buildSafeRequestOptions, resolveRequestBody, withMethod } from "./helpers/request-options.ts";
 import { parseSafeUrl } from "./helpers/url-parser.ts";
-import type { SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
+import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, UltraTonRequestOptions } from "./types/request-options.types.ts";
 import type { UltraTonResponse } from "./types/request-response.ts";
 import { assertAllowedIp, policyKey, resolveAndPinHost } from "./security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "./security/dns-pinner.ts";
@@ -43,32 +43,32 @@ export class UltraTonClient {
         this.#transport = transportInterceptor;
     }
 
-    public async get<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'GET' });
+    public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('GET', options));
     }
 
-    public async post<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'POST', body });
+    public async post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('POST', options));
     }
 
-    public async put<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'PUT', body });
+    public async put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('PUT', options));
     }
 
-    public async patch<T = unknown>(url: string, body: Buffer | string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'PATCH', body });
+    public async patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('PATCH', options));
     }
 
-    public async delete<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'DELETE' });
+    public async delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('DELETE', options));
     }
 
-    public async head<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'HEAD' });
+    public async head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('HEAD', options));
     }
 
-    public async options<T = unknown>(url: string, options?: Omit<UltraTonRequestOptions, 'method' | 'body'>): Promise<UltraTonResponse<T>> {
-        return this._request<T>(url, { ...options, method: 'OPTIONS' });
+    public async options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this._request<T>(url, withMethod('OPTIONS', options));
     }
 
     private async _consumeResponseBuffer(
@@ -111,7 +111,7 @@ export class UltraTonClient {
     private _executeSingleNetworkHop(
         urlObj: URL,
         reqOpts: SecureUltraTonRequestOptions,
-        options: UltraTonRequestOptions,
+        body: Buffer | undefined,
         currentTimeoutMs: number
     ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean }> {
         return new Promise((resolve, reject) => {
@@ -119,8 +119,17 @@ export class UltraTonClient {
 
             const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
+            // The body always goes out with its exact length, never chunked: a caller-supplied content-length or
+            // transfer-encoding must not disagree with the bytes actually written.
+            const headers = { ...reqOpts.headers };
+            if (body !== undefined) {
+                headers['content-length'] = String(body.length);
+                delete headers['transfer-encoding'];
+            }
+
             const req = transport(urlObj, {
                 ...reqOpts,
+                headers,
                 timeout: reqOpts.socketTimeoutMs,
                 agent: agentFor(reqOpts.permitReservedIps, urlObj.protocol),
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
@@ -185,17 +194,16 @@ export class UltraTonClient {
                 reject(toNetworkError(err));
             });
 
-            if (options.body) req.write(options.body);
-
-            req.end();
+            req.end(body);
         });
     }
 
-    private async _request<T = unknown>(url: string, options: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+    private async _request<T = unknown>(url: string, options: InternalRequestOptions): Promise<UltraTonResponse<T>> {
         const startTime = Date.now();
         let redirectCount = 0;
         let currentUrl = url;
-        let currentOptions = { ...options };
+        // Validates the caller's options (unknown keys, json/body, body type) and serializes `json` before anything else.
+        let currentOptions: ResolvedRequestOptions = resolveRequestBody(options);
 
         let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions(currentOptions);
 
@@ -217,7 +225,7 @@ export class UltraTonClient {
                 }
             }
 
-            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions, currentTimeoutMs);
+            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs);
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 if (redirectCount >= reqOpts.maxRedirects) {

@@ -55,7 +55,9 @@ run();
 ## Breaking changes (unreleased)
 
 - **Response shape.** Responses expose `statusCode: number` (never `undefined`), `ok` (200-299), `headers` (no HTTP/2 pseudo-headers), `data: Buffer` (as in 1.x, never auto-parsed), `json<T>()` and `text()`. `json()` parses lazily on every call regardless of content-type, strips `__proto__`, `constructor` and `prototype` keys at every depth, returns `{}` for an empty body (1.0.3 threw) and throws `UltraTonParseError` (with `cause`) on invalid JSON. A malformed JSON response no longer rejects the request itself.
-- **The `timeout` option is removed.** It never had any effect. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
+- **The `timeout` option is removed.** It never had any effect, and it now throws. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
+- **Methods are `(url, options)`.** Send a payload with `post(url, { json: { a: 1 } })` or `post(url, { body })` (`string`, `Buffer` or `Uint8Array`), never both. Bodies always go out with a `content-length`, never chunked.
+- **Unknown options throw.** An option outside the documented list (`headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `signal`, `auth`, `json`, `body`) throws a `TypeError`, with a hint for the usual suspects (`timeout`, `params`, `data`, `rejectUnauthorized`...), instead of being silently ignored.
 - **`http://127.0.0.1` and `http://localhost` now need `permitReservedIps: true`.** Plain HTTP is still accepted for them, but they are reserved addresses, so the SSRF guard rejects them unless you opt in.
 
 ## Security Goals & Roadmap

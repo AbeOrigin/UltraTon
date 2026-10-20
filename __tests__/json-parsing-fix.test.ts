@@ -23,7 +23,8 @@ describe("UltraTonClient - JSON Parsing Fix Validation", () => {
 
       (req as any).destroy = () => {};
 
-      (req as any).end = () => {
+      (req as any).end = (chunk?: any) => {
+        if (chunk) reqBody.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         let dataBuffer: Buffer;
         if (Buffer.isBuffer(mockResponseData)) {
           dataBuffer = mockResponseData;

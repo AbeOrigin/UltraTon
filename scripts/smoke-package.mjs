@@ -111,7 +111,7 @@ try {
 export const values = [${VALUES.join(', ')}];
 export type Types = [${TYPES.map((t) => (t === 'UltraTonResponse' ? `${t}<unknown>` : t)).join(', ')}];
 
-const opts: UltraTonRequestOptions = { method: 'GET' };
+const opts: UltraTonRequestOptions = { json: { a: 1 }, timeoutMs: 1000 };
 const policy: ReservedIpPolicy = false;
 export { opts, policy };
 
