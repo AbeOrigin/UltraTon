@@ -1,0 +1,155 @@
+{
+  "environment": {
+    "node": "v24.21.0",
+    "undici": "7.29.1",
+    "ultraton": "2.2.0",
+    "axios": "1.20.0",
+    "got": "16.1.0",
+    "node-fetch": "3.3.2",
+    "os": "Linux 6.17.0-1022-azure",
+    "cpu": "AMD EPYC 7763 64-Core Processor × 4",
+    "commit": "e9dfd4d898e06ed24f8fb448b1350cc5a13e0ce9",
+    "date": "2026-10-20",
+    "settings": {
+      "concurrency": 16,
+      "warmupMs": 2000,
+      "roundMs": 5000,
+      "rounds": 3
+    },
+    "smoke": false
+  },
+  "results": {
+    "1 KiB body": {
+      "node:http (baseline)": {
+        "requestsPerSecond": 9587.57193350275,
+        "p50Ms": 1.3068809999999758,
+        "p99Ms": 4.243019000000459,
+        "cpuMsPer1k": 105.71846644834274,
+        "rssMb": 111.66796875,
+        "serverCpuPercent": 62.500099152955165
+      },
+      "fetch (Node built-in, undici)": {
+        "requestsPerSecond": 9451.13617022541,
+        "p50Ms": 1.5023779999992257,
+        "p99Ms": 11.128983999999036,
+        "cpuMsPer1k": 138.4234390538053,
+        "rssMb": 292.546875,
+        "serverCpuPercent": 34.91073901251736
+      },
+      "axios": {
+        "requestsPerSecond": 4473.106398332632,
+        "p50Ms": 3.0492890000000443,
+        "p99Ms": 8.803221000000121,
+        "cpuMsPer1k": 260.4346193392642,
+        "rssMb": 272.515625,
+        "serverCpuPercent": 30.91893686256661
+      },
+      "got": {
+        "requestsPerSecond": 3684.373392755001,
+        "p50Ms": 3.623767000000953,
+        "p99Ms": 11.04890499999965,
+        "cpuMsPer1k": 312.1182463556061,
+        "rssMb": 300.265625,
+        "serverCpuPercent": 24.735261137849697
+      },
+      "node-fetch": {
+        "requestsPerSecond": 4797.448461990356,
+        "p50Ms": 2.8437330000006114,
+        "p99Ms": 7.934190999999828,
+        "cpuMsPer1k": 231.3043967493228,
+        "rssMb": 256.73046875,
+        "serverCpuPercent": 31.44974305005894
+      },
+      "UltraTonClient (HTTP/1.1)": {
+        "requestsPerSecond": 6465.796733405817,
+        "p50Ms": 2.2142930000009073,
+        "p99Ms": 5.602808999999979,
+        "cpuMsPer1k": 155.42539898552516,
+        "rssMb": 159.98046875,
+        "serverCpuPercent": 44.014815989022466
+      },
+      "UltraTonClient (HTTP/2)": {
+        "requestsPerSecond": 11432.976660392906,
+        "p50Ms": 1.2970029999996768,
+        "p99Ms": 5.81130899999971,
+        "cpuMsPer1k": 86.34473831514134,
+        "rssMb": 255.1640625,
+        "serverCpuPercent": 28.62420206563184
+      },
+      "axios + createSecureAgents": {
+        "requestsPerSecond": 4770.835070152671,
+        "p50Ms": 2.9307760000010603,
+        "p99Ms": 7.61417000000074,
+        "cpuMsPer1k": 211.21729471433963,
+        "rssMb": 278.10546875,
+        "serverCpuPercent": 31.10511611742813
+      }
+    },
+    "64 KiB body": {
+      "node:http (baseline)": {
+        "requestsPerSecond": 7686.632524782033,
+        "p50Ms": 1.7134729999997944,
+        "p99Ms": 5.272075999999288,
+        "cpuMsPer1k": 165.4280846858094,
+        "rssMb": 215.875,
+        "serverCpuPercent": 54.34281509073753
+      },
+      "fetch (Node built-in, undici)": {
+        "requestsPerSecond": 5042.695462675188,
+        "p50Ms": 2.7267229999997653,
+        "p99Ms": 6.8274359999995795,
+        "cpuMsPer1k": 299.60829401736515,
+        "rssMb": 323.78515625,
+        "serverCpuPercent": 28.298004460453676
+      },
+      "axios": {
+        "requestsPerSecond": 3584.1692741486463,
+        "p50Ms": 3.5626530000008643,
+        "p99Ms": 10.657102999999552,
+        "cpuMsPer1k": 384.92011157601115,
+        "rssMb": 249.1171875,
+        "serverCpuPercent": 28.380723463286333
+      },
+      "got": {
+        "requestsPerSecond": 3017.668101940413,
+        "p50Ms": 4.404990999999427,
+        "p99Ms": 10.937764000000243,
+        "cpuMsPer1k": 436.1005560704356,
+        "rssMb": 331.55859375,
+        "serverCpuPercent": 23.036420555421678
+      },
+      "node-fetch": {
+        "requestsPerSecond": 3414.116618589455,
+        "p50Ms": 3.835773999999219,
+        "p99Ms": 10.675050999998348,
+        "cpuMsPer1k": 358.0473095614497,
+        "rssMb": 308.05859375,
+        "serverCpuPercent": 25.896140152311588
+      },
+      "UltraTonClient (HTTP/1.1)": {
+        "requestsPerSecond": 5307.553598527669,
+        "p50Ms": 2.5162489999984246,
+        "p99Ms": 6.9315600000009,
+        "cpuMsPer1k": 235.91406720916214,
+        "rssMb": 207.515625,
+        "serverCpuPercent": 40.037742800764306
+      },
+      "UltraTonClient (HTTP/2)": {
+        "requestsPerSecond": 3654.1457795049805,
+        "p50Ms": 3.7728860000006534,
+        "p99Ms": 9.079507999999805,
+        "cpuMsPer1k": 323.11150626470425,
+        "rssMb": 150.66015625,
+        "serverCpuPercent": 47.283114508447106
+      },
+      "axios + createSecureAgents": {
+        "requestsPerSecond": 3653.7214049593795,
+        "p50Ms": 3.626711000000796,
+        "p99Ms": 9.556813999999576,
+        "cpuMsPer1k": 374.1674601871614,
+        "rssMb": 245.890625,
+        "serverCpuPercent": 30.16657487555971
+      }
+    }
+  }
+}

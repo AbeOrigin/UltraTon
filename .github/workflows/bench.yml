@@ -1,0 +1,67 @@
+# Benchmarks (compat/bench): UltraTon next to node:http, fetch (undici), axios, got and node-fetch, on loopback.
+# They run here and never on contributors' machines. RESULTS.md and results.json are uploaded as an artifact; the
+# maintainer commits them to compat/bench/ when they move.
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '41 5 * * 1'
+  pull_request:
+    branches: [ "main" ]
+    # The harness, the pinned clients and UltraTon itself: any of them can move the numbers.
+    paths:
+      - 'compat/bench/**'
+      - 'compat/package.json'
+      - 'compat/package-lock.json'
+      - 'src/**'
+      - '.github/workflows/bench.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: Benchmarks (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 24.x
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24.x
+        cache: 'npm'
+        cache-dependency-path: |
+          package-lock.json
+          compat/package-lock.json
+
+    - name: Install root dependencies
+      run: npm ci
+
+    - name: Pack the package
+      run: |
+        rm -f compat/ultraton-*.tgz
+        npm pack --pack-destination compat
+
+    - name: Install compat dependencies and the tarball
+      working-directory: compat
+      run: |
+        npm ci --ignore-scripts
+        npm install --no-save --ignore-scripts ./ultraton-*.tgz
+
+    - name: Run the benchmarks
+      working-directory: compat
+      run: npm run bench
+
+    - name: Upload the results
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: bench-results
+        path: |
+          compat/bench/RESULTS.md
+          compat/bench/results.json
