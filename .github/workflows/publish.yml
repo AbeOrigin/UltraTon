@@ -1,9 +1,12 @@
 name: Publish to npm
 
-# Publishing uses npm trusted publishing (OIDC): no npm token is stored in the repository.
-# One-time setup on npmjs.com: package settings → Trusted publisher → GitHub Actions,
-# repository AbeOrigin/UltraTon, workflow file publish.yml, environment npm.
-# Add required reviewers to the "npm" environment (repo Settings → Environments) so a release needs an approval.
+# Staged publishing through npm trusted publishing (OIDC). No npm token is stored anywhere, and CI can only *stage* a
+# release: nothing reaches npm until a maintainer approves it with 2FA (npmjs.com → Staged Packages, or
+# `npm stage approve <stage-id>`).
+# One-time setup on npmjs.com: package Settings → Trusted publisher → GitHub Actions, repository AbeOrigin/UltraTon,
+# workflow file publish.yml, environment npm, with "Allow npm publish" and "Allow npm dist-tag" both unchecked
+# (stage-only).
+# Add required reviewers to the "npm" environment (repo Settings → Environments) so staging also needs an approval.
 on:
   release:
     types: [published]
@@ -12,7 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  stage:
     runs-on: ubuntu-latest
     environment: npm
     permissions:
@@ -26,16 +29,22 @@ jobs:
 
     - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
-        node-version: 24.x # bundles an npm recent enough for trusted publishing
+        node-version: 24.x # bundles npm >= 11.15, which `npm stage` needs
         registry-url: 'https://registry.npmjs.org'
 
     - name: Tag matches package.json version
       run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
 
-    - run: npm ci
+    # No install scripts: the package has no runtime dependencies and the dev tools need none.
+    - run: npm ci --ignore-scripts
 
-    # prepack builds a clean dist; prepublishOnly runs the test suite and the package smoke test.
+    - run: npm test
+
+    # Packs the tarball (prepack builds a clean dist) and checks import, require and tsc against it.
+    - run: npm run test:package
+
+    # The tarball contents were verified above, so no lifecycle script runs while staging.
     # A GitHub prerelease goes to the "next" dist-tag, never to "latest".
-    - run: npm publish --provenance --access public --tag "$([ "$PRERELEASE" = true ] && echo next || echo latest)"
+    - run: npm stage publish --ignore-scripts --provenance --access public --tag "$([ "$PRERELEASE" = true ] && echo next || echo latest)"
       env:
         PRERELEASE: ${{ github.event.release.prerelease }}
