@@ -8,6 +8,7 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         const result = buildSafeRequestOptions({});
         // The result has no prototype (inherited properties never read as options): compare its own properties.
         assert.deepStrictEqual({ ...result }, { 
+            decompress: true,
             maxBodySize: 2097152, 
             socketTimeoutMs: 10000, 
             timeoutMs: 30000,

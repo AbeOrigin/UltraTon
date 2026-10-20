@@ -11,6 +11,7 @@ import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
 import { createResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
+import { BodyReader } from '../helpers/body-reader.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -69,22 +70,26 @@ export class Http1Engine {
         req: ClientRequest,
         reqOpts: SecureUltraTonRequestOptions,
         executionTimer: NodeJS.Timeout | undefined
-    ): Promise<Buffer> {
-        const chunks: Buffer[] = [];
-        let currentBodySize = 0;
+    ): Promise<{ data: Buffer, wireBytes: number }> {
+        // A decoding failure or a decoded overflow surfaces asynchronously: destroying the request ends the loop below.
+        const reader = new BodyReader({
+            maxBodySize: reqOpts.maxBodySize,
+            contentEncoding: res.headers['content-encoding'],
+            decompress: reqOpts.decompress,
+            tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`),
+            onError: () => req.destroy(),
+        });
 
         try {
             // Leaving the loop early (throw) destroys `res`; a premature close or socket error throws here.
-            for await (const chunk of res) {
-                currentBodySize += chunk.length;
-                if (currentBodySize > reqOpts.maxBodySize) {
-                    req.destroy();
-                    throw new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`);
-                }
-                chunks.push(chunk);
-            }
+            for await (const chunk of res) reader.write(chunk);
         } catch (err: unknown) {
-            if (err instanceof UltraTonMemoryError) throw err;
+            clearTimeout(executionTimer);
+            if (reader.error) {
+                req.destroy();
+                throw reader.error;
+            }
+            reader.destroy();
             // A caller abort is not a network fault: it surfaces as the signal's own reason, like before the body started.
             if (reqOpts.signal?.aborted) throw reqOpts.signal.reason;
             // close() destroyed the socket mid-body: say so instead of reporting a reset connection.
@@ -94,11 +99,18 @@ export class Http1Engine {
             // a stream that just ends early has none, which is a reset connection as far as the caller is concerned.
             if (typeof code === 'string') throw toNetworkError(err);
             throw new UltraTonNetworkError('UltraTon: Connection failed (ECONNRESET).', { cause: err, code: 'ECONNRESET' });
+        }
+
+        // The absolute timeout still runs while the queued compressed bytes finish decoding.
+        try {
+            const data = await reader.end();
+            // close() or an abort during that last stretch wins over the decoded body, as it would mid-body.
+            if (reqOpts.signal?.aborted) throw reqOpts.signal.reason;
+            if (this.#closed) throw clientClosed();
+            return { data, wireBytes: reader.wireBytes };
         } finally {
             clearTimeout(executionTimer);
         }
-
-        return Buffer.concat(chunks, currentBodySize);
     }
 
     private _executeSingleNetworkHop(
@@ -173,11 +185,12 @@ export class Http1Engine {
                 }
 
                 this._consumeResponseBuffer(res, req as ClientRequest, reqOpts, executionTimer)
-                    .then(data => {
+                    .then(({ data, wireBytes }) => {
                         // llhttp already fails a body cut short of its content-length; checked here too so both
-                        // engines share one rule and a truncated body can never resolve as a success.
+                        // engines share one rule and a truncated body can never resolve as a success. The
+                        // content-length counts the bytes on the wire, before any content-encoding is undone.
                         const declared = declaredBodyLength(reqOpts.method, res.statusCode as number, res.headers);
-                        if (declared !== undefined && data.length !== declared) return reject(incompleteResponse());
+                        if (declared !== undefined && wireBytes !== declared) return reject(incompleteResponse());
                         resolve({
                             statusCode: res.statusCode as number,
                             headers: res.headers,

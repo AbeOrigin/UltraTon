@@ -31,6 +31,7 @@ import {
   buildSafeRequestOptions,
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
+import { BodyReader } from "../helpers/body-reader.ts";
 
 /** Request bodies go out in pieces of this size so that the idle timer can tell progress from a stall. */
 const BODY_CHUNK_BYTES = 64 * 1024;
@@ -155,6 +156,7 @@ export class Http2Engine {
         reqOpts.socketTimeoutMs,
         reqOpts.signal,
         reqOpts.maxRedirects > 0,
+        reqOpts.decompress,
       );
 
       const statusCode = response.statusCode;
@@ -313,6 +315,7 @@ export class Http2Engine {
     socketTimeoutMs: number,
     signal: AbortSignal | undefined,
     followRedirects: boolean,
+    decompress: boolean,
   ): Promise<UltraTonResponse<T>> {
     return new Promise((resolve, reject) => {
       // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
@@ -321,7 +324,8 @@ export class Http2Engine {
       let settled = false;
       let statusCode: number | undefined;
       let responseHeaders: IncomingHttpHeaders = {};
-      const chunks: Buffer[] = [];
+      // Created with the response headers (content-encoding); collects, decodes and bounds the body.
+      let reader: BodyReader | undefined;
 
       let stream: ClientHttp2Stream;
 
@@ -343,6 +347,7 @@ export class Http2Engine {
       // it does, which could be the OS connect timeout away: release the hold now so the process may exit, and drop
       // the session itself when nothing else uses it (it leaves the pool through its own 'close' handler).
       const abandon = () => {
+        reader?.destroy();
         stream.close(constants.NGHTTP2_CANCEL);
         release();
         if (stream.pending && heldStreams(session) === 0 && !session.destroyed) session.destroy();
@@ -431,25 +436,38 @@ export class Http2Engine {
 
           return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
         }
-      });
 
-      let totalBytes = 0;
-      stream.on("data", (chunk: Buffer) => {
-        if (settled) return;
-        armIdleTimer();
-        totalBytes += chunk.length;
-        if (totalBytes > maxBodySize) {
-          settled = true;
-          cleanup();
-          stream.close(constants.NGHTTP2_CANCEL);
-          reject(
+        reader = new BodyReader({
+          maxBodySize,
+          contentEncoding: headers["content-encoding"],
+          decompress,
+          tooLarge: () =>
             new UltraTonMemoryError(
               `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${maxBodySize} bytes.`,
             ),
-          );
-          return;
+          // A decoding failure or a decoded overflow, reported after the chunk that caused it was taken.
+          onError: (err) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            stream.close(constants.NGHTTP2_CANCEL);
+            reject(err);
+          },
+        });
+      });
+
+      const wireBytes = () => reader?.wireBytes ?? 0;
+      stream.on("data", (chunk: Buffer) => {
+        if (settled || !reader) return;
+        armIdleTimer();
+        try {
+          reader.write(chunk);
+        } catch (err: unknown) {
+          settled = true;
+          cleanup();
+          stream.close(constants.NGHTTP2_CANCEL);
+          reject(err);
         }
-        chunks.push(chunk);
       });
 
       // A response that ended without a status, on a stream that was reset or aborted, or with fewer or more bytes than
@@ -474,6 +492,7 @@ export class Http2Engine {
         };
         const fail = (err: unknown) => {
           stopUpload(constants.NGHTTP2_CANCEL);
+          reader?.destroy();
           reject(err);
         };
 
@@ -481,7 +500,7 @@ export class Http2Engine {
         if (this.#closed) return fail(clientClosed());
 
         const expected = declared();
-        if (expected !== undefined && totalBytes !== expected) {
+        if (expected !== undefined && wireBytes() !== expected) {
           return fail(lostResponse());
         }
 
@@ -495,20 +514,30 @@ export class Http2Engine {
         }
 
         stopUpload(constants.NGHTTP2_NO_ERROR);
-        resolve(createResponse<T>(statusCode, responseHeaders, Buffer.concat(chunks)));
+        const status = statusCode;
+        (reader ? reader.end() : Promise.resolve(Buffer.alloc(0))).then(
+          // close() or an abort while the queued compressed bytes were still decoding wins, as it would mid-body.
+          (data) => {
+            if (signal?.aborted) return reject(signal.reason);
+            if (this.#closed) return reject(clientClosed());
+            resolve(createResponse<T>(status, responseHeaders, data));
+          },
+          reject,
+        );
       });
 
       stream.on("error", (err: Error) => {
         if (settled) return;
         settled = true;
         cleanup();
+        reader?.destroy();
         // A session that dies (e.g. ECONNREFUSED while connecting) cancels its streams with a generic
         // ERR_HTTP2_STREAM_CANCEL whose cause is the real error: report that one.
         const { code, cause } = err as NodeJS.ErrnoException;
         // A body cut short of its content-length (nghttp2 resets such a stream itself) is the same incomplete response
         // HTTP/1 reports; the original error stays reachable as `cause`.
         const expected = declared();
-        if (expected !== undefined && totalBytes < expected) {
+        if (expected !== undefined && wireBytes() < expected) {
           return reject(this.#orClosed(lostResponse(err)));
         }
         // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
@@ -520,6 +549,7 @@ export class Http2Engine {
         if (settled) return;
         settled = true;
         cleanup();
+        reader?.destroy();
         reject(this.#orClosed(lostResponse()));
       });
 
