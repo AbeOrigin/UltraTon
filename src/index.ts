@@ -3,6 +3,14 @@
 export { UltraTonClient } from './http-client.ts';
 export { createSecureAgents } from './agents.ts';
 export type { UltraTonSecureAgentOptions, UltraTonSecureAgents } from './agents.ts';
+export type {
+  UltraTonDiagnosticsRequest,
+  UltraTonDiagnosticsError,
+  UltraTonRequestStartMessage,
+  UltraTonRequestRetryMessage,
+  UltraTonRequestResponseMessage,
+  UltraTonRequestErrorMessage,
+} from './helpers/diagnostics.ts';
 export {
   SecureHttpError,
   UltraTonNetworkError,

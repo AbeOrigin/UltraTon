@@ -32,6 +32,12 @@ const TYPES = [
   'UltraTonProxyOptions',
   'UltraTonSecureAgentOptions',
   'UltraTonSecureAgents',
+  'UltraTonDiagnosticsRequest',
+  'UltraTonDiagnosticsError',
+  'UltraTonRequestStartMessage',
+  'UltraTonRequestRetryMessage',
+  'UltraTonRequestResponseMessage',
+  'UltraTonRequestErrorMessage',
 ];
 // Exports that existed before 2.0 and must stay gone.
 const REMOVED = ['UltraTonHTTP2'];

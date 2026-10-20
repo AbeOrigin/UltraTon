@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Public SSRF corpus** in `compat/ssrf-corpus/`: 30 cases, each linked to its source (OWASP, PayloadsAllTheThings). They cover IP spellings, IPv6 forms (mapped, compatible, NAT64), `0.0.0.0` and private ranges, cloud metadata, internal DNS answers (including a mixed one and `.nip.io`), `localhost` variants, the userinfo trick, and 302/307/308/protocol-relative redirects. Every case declares the reason UltraTon must block it for, so a case blocked by an unrelated rule cannot hide a regression, and redirect cases check that the allowed first hop happened.
+  - It runs against `UltraTonClient`, against axios, got and node-fetch through `createSecureAgents()`, and against those libraries and Node's `fetch` on their own.
+  - A CI test fails if UltraTon stops blocking any case.
+  - `npm run corpus` regenerates the comparison table in `compat/ssrf-corpus/RESULTS.md`.
+- **Observability through `diagnostics_channel`.** Every client call (`get`, …, `stream()`, `fetch()`) publishes `ultraton:request:start`, then `ultraton:request:retry` before each retry wait, and `ultraton:request:response` or `ultraton:request:error`. A subscriber that throws raises an uncaught exception, as with any `diagnostics_channel` subscriber.
+  - Each event carries the same frozen `request` (`{ method, origin, path }`, with the query and `;params` left out), plus the status, duration, retry attempt, or the error's `{ name, code }`. It never carries headers, bodies, `auth`, URL credentials, `error.cause` or resolved addresses. Path segments are published as they are: the README shows how to redact a secret kept in a path.
+  - It costs nothing without subscribers, and invalid options publish nothing.
+  - The README has an OpenTelemetry recipe. New public types for the payloads: `UltraTonDiagnosticsRequest`, `UltraTonDiagnosticsError` and the four `UltraTonRequest*Message` types.
 - **Supply-chain and security documentation.**
   - [THREAT_MODEL.md](THREAT_MODEL.md) covers:
     - the assets and adversaries;

@@ -10,6 +10,7 @@ import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
+import { observeRequest } from './helpers/diagnostics.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
@@ -237,6 +238,14 @@ export class UltraTonClient {
             const attempt = timeoutMs === undefined ? resolvedOptions : { ...resolvedOptions, timeoutMs };
             return stream ? this.#engine.request(target, attempt, stream) : this.#engine.request<T>(target, attempt);
         };
-        return retry ? withRetry(send, retry, resolvedOptions.timeoutMs, resolvedOptions.signal) : send();
+        // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
+        const observer = observeRequest(method, target);
+        if (!observer) return retry ? withRetry(send, retry, resolvedOptions.timeoutMs, resolvedOptions.signal) : send();
+        const observed = retry && {
+            ...retry,
+            // The caller's hook first: when it throws there is no retry, so no retry event either.
+            onRetry: (info: Parameters<NonNullable<typeof retry.onRetry>>[0]) => { retry.onRetry?.(info); observer.retry(info); },
+        };
+        return observer.track(observed ? withRetry(send, observed, resolvedOptions.timeoutMs, resolvedOptions.signal) : send());
     }
 }

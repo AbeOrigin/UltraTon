@@ -263,6 +263,63 @@ await api.get('health', { retry: 0 });                               // off for 
 
 Every attempt is a full request: a new connection resolves and validates DNS again, so a rebinding between attempts is blocked. A request's `retry` merges over the client's field by field. `stream()` retries until the headers arrive. `fetch()` never retries, because libraries that take a fetch bring their own retries. If `onRetry` throws, the request ends with that error.
 
+### Observability
+
+UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html) events for every client call (`get`, `post`, …, `stream()`, `fetch()`), so tracing and metrics tools can see requests without wrapping the client. Publishing costs nothing when nobody subscribes.
+
+| Channel | When | Message |
+|---|---|---|
+| `ultraton:request:start` | The options are valid and the request starts | `{ request }` |
+| `ultraton:request:retry` | Before each wait of `retry` | `{ request, attempt, delayMs, statusCode?, error? }` |
+| `ultraton:request:response` | A response arrived (for `stream()`: its headers) | `{ request, statusCode, durationMs }` |
+| `ultraton:request:error` | The call failed (policy, network, timeout, abort, …) | `{ request, error, durationMs }` |
+
+`request` is `{ method, origin, path }`, frozen, and **the same object** on every event of one call, so it can key a span or a timer. `error` is `{ name, code }`. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
+
+> ⚠️ **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
+
+A call that fails before it starts publishes nothing: options that throw a `TypeError`, a URL that does not parse, or a closed client. A retry event is published once a retry is decided, after your `onRetry` ran; if `onRetry` throws, there is no retry and no retry event, just the error.
+
+An OpenTelemetry span per request, with the `@opentelemetry/api` you already use:
+
+```ts
+import diagnosticsChannel from 'node:diagnostics_channel';
+import { trace, SpanKind, SpanStatusCode, type Span } from '@opentelemetry/api';
+import type { UltraTonDiagnosticsRequest, UltraTonRequestStartMessage, UltraTonRequestResponseMessage, UltraTonRequestErrorMessage } from 'ultraton';
+
+const tracer = trace.getTracer('ultraton');
+const spans = new WeakMap<UltraTonDiagnosticsRequest, Span>();
+// Your own rule for secrets in paths, for example: /bot123:ABC/sendMessage → /bot{token}/sendMessage
+const redact = (path: string) => path.replace(/^\/bot[^/]+/, '/bot{token}');
+
+diagnosticsChannel.subscribe('ultraton:request:start', (message) => {
+  const { request } = message as UltraTonRequestStartMessage;
+  const url = new URL(request.origin);
+  spans.set(request, tracer.startSpan(request.method, {
+    kind: SpanKind.CLIENT,
+    attributes: {
+      'http.request.method': request.method,
+      'url.full': request.origin + redact(request.path),
+      'server.address': url.hostname,
+      'server.port': Number(url.port) || (url.protocol === 'https:' ? 443 : 80),
+    },
+  }));
+});
+diagnosticsChannel.subscribe('ultraton:request:response', (message) => {
+  const { request, statusCode } = message as UltraTonRequestResponseMessage;
+  spans.get(request)?.setAttribute('http.response.status_code', statusCode).end();
+});
+diagnosticsChannel.subscribe('ultraton:request:error', (message) => {
+  const { request, error } = message as UltraTonRequestErrorMessage;
+  spans.get(request)
+    ?.setAttribute('error.type', error.code ?? error.name)
+    .setStatus({ code: SpanStatusCode.ERROR, message: error.code ?? error.name })
+    .end();
+});
+```
+
+Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Adding headers to outgoing requests (trace propagation such as `traceparent`) is planned with request hooks. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
+
 ### Proxy
 
 `proxy` sends every `https:` request through an HTTP CONNECT or a SOCKS5 proxy, on both engines. The SSRF checks run before the proxy is ever contacted, and the proxy cannot point the connection anywhere else:
@@ -383,6 +440,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md).
 ## Security
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for it.
+
+The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, what `UltraTonClient` and `createSecureAgents()` block next to axios, got, node-fetch and Node's `fetch` on their own: IP spellings, cloud metadata, DNS and redirects. The corpus runs in CI, and a case UltraTon stops blocking fails the build.
 
 [THREAT_MODEL.md](THREAT_MODEL.md) explains what UltraTon defends, against whom, where each defense lives in the code, and the risks it deliberately leaves to you. Releases carry npm provenance, so you can check that a version was built by this repository's CI with `npm audit signatures`.
 
