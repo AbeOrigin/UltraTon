@@ -20,6 +20,7 @@ const VALUES = [
   'UltraTonNetworkTimeoutError',
   'UltraTonParseError',
   'UltraTonRedirectError',
+  'createSecureAgents',
 ];
 const TYPES = [
   'ReservedIpPolicy',
@@ -29,6 +30,8 @@ const TYPES = [
   'UltraTonRetryOptions',
   'UltraTonRetryInfo',
   'UltraTonProxyOptions',
+  'UltraTonSecureAgentOptions',
+  'UltraTonSecureAgents',
 ];
 // Exports that existed before 2.0 and must stay gone.
 const REMOVED = ['UltraTonHTTP2'];

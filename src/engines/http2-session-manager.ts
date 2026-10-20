@@ -11,10 +11,9 @@ import {
   MAX_SESSION_MEMORY_MB,
 } from "../constants.ts";
 import { isIP } from "node:net";
-import type { LookupFunction } from "node:net";
 import {
   assertAllowedIp,
-  type PinnedAddress,
+  pinnedLookup,
   policyKey,
   type ReservedIpPolicy,
   resolveAndPinAll,
@@ -97,19 +96,6 @@ const bareHostOf = (hostname: string): string => {
   // URL.hostname keeps the brackets of an IPv6 literal ("[::1]"); DNS and SNI need the bare address.
   return bareHost.replace(/^\[|\]$/g, "");
 };
-
-/**
- * A socket `lookup` that answers only with `addresses`, already validated, and never asks DNS again: whichever address
- * Node connects to, Happy Eyeballs included, is one of them. Answers on the next tick, as a real lookup would.
- */
-const pinnedLookup =
-  (addresses: readonly PinnedAddress[]): LookupFunction =>
-  (_hostname, options, callback) => {
-    process.nextTick(() => {
-      if (options.all) callback(null, addresses.map((a) => ({ ...a })));
-      else callback(null, addresses[0].address, addresses[0].family);
-    });
-  };
 
 /** Streams in flight per session, for `holdSession`. */
 const activeStreams = new WeakMap<ClientHttp2Session, number>();

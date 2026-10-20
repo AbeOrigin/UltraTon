@@ -293,6 +293,49 @@ A SOCKS5 refusal rejects with `ERR_ULTRATON_PROXY` and the reason (`connection r
 
 > ⚠️ SOCKS5 has no encryption of its own: the username and password in `auth` cross the network to the proxy in cleartext. The request itself is safe (TLS runs end to end through the tunnel), but only use SOCKS5 credentials over a network you trust, or reach the proxy through an SSH tunnel.
 
+### Protect the client you already use
+
+Not ready to switch clients? `createSecureAgents()` gives you an `http.Agent` and an `https.Agent` that apply UltraTon's SSRF policy to any client that takes an agent:
+
+```ts
+import { createSecureAgents } from 'ultraton';
+
+const agents = createSecureAgents({ permitReservedIps: ['10.20.0.0/16'] }); // same options as the client: permitReservedIps, tls
+
+// axios
+const api = axios.create({ httpAgent: agents.http, httpsAgent: agents.https, proxy: false }); // proxy: false, see below
+// got
+const gotApi = got.extend({ agent: { http: agents.http, https: agents.https } });
+// node-fetch
+await fetch(url, { agent: (u: URL) => (u.protocol === 'http:' ? agents.http : agents.https) });
+// Node's own http.request / https.request
+https.get(url, { agent: agents.https }, onResponse);
+
+// when done
+agents.http.destroy();
+agents.https.destroy();
+```
+
+Every new socket resolves its host and validates **every** address, then connects only to those addresses: a DNS rebinding between connections is blocked. Redirects the library follows open their own sockets through the agent, so each hop is checked. IP literals are judged in every spelling, TLS is always verified (a library's `rejectUnauthorized: false` is ignored), and plain `http:` only reaches loopback unless you pass `allowPlainHttp: true`, which lifts the scheme rule but never the address policy. A blocked connection fails with the usual `SecureHttpError` (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`); libraries that wrap errors keep it as the cause. A failure to reach an *allowed* address is Node's own error, and its message may name that address.
+
+> ⚠️ **Turn the library's proxy off.** Through a forward proxy, the agent only sees the proxy's address and the proxy picks the real target, so the agents refuse such requests with `ERR_ULTRATON_AGENT_PROXY` instead of letting them through unchecked. axios uses `HTTP_PROXY`/`HTTPS_PROXY` by default: pass `proxy: false` (`axios.create({ httpAgent, httpsAgent, proxy: false })`). If you need a proxy, use `UltraTonClient`'s `proxy` option, which keeps the target pinned.
+
+The agents protect the **connection**. The rest stays with the library you plug them into:
+
+| Protection | Secure agents | `UltraTonClient` |
+|---|---|---|
+| Reserved IPs blocked, every address validated, DNS pinned | ✅ | ✅ |
+| Redirect hops checked | ✅ (each new socket) | ✅ |
+| TLS always verified | ✅ | ✅ |
+| Plain http only to loopback | ✅ (unless `allowPlainHttp`) | ✅ |
+| https → http redirect rejected, credentials dropped across origins | ❌ (the library decides) | ✅ |
+| Body size limit, decompression bombs, truncated bodies | ❌ | ✅ |
+| Total and idle timeouts | ❌ | ✅ |
+| Header injection, unknown options, `baseUrl` traversal | ❌ | ✅ |
+| A library's own proxy (axios reads `HTTP_PROXY`) | Refused (`ERR_ULTRATON_AGENT_PROXY`) | — |
+| Proxies with the target still pinned (CONNECT, SOCKS5) | ❌ | ✅ (`proxy`) |
+| Error messages without addresses | Blocked connections only | ✅ |
+
 ### baseUrl
 
 With `baseUrl` set, request URLs must be relative. `'users/7'` and `'/users/7'` both resolve under the base path. An absolute or protocol-relative URL throws.

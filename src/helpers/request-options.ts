@@ -653,6 +653,40 @@ function proxyOption(value: unknown): ProxyConfig | undefined {
 
 const PROXY_SCHEMES = ['http:', 'https:', 'socks5:', 'socks5h:'];
 
+const SECURE_AGENT_OPTION_KEYS = ['permitReservedIps', 'tls', 'allowPlainHttp'];
+const SECURE_AGENT_HINTS = new Map<string, string>([
+    ['proxy', " A secure agent does not tunnel through a proxy; use the client's 'proxy' option."],
+    ['rejectUnauthorized', `${NO_VERIFY_OFF} tls: { ca }.`],
+    ['ca', " Pass it as tls: { ca }."],
+]);
+
+/** `createSecureAgents(options)` once validated, with the same rules (and the same frozen allowlist copy) as the client. */
+export interface ResolvedSecureAgentOptions {
+    readonly permitReservedIps: ReservedIpPolicy;
+    readonly tls: TlsOptions;
+    readonly allowPlainHttp: boolean;
+}
+
+/**
+ * Validates the options of `createSecureAgents()`: a closed list, each value checked as the client checks it.
+ * @throws {TypeError} On an unknown key (with a hint), a value of the wrong type, or a `tls` key other than ca/cert/key.
+ */
+export function resolveSecureAgentOptions(options: unknown): ResolvedSecureAgentOptions {
+    if (options === undefined) options = {};
+    if (!isPlainObject(options)) throw new TypeError('UltraTon: Secure agent options must be a plain object.');
+    const raw = ownOptions(options);
+    for (const key of Object.keys(raw)) {
+        if (SECURE_AGENT_OPTION_KEYS.includes(key)) continue;
+        const hint = SECURE_AGENT_HINTS.get(key) ?? ` Valid options: ${SECURE_AGENT_OPTION_KEYS.join(', ')}.`;
+        throw new TypeError(`UltraTon: Unknown option '${key}'.${hint}`);
+    }
+    return {
+        permitReservedIps: reservedIpPolicy(raw.permitReservedIps),
+        tls: tlsOptions(raw.tls),
+        allowPlainHttp: validateType('allowPlainHttp', raw.allowPlainHttp, 'boolean') && raw.allowPlainHttp === true,
+    };
+}
+
 /**
  * SOCKS5 username/password authentication (RFC 1929) carries each part as 1 to 255 bytes after a length byte.
  * @throws {TypeError} When `auth` is not `user:password` with both parts in that range.

@@ -1,6 +1,8 @@
 // Public entry point of the package. No default export, so that
 // `require('ultraton')` yields a clean namespace.
 export { UltraTonClient } from './http-client.ts';
+export { createSecureAgents } from './agents.ts';
+export type { UltraTonSecureAgentOptions, UltraTonSecureAgents } from './agents.ts';
 export {
   SecureHttpError,
   UltraTonNetworkError,
