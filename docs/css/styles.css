@@ -111,6 +111,17 @@ a {
     stroke-linejoin: round;
 }
 
+.logo-mark {
+    width: 1.2em;
+    height: 1.2em;
+    stroke-width: 4.5;
+}
+
+.logo-mark circle {
+    fill: currentColor;
+    stroke: none;
+}
+
 .nav-links {
     display: flex;
     gap: 2rem;
