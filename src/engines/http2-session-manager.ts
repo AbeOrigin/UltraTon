@@ -103,6 +103,9 @@ export function holdSession(session: ClientHttp2Session): () => void {
   };
 }
 
+/** How many requests currently hold `session` (see `holdSession`). */
+export const heldStreams = (session: ClientHttp2Session): number => activeStreams.get(session) ?? 0;
+
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
   /** Sessions that got a GOAWAY: out of the pool, finishing their streams, still closed by closeAll(). Value: pool key. */

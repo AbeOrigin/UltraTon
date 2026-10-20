@@ -10,11 +10,10 @@ import { afterEach, describe, it, mock, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 import { spawn } from 'node:child_process';
-import { constants, createServer as createH2Server, type ServerHttp2Stream } from 'node:http2';
+import { type ClientHttp2Session, connect as nativeConnect, constants, createServer as createH2Server, type ServerHttp2Stream } from 'node:http2';
 import http from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { pathToFileURL } from 'node:url';
-import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
+import net, { type AddressInfo } from 'node:net';
+import { Http2SessionManager, heldStreams, holdSession } from '../src/engines/http2-session-manager.ts';
 import { UltraTonNetworkTimeoutError } from '../src/errors.ts';
 import { UltraTonClient } from '../src/http-client.ts';
 import { kSessionManager } from '../src/internal.ts';
@@ -221,12 +220,40 @@ describe('HTTP/2 socketTimeoutMs is a per-stream idle timeout', () => {
       let sent = 0;
       const tick = setInterval(() => {
         stream.write('x');
-        if (++sent === 6) { clearInterval(tick); stream.end(); }
+        if (++sent === 10) { clearInterval(tick); stream.end(); }
       }, 100);
       stream.on('close', () => clearInterval(tick));
     });
-    const response = await client.get(url, { socketTimeoutMs: 250, timeoutMs: 0 });
-    assert.equal(response.text(), 'xxxxxx');
+    // The whole body takes about 1s, well over the 600ms timeout, yet no gap between bytes is.
+    const response = await client.get(url, { socketTimeoutMs: 600, timeoutMs: 0 });
+    assert.equal(response.text(), 'xxxxxxxxxx');
+  });
+
+  it('request-body writes reset the timer: a slow upload that keeps moving is not idle', { timeout: 10_000 }, async (t) => {
+    let received = 0;
+    const { url, client } = await serveH2(t, (stream) => {
+      // Reads one chunk at a time, slowly, so the client's writes drain in steps well below the timeout.
+      stream.on('data', (chunk: Buffer) => {
+        received += chunk.length;
+        stream.pause();
+        setTimeout(() => stream.resume(), 40);
+      });
+      stream.on('end', () => { stream.respond({ ':status': 200 }); stream.end('stored'); });
+    });
+    const body = Buffer.alloc(800 * 1024, 1);
+    const started = Date.now();
+    const response = await client.post(url, { body, socketTimeoutMs: 800, timeoutMs: 0 });
+    assert.equal(response.text(), 'stored');
+    assert.equal(received, body.length);
+    assert.ok(Date.now() - started > 800, 'the upload outlasted the idle timeout, so only progress kept it alive');
+  });
+
+  it('an upload the server stopped reading still times out', { timeout: 10_000 }, async (t) => {
+    const { url, client } = await serveH2(t, (stream) => { stream.pause(); /* never reads */ });
+    await assert.rejects(
+      client.post(url, { body: Buffer.alloc(2 * 1024 * 1024, 1), socketTimeoutMs: 300, timeoutMs: 0 }),
+      UltraTonNetworkTimeoutError,
+    );
   });
 
   it('0 disables it', { timeout: 5000 }, async (t) => {
@@ -260,7 +287,7 @@ describe('HTTP/2 sessions do not keep the process alive while idle', () => {
       });
     });
 
-  const indexUrl = pathToFileURL(new URL('../src/index.ts', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')).href;
+  const indexUrl = new URL('../src/index.ts', import.meta.url).href;
   const scriptFor = (url: string, options: string) => `
     import { UltraTonClient } from ${JSON.stringify(indexUrl)};
     const client = new UltraTonClient({ http2: true, permitReservedIps: true });
@@ -293,7 +320,76 @@ describe('HTTP/2 sessions do not keep the process alive while idle', () => {
 
   it('a request with timeoutMs: 0 still holds the process until it completes', { timeout: 30_000 }, async (t) => {
     const url = await serve(t, 800);
-    const { stdout } = await runChild(scriptFor(url, '{ timeoutMs: 0 }'));
+    // socketTimeoutMs: 0 too: the idle timer is ref'd and would hold the process by itself, hiding the session's ref.
+    const { stdout } = await runChild(scriptFor(url, '{ timeoutMs: 0, socketTimeoutMs: 0 }'));
     assert.match(stdout, /status=200 body=done/, 'the child waited for the late response');
+  });
+
+  it('aborting while the TLS handshake is still pending lets the child exit promptly', { timeout: 30_000 }, async (t) => {
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((socket) => { sockets.push(socket); socket.on('error', () => {}); /* accepts, never answers */ });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    t.after(async () => { sockets.forEach((s) => s.destroy()); await new Promise<void>((r) => server.close(() => r())); });
+    const url = `https://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const script = `
+      import { UltraTonClient } from ${JSON.stringify(indexUrl)};
+      const client = new UltraTonClient({ http2: true, permitReservedIps: true });
+      try { await client.get(${JSON.stringify(url)}, { signal: AbortSignal.timeout(150), timeoutMs: 0, socketTimeoutMs: 0 }); }
+      catch (err) { console.log('rejected=' + err.name); }
+    `;
+    const { stdout, afterOutputMs, code } = await runChild(script);
+    assert.match(stdout, /rejected=TimeoutError/);
+    assert.equal(code, 0);
+    assert.ok(afterOutputMs < 2000, `child took ${afterOutputMs}ms to exit after the abort`);
+  });
+});
+
+describe('abandoning a stream whose session is still connecting', () => {
+  it('releases the session hold at once instead of waiting for a stream close that cannot come', { timeout: 10_000 }, async (t) => {
+    const sockets: net.Socket[] = [];
+    const server = net.createServer((socket) => { sockets.push(socket); socket.on('error', () => {}); /* never answers the TLS hello */ });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    let session: ClientHttp2Session | undefined;
+    const manager = new Http2SessionManager({}, ((...args: Parameters<typeof nativeConnect>) => (session = nativeConnect(...args))) as typeof nativeConnect);
+    const client = new UltraTonClient({ http2: true, permitReservedIps: true, [kSessionManager]: manager } as any);
+    t.after(async () => { manager.closeAll(); sockets.forEach((s) => s.destroy()); await new Promise<void>((r) => server.close(() => r())); });
+
+    const url = `https://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    await assert.rejects(client.get(url, { signal: AbortSignal.timeout(150), timeoutMs: 0, socketTimeoutMs: 0 }), (err: unknown) => (err as Error).name === 'TimeoutError');
+    assert.ok(session, 'a session was opened');
+    assert.equal(session.connecting, true, 'the handshake is still pending, so the stream cannot have closed');
+    assert.equal(heldStreams(session), 0, 'nothing holds the session any more');
+  });
+});
+
+describe('holdSession', () => {
+  const fakeSession = () => {
+    const calls: string[] = [];
+    return { calls, destroyed: false, ref: () => calls.push('ref'), unref: () => calls.push('unref') };
+  };
+
+  it('refs on the first hold and unrefs only once every hold is released', () => {
+    const session = fakeSession();
+    const first = holdSession(session as any);
+    const second = holdSession(session as any);
+    assert.deepEqual(session.calls, ['ref'], 'a second concurrent hold does not ref again');
+    assert.equal(heldStreams(session as any), 2);
+
+    first();
+    assert.deepEqual(session.calls, ['ref'], 'still held by the second');
+    first(); // releasing twice does nothing
+    assert.equal(heldStreams(session as any), 1);
+    second();
+    assert.deepEqual(session.calls, ['ref', 'unref']);
+    assert.equal(heldStreams(session as any), 0);
+
+    holdSession(session as any)();
+    assert.deepEqual(session.calls, ['ref', 'unref', 'ref', 'unref'], 'it can be held again after going idle');
+  });
+
+  it('does not touch a destroyed session', () => {
+    const session = { ...fakeSession(), destroyed: true };
+    holdSession(session as any)();
+    assert.deepEqual(session.calls, []);
   });
 });

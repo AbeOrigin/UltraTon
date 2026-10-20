@@ -7,7 +7,7 @@ import type {
   OutgoingHttpHeaders,
 } from "node:http2";
 import type { UltraTonResponse } from "../types/request-response.ts";
-import { holdSession } from "./http2-session-manager.ts";
+import { heldStreams, holdSession } from "./http2-session-manager.ts";
 import type { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
   ResolvedRequestOptions,
@@ -31,6 +31,9 @@ import {
   buildSafeRequestOptions,
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
+
+/** Request bodies go out in pieces of this size so that the idle timer can tell progress from a stall. */
+const BODY_CHUNK_BYTES = 64 * 1024;
 
 const clientClosed = () => new SecureHttpError("UltraTon: Client is closed.");
 
@@ -324,6 +327,15 @@ export class Http2Engine {
       const release = holdSession(session);
       stream.once("close", release);
 
+      // Gives the stream up (abort or timeout). A stream still waiting for the session to connect cannot close until
+      // it does, which could be the OS connect timeout away: release the hold now so the process may exit, and drop
+      // the session itself when nothing else uses it (it leaves the pool through its own 'close' handler).
+      const abandon = () => {
+        stream.close(constants.NGHTTP2_CANCEL);
+        release();
+        if (stream.pending && heldStreams(session) === 0 && !session.destroyed) session.destroy();
+      };
+
       // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
       const streamTimer =
         remainingMs > 0
@@ -331,7 +343,7 @@ export class Http2Engine {
             if (settled) return;
             settled = true;
             cleanup();
-            stream.close(constants.NGHTTP2_CANCEL);
+            abandon();
             reject(
               new UltraTonNetworkTimeoutError(
                 `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
@@ -349,7 +361,7 @@ export class Http2Engine {
           if (settled) return;
           settled = true;
           cleanup();
-          stream.close(constants.NGHTTP2_CANCEL);
+          abandon();
           reject(
             new UltraTonNetworkTimeoutError(
               `UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`,
@@ -362,7 +374,7 @@ export class Http2Engine {
         if (settled) return;
         settled = true;
         cleanup();
-        stream.close(constants.NGHTTP2_CANCEL);
+        abandon();
         reject(signal!.reason);
       };
 
@@ -469,11 +481,22 @@ export class Http2Engine {
         reject(this.#orClosed(lostResponse()));
       });
 
-      if (body && body.length > 0) {
-        stream.write(body);
-      }
-
-      stream.end();
+      // Written one chunk at a time, each acknowledged write counting as activity: a large upload that is slower than
+      // socketTimeoutMs but keeps moving is not idle. Node acknowledges a write once the data got through flow control
+      // (queued writes are acknowledged all at once at the end, which would hide the progress), so the next chunk waits
+      // for it. A stalled upload (the server stopped reading) stops acknowledging and times out.
+      const writeFrom = (offset: number): void => {
+        if (body === undefined || offset >= body.length) {
+          stream.end();
+          return;
+        }
+        stream.write(body.subarray(offset, offset + BODY_CHUNK_BYTES), (err) => {
+          if (settled || err) return;
+          armIdleTimer();
+          writeFrom(offset + BODY_CHUNK_BYTES);
+        });
+      };
+      writeFrom(0);
     });
   }
 }
