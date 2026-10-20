@@ -97,7 +97,18 @@ a {
 }
 
 .logo-icon {
-    -webkit-text-fill-color: initial;
+    display: inline-flex;
+    color: var(--accent-neon);
+}
+
+.icon {
+    width: 1em;
+    height: 1em;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }
 
 .nav-links {
@@ -280,7 +291,9 @@ a {
 
 .card-icon {
     font-size: 2.5rem;
+    line-height: 1;
     margin-bottom: 1.5rem;
+    color: var(--accent-cyan);
 }
 
 .card h3 {
@@ -667,7 +680,7 @@ footer {
 .sim-check.is-pass { color: var(--text-primary); }
 .sim-check.is-pass::before { content: '✓'; color: var(--accent-neon); }
 .sim-check.is-fail { color: #fff; border-color: var(--accent-danger); background: rgba(255, 42, 109, 0.12); }
-.sim-check.is-fail::before { content: '✖'; color: var(--accent-danger); }
+.sim-check.is-fail::before { content: '✕'; color: var(--accent-danger); }
 .sim-check.is-skip { opacity: 0.35; }
 
 .sim-result {
