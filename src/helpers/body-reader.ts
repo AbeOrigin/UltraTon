@@ -2,18 +2,33 @@ import zlib from 'node:zlib';
 import { finished, pipeline, type Transform } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 
-const DECODERS = new Map<string, () => Transform>([
-    ['gzip', () => zlib.createGunzip()],
-    ['x-gzip', () => zlib.createGunzip()],
-    // ponytail: zlib-wrapped deflate only (RFC 9110). Raw deflate from very old servers fails as Z_DATA_ERROR; sniff the
-    // first byte (inflate vs inflateRaw) if one ever matters.
-    ['deflate', () => zlib.createInflate()],
-    // Brotli's ring buffer can take up to 16 MiB per layer whatever maxBodySize is; zlib has no knob to lower it.
-    ['br', () => zlib.createBrotliDecompress()],
-    // ponytail: no zstd yet. Node's decoder resolves a truncated frame without an error (a partial body would pass as
-    // complete) and its default window lets a few bytes allocate 128 MiB. Add it with ZSTD_d_windowLogMax 23 (RFC 9659)
-    // once a cut frame can be detected.
-]);
+/** The content-codings the reader decodes. */
+const CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+
+/**
+ * A fresh decoder for a coding in CODINGS. A switch rather than a lookup table: no header value ever selects the
+ * function that gets called.
+ */
+function createDecoder(coding: string): Transform {
+    switch (coding) {
+        case 'gzip':
+        case 'x-gzip':
+            return zlib.createGunzip();
+        // ponytail: zlib-wrapped deflate only (RFC 9110). Raw deflate from very old servers fails as Z_DATA_ERROR; sniff
+        // the first byte (inflate vs inflateRaw) if one ever matters.
+        case 'deflate':
+            return zlib.createInflate();
+        // Brotli's ring buffer can take up to 16 MiB per layer whatever maxBodySize is; zlib has no knob to lower it.
+        case 'br':
+            return zlib.createBrotliDecompress();
+        default:
+            throw new Error(`UltraTon: No decoder for content-coding '${coding}'.`);
+    }
+}
+
+// ponytail: no zstd yet. Node's decoder resolves a truncated frame without an error (a partial body would pass as
+// complete) and its default window lets a few bytes allocate 128 MiB. Add it with ZSTD_d_windowLogMax 23 (RFC 9659)
+// once a cut frame can be detected.
 
 /** The accept-encoding sent by default: every coding the reader decodes. */
 export const ACCEPT_ENCODING = 'gzip, deflate, br';
@@ -31,7 +46,7 @@ function codingsFor(header: string | string[] | undefined): string[] | Error {
         .split(',')
         .map(coding => coding.trim().toLowerCase())
         .filter(coding => coding !== '' && coding !== 'identity');
-    if (codings.some(coding => !DECODERS.has(coding))) return [];
+    if (codings.some(coding => !CODINGS.has(coding))) return [];
     if (codings.length > MAX_LAYERS) {
         return new SecureHttpError(`UltraTon: Response has more than ${MAX_LAYERS} content-encodings.`, { code: 'ERR_ULTRATON_CONTENT_ENCODING' });
     }
@@ -136,7 +151,7 @@ export class BodyReader {
     }
 
     #start(): Transform {
-        const decoders = this.#codings.map(coding => DECODERS.get(coding)!());
+        const decoders = this.#codings.map(createDecoder);
         const last = decoders[decoders.length - 1];
         last.on('data', (chunk: Buffer) => {
             if (this.#error || this.#destroyed) return;
