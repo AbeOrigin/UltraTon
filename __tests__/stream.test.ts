@@ -19,6 +19,8 @@ interface Out {
     cut(): void;
     onClose(fn: () => void): void;
     onDrain(fn: () => void): void;
+    /** Drops the connection under the response (h2: destroys the session). */
+    kill(): void;
 }
 
 /** Routes: /data?n=BYTES, /slow-first, /stall, /short, /gzip, /redir, /track (slow 1 MiB that records its close). */
@@ -53,6 +55,14 @@ async function server(t: TestContext, http2: boolean) {
                 out.head(200, { 'content-length': '100' });
                 out.write('only ten b');
                 return out.cut();
+            // No content-length: only the end of the stream says whether the body is complete.
+            case '/nolen-kill':
+                out.head(200, {});
+                out.write('part');
+                return void setTimeout(() => out.kill(), 50);
+            case '/nolen-hold':
+                out.head(200, {});
+                return void out.write('part');
             case '/gzip':
                 return out.end((out.head(200, { 'content-encoding': 'gzip' }), zlib.gzipSync('decoded!'.repeat(1000))));
             case '/redir':
@@ -88,6 +98,7 @@ async function server(t: TestContext, http2: boolean) {
                 cut: () => stream.end(),
                 onClose: fn => stream.on('close', fn),
                 onDrain: fn => stream.once('drain', fn),
+                kill: () => stream.session?.destroy(),
             });
         })
         : http.createServer((req, res) => {
@@ -100,6 +111,7 @@ async function server(t: TestContext, http2: boolean) {
                 cut: () => res.socket?.end(),
                 onClose: fn => res.on('close', fn),
                 onDrain: fn => res.once('drain', fn),
+                kill: () => res.socket?.destroy(),
             });
         });
     srv.on('connection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
@@ -204,6 +216,23 @@ for (const http2 of [false, true]) {
             const { base } = await server(t, http2);
             const client = clientOf(t, http2);
             const res = await client.stream(`${base}/track`);
+            const reader = res.body.getReader();
+            await reader.read();
+            await client.close();
+            await assert.rejects(async () => { for (;;) if ((await reader.read()).done) break; },
+                (err: unknown) => err instanceof SecureHttpError && (err as Error).message === 'UltraTon: Client is closed.');
+        });
+
+        it('fails, never ends, a body without content-length whose connection drops', async (t) => {
+            const { base } = await server(t, http2);
+            const res = await clientOf(t, http2).stream(`${base}/nolen-kill`);
+            await assert.rejects(readAll(res.body), UltraTonNetworkError);
+        });
+
+        it('close() fails a body without content-length instead of ending it', async (t) => {
+            const { base } = await server(t, http2);
+            const client = clientOf(t, http2);
+            const res = await client.stream(`${base}/nolen-hold`);
             const reader = res.body.getReader();
             await reader.read();
             await client.close();

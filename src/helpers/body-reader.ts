@@ -171,14 +171,22 @@ export interface BodyStreamOptions {
     readonly mapError: (err: unknown) => unknown;
     /** Called once when the body ended (no argument) or failed (the error the caller got); not on a cancel. */
     readonly onSettled?: (err?: unknown) => void;
+    /**
+     * Judged the moment the source ends, before any of it is handed on: an error when that end was not a complete
+     * response (an HTTP/2 stream ends normally even when its connection was lost or the client closed). Called once.
+     */
+    readonly verifyEnd?: () => Error | undefined;
+    /** Called once when the source has ended, with verifyEnd's verdict (an HTTP/2 upload still open can be ended then). */
+    readonly onSourceEnd?: (error: Error | undefined) => void;
 }
 
 /**
  * The body of a streamed response, with the same limits as a buffered one: wire bytes and decoded bytes bounded by
  * `maxBodySize`, a body cut short of its content-length or a corrupt compressed body failing the stream (never ending it
  * cleanly), the signal's reason on abort. Backpressure reaches the socket (HTTP/1) or the flow-control window (HTTP/2).
- * `socketTimeoutMs` only runs while the consumer is waiting for data (highWaterMark 0: nothing is read ahead), so a
- * slow consumer never times out the server, while a server that goes silent mid-body does. Cancelling it destroys the
+ * `socketTimeoutMs` only runs while the consumer is waiting for data (highWaterMark 0 on the web stream; the Node stages
+ * in between still read a few tens of KiB ahead), so a slow consumer never times out the server, while a server that
+ * goes silent mid-body does. Cancelling it destroys the
  * source: the socket is closed or the HTTP/2 stream reset.
  */
 export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Array> {
@@ -187,6 +195,12 @@ export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Arra
     let wireBytes = 0;
     let size = 0;
     let decodeFailure: unknown;
+    // Registered before the pipeline's own listeners, so the verdict exists by the time the wire stage flushes.
+    let endVerdict: Error | undefined;
+    o.source.once('end', () => {
+        endVerdict = o.verifyEnd?.();
+        o.onSourceEnd?.(endVerdict);
+    });
     const wire = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
             if (codingError) return callback(codingError);
@@ -195,6 +209,7 @@ export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Arra
             callback(null, chunk);
         },
         flush(callback) {
+            if (endVerdict) return callback(endVerdict);
             callback(o.declaredLength !== undefined && wireBytes !== o.declaredLength ? incompleteResponse() : null);
         },
     });
@@ -210,8 +225,8 @@ export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Arra
             callback(null, chunk);
         },
     });
-    // Errors reach the consumer through the iterator; the pipeline only has to tear every stage down together.
-    const out = pipeline([o.source, wire, ...decoders, bounded], () => {}) as unknown as Transform;
+    // Errors reach the consumer through the iterator; the callback only drops the abort listener once every stage is done.
+    const out = pipeline([o.source, wire, ...decoders, bounded], () => stopListening()) as unknown as Transform;
     const iterator = out[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
 
     let settled = false;

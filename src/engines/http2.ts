@@ -474,14 +474,22 @@ export class Http2Engine {
               const { code, cause } = err as NodeJS.ErrnoException;
               return this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));
             },
-            onSettled: (err) => {
-              // The whole body arrived while the upload is still open: end the half-open stream so it can close.
-              if (err === undefined) {
-                if (!stream.writableEnded && !stream.closed && !stream.destroyed) stream.close(constants.NGHTTP2_NO_ERROR);
-              } else if (err instanceof UltraTonNetworkTimeoutError) {
-                // As for a buffered response: a silent connection may be dead, so the next request gets a new one.
-                this.#sessionManager.retire(session);
+            // A stream ends normally even when its connection was lost or close() ran: judged as the buffered path does.
+            verifyEnd: () => {
+              if (this.#closed) return clientClosed();
+              const reset = stream.rstCode !== undefined && stream.rstCode !== constants.NGHTTP2_NO_ERROR;
+              return stream.aborted || reset ? incompleteResponse() : undefined;
+            },
+            // The response is complete while the upload may still be open: end the half-open stream now, not when the
+            // consumer gets to the end, so a body nobody finishes reading cannot hold the session.
+            onSourceEnd: (error) => {
+              if (!stream.writableEnded && !stream.closed && !stream.destroyed) {
+                stream.close(error ? constants.NGHTTP2_CANCEL : constants.NGHTTP2_NO_ERROR);
               }
+            },
+            onSettled: (err) => {
+              // As for a buffered response: a silent connection may be dead, so the next request gets a new one.
+              if (err instanceof UltraTonNetworkTimeoutError) this.#sessionManager.retire(session);
             },
           }), streaming.url));
         }
@@ -615,7 +623,7 @@ export class Http2Engine {
         }
         stream.write(body.subarray(offset, offset + BODY_CHUNK_BYTES), (err) => {
           if ((settled && !handedOff) || err || stream.destroyed) return;
-          armIdleTimer();
+          if (!handedOff) armIdleTimer();
           writeFrom(offset + BODY_CHUNK_BYTES);
         });
       };
