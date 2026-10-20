@@ -21,6 +21,7 @@
         </div>
         <div class="nav-links">
             <a href="#features">Features</a>
+            <a href="#in-action">Demo</a>
             <a href="#installation">Usage</a>
             <a href="#limits" class="highlight-link">Limits</a>
             <a href="https://github.com/AbeOrigin/UltraTon" class="github-btn" target="_blank" rel="noopener noreferrer">
@@ -77,6 +78,41 @@
                     <h3>Strict Protocol Handling</h3>
                     <p>Redirects are not followed unless you set <code>maxRedirects</code>; https → http is rejected, and credentials are dropped on a cross-origin hop. TLS verification is always on. CRLF/NUL in headers, and unknown or mistyped options, throw before connecting.</p>
                 </div>
+            </div>
+        </section>
+
+        <section id="in-action" class="sim-section">
+            <div class="section-header">
+                <h2>Watch It Work</h2>
+                <p>Every request is checked on its way out, and every response on its way back. Pick an attack, or let them play.</p>
+            </div>
+
+            <div class="sim glass">
+                <div class="sim-tabs" id="sim-tabs" role="group" aria-label="Scenarios"></div>
+                <pre class="sim-call"><code id="sim-call"></code></pre>
+
+                <div class="sim-track" id="sim-track">
+                    <div class="sim-node" data-node="app"><span class="sim-node-icon" aria-hidden="true">💻</span><span>Your code</span></div>
+                    <div class="sim-lane"></div>
+                    <div class="sim-node sim-shield" data-node="shield"><span class="sim-node-icon" aria-hidden="true">🛡️</span><span>UltraTon</span></div>
+                    <div class="sim-lane"></div>
+                    <div class="sim-node" data-node="net"><span class="sim-node-icon" aria-hidden="true">🌐</span><span>Network</span></div>
+                    <div class="sim-packet" id="sim-packet" aria-hidden="true"></div>
+                </div>
+                <p class="sim-wire" id="sim-wire"></p>
+
+                <div class="sim-checks">
+                    <div>
+                        <h3>On the way out</h3>
+                        <ol id="sim-out"></ol>
+                    </div>
+                    <div>
+                        <h3>On the way back</h3>
+                        <ol id="sim-in"></ol>
+                    </div>
+                </div>
+
+                <div class="sim-result" id="sim-result" aria-live="polite"></div>
             </div>
         </section>
 
