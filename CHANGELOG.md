@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`createSecureAgents()`: UltraTon's SSRF policy for the client you already use.** It returns an `http.Agent` and an `https.Agent` for axios (`httpAgent`/`httpsAgent`), got (`agent`), node-fetch (`agent`) and `http.request`.
+  - Every new socket resolves its host and validates every address against `permitReservedIps`, then connects only to them. A DNS rebinding between connections is blocked, and so is each redirect hop the library follows, since it opens a new socket.
+  - IP literals are judged as themselves. The library's own `lookup` is ignored and a `socketPath` throws.
+  - TLS is always verified: a library's `rejectUnauthorized: false` or no-op `checkServerIdentity` is ignored.
+  - Plain `http:` only reaches loopback names and addresses unless `allowPlainHttp: true`, which never lifts the address policy.
+  - A forward-proxy request through the agents (CONNECT, or an absolute URL as with axios and `HTTP_PROXY`) is refused with `ERR_ULTRATON_AGENT_PROXY`. The proxy would pick the target unchecked, so turn the library's proxy off (axios: `proxy: false`).
+  - The options are a closed list (`permitReservedIps`, `tls`, `allowPlainHttp`), validated like the client's.
+  - New public types `UltraTonSecureAgentOptions` and `UltraTonSecureAgents`. The README lists what the agents cover and what only the full client does (body limits, timeouts, header validation, redirect policy, proxies).
+
 ## [2.2.0] - 2026-10-20
 
 Robustness and corporate networks on the same security model, all additive: form bodies, opt-in retries, HTTP CONNECT and SOCKS5 proxies that tunnel to the validated IP, and public codes for timeouts. No breaking changes. Behaviour changes: `UltraTonNetworkTimeoutError` now carries a `code`; an HTTP/2 stream the server never processed fails with `NGHTTP2_REFUSED_STREAM` instead of an `ERR_HTTP2_*` code; and setting more than one of `json`, `form` and `body` throws a reworded `TypeError`.

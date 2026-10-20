@@ -1,5 +1,5 @@
 import dnsPromises from 'node:dns/promises';
-import { BlockList, isIP } from 'node:net';
+import { BlockList, isIP, type LookupFunction } from 'node:net';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 
 const reservedIps = new BlockList();
@@ -200,6 +200,17 @@ export interface PinnedAddress {
     address: string;
     family: 4 | 6;
 }
+
+/**
+ * A socket `lookup` that answers only with `addresses`, already validated, and never asks DNS again: whichever address
+ * Node connects to, Happy Eyeballs included, is one of them. Answers on the next tick, as a real lookup would.
+ */
+export const pinnedLookup = (addresses: readonly PinnedAddress[]): LookupFunction => (_hostname, options, callback) => {
+    process.nextTick(() => {
+        if (options.all) callback(null, addresses.map(a => ({ ...a })));
+        else callback(null, addresses[0].address, addresses[0].family);
+    });
+};
 
 // The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
 // A network error like a refused connect: the name could not be reached, whatever the reason the resolver gave.

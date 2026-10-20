@@ -6,7 +6,7 @@ import { SecureHttpError } from "../errors.ts";
  * `[::1]`. The WHATWG parser has already lowercased the host and normalized IP literals (`127.1` is `127.0.0.1`,
  * `[0:0::1]` is `[::1]`). A name is only a name: the engines also require every address it resolves to be loopback.
  */
-const isLoopbackHost = (hostname: string): boolean =>
+export const isLoopbackHost = (hostname: string): boolean =>
     hostname === 'localhost' ||
     /^(?:[^.]+\.)+localhost$/.test(hostname) ||
     hostname === '[::1]' ||
