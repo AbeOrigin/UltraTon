@@ -325,6 +325,31 @@ describe('HTTP/2 sessions do not keep the process alive while idle', () => {
     assert.match(stdout, /status=200 body=done/, 'the child waited for the late response');
   });
 
+  it('a server that replies before the upload finishes does not leave the child hanging', { timeout: 30_000 }, async (t) => {
+    const server = createH2Server();
+    server.on('session', (session) => session.on('error', () => {}));
+    server.on('stream', (stream) => {
+      stream.on('error', () => {});
+      // A full response with END_STREAM while the 4 MiB request body is still arriving, and no RST_STREAM after it.
+      stream.respond({ ':status': 200 });
+      stream.end('ok');
+      stream.resume();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    t.after(async () => { server.closeAllConnections?.(); await new Promise<void>((r) => server.close(() => r())); });
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const script = `
+      import { UltraTonClient } from ${JSON.stringify(indexUrl)};
+      const client = new UltraTonClient({ http2: true, permitReservedIps: true });
+      const response = await client.post(${JSON.stringify(url)}, { body: Buffer.alloc(4 * 1024 * 1024, 1) });
+      console.log('status=' + response.statusCode + ' body=' + response.text());
+    `;
+    const { stdout, afterOutputMs, code } = await runChild(script);
+    assert.match(stdout, /status=200 body=ok/);
+    assert.equal(code, 0);
+    assert.ok(afterOutputMs < 2000, `child took ${afterOutputMs}ms to exit after its request finished`);
+  });
+
   it('aborting while the TLS handshake is still pending lets the child exit promptly', { timeout: 30_000 }, async (t) => {
     const sockets: net.Socket[] = [];
     const server = net.createServer((socket) => { sockets.push(socket); socket.on('error', () => {}); /* accepts, never answers */ });
@@ -359,6 +384,7 @@ describe('abandoning a stream whose session is still connecting', () => {
     assert.ok(session, 'a session was opened');
     assert.equal(session.connecting, true, 'the handshake is still pending, so the stream cannot have closed');
     assert.equal(heldStreams(session), 0, 'nothing holds the session any more');
+    assert.equal(session.destroyed, true, 'the session nothing else uses was destroyed');
   });
 });
 

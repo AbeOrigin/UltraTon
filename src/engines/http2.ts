@@ -436,12 +436,23 @@ export class Http2Engine {
         settled = true;
         cleanup();
 
+        // The server finished its response while the request body is still being written (writeFrom stops once
+        // settled): the stream is half-open and would never close, holding the session (and the process) for good.
+        // A complete response ends it cleanly; a failed one cancels.
+        const stopUpload = (code: number) => {
+          if (!stream.writableEnded && !stream.closed && !stream.destroyed) stream.close(code);
+        };
+        const fail = (err: unknown) => {
+          stopUpload(constants.NGHTTP2_CANCEL);
+          reject(err);
+        };
+
         // close() ends a stream whose body is still arriving with a clean NO_ERROR: that is not a complete response.
-        if (this.#closed) return reject(clientClosed());
+        if (this.#closed) return fail(clientClosed());
 
         const expected = declared();
         if (expected !== undefined && totalBytes !== expected) {
-          return reject(lostResponse());
+          return fail(lostResponse());
         }
 
         if (
@@ -450,9 +461,10 @@ export class Http2Engine {
           statusCode === undefined ||
           Number.isNaN(statusCode)
         ) {
-          return reject(this.#orClosed(lostResponse()));
+          return fail(this.#orClosed(lostResponse()));
         }
 
+        stopUpload(constants.NGHTTP2_NO_ERROR);
         resolve(createResponse<T>(statusCode, responseHeaders, Buffer.concat(chunks)));
       });
 
