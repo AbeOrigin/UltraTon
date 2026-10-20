@@ -6,7 +6,9 @@ import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 import http from 'node:http';
-import { createServer as createH2Server, type IncomingHttpHeaders, type ServerHttp2Stream } from 'node:http2';
+import { connect as nativeH2Connect, constants as h2constants, createServer as createH2Server, type ClientHttp2Session, type IncomingHttpHeaders, type ServerHttp2Stream } from 'node:http2';
+import { kSessionManager } from '../src/internal.ts';
+import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
 import type { AddressInfo, Socket } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonNetworkTimeoutError } from '../src/errors.ts';
@@ -303,6 +305,131 @@ for (const http2 of [false, true]) {
         });
     });
 }
+
+/**
+ * An h2c server whose n-th stream (0-based, across sessions) is refused, reset, or hit by a GOAWAY, as `steps` says; the
+ * last step repeats. Server-side resets emit 'error' on the server stream too, which is expected here.
+ */
+type H2Step = 'refuse' | 'internal' | 'goaway' | 'goawayError' | 'goawayCovering' | 'answerThenGoaway' | 'ok';
+async function h2Scripted(t: TestContext, steps: H2Step[]) {
+    let streams = 0;
+    const server = createH2Server().on('stream', (stream: ServerHttp2Stream) => {
+        const step = steps[Math.min(streams++, steps.length - 1)];
+        stream.on('error', () => undefined);
+        stream.resume();
+        const respond = () => { stream.respond({ ':status': 200, 'content-type': 'text/plain' }); stream.end('ok'); };
+        if (step === 'refuse') stream.close(h2constants.NGHTTP2_REFUSED_STREAM);
+        else if (step === 'internal') stream.close(h2constants.NGHTTP2_INTERNAL_ERROR);
+        // The previous stream of the session is the last one processed: this one never will be. (A lastStreamID of 0
+        // cannot be sent: Node raises it to the last stream received.)
+        else if (step === 'goaway') stream.session!.goaway(h2constants.NGHTTP2_NO_ERROR, stream.id! - 2);
+        else if (step === 'goawayError') stream.session!.goaway(h2constants.NGHTTP2_INTERNAL_ERROR, stream.id! - 2);
+        // Covers this stream: it must still complete normally.
+        else if (step === 'goawayCovering') { stream.session!.goaway(h2constants.NGHTTP2_NO_ERROR, stream.id); respond(); }
+        // Answers, then disowns the stream with a GOAWAY below it: a broken (or hostile) server.
+        else if (step === 'answerThenGoaway') {
+            stream.respond({ ':status': 200, 'content-type': 'text/plain' });
+            stream.write('part', () => stream.session!.goaway(h2constants.NGHTTP2_NO_ERROR, stream.id! - 2));
+        }
+        else respond();
+    });
+    const sockets = new Set<Socket>();
+    server.on('connection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+    await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+    t.after(async () => {
+        for (const s of sockets) s.destroy();
+        await new Promise<void>(r => server.close(() => r()));
+    });
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/x`, streams: () => streams };
+}
+
+describe('retry of unprocessed HTTP/2 streams (RFC 9113 8.7)', () => {
+    const REFUSED = { name: 'UltraTonNetworkError', code: 'NGHTTP2_REFUSED_STREAM', message: 'UltraTon: The server did not process the request (REFUSED_STREAM).' };
+
+    it('a REFUSED_STREAM fails with its own code, and is retried', async (t) => {
+        const once = await h2Scripted(t, ['refuse', 'ok']);
+        await assert.rejects(clientOf(t, true).get(once.url), REFUSED);
+
+        const server = await h2Scripted(t, ['refuse', 'ok']);
+        assert.equal((await clientOf(t, true, { retry: 1 }).get(server.url)).statusCode, 200);
+        assert.equal(server.streams(), 2);
+    });
+
+    it('any other reset (INTERNAL_ERROR) is not retried', async (t) => {
+        const server = await h2Scripted(t, ['internal', 'ok']);
+        await assert.rejects(clientOf(t, true, { retry: 3 }).get(server.url), { code: 'ERR_HTTP2_STREAM_ERROR' });
+        assert.equal(server.streams(), 1);
+    });
+
+    it('a stream above the last one a GOAWAY processed fails as refused, with or without an error code', async (t) => {
+        for (const step of ['goaway', 'goawayError'] as const) {
+            const server = await h2Scripted(t, ['ok', step, 'ok']);
+            const client = clientOf(t, true);
+            assert.equal((await client.get(server.url)).text(), 'ok');
+            await assert.rejects(client.get(server.url), REFUSED, step);
+        }
+    });
+
+    it('is retried on a new session after a GOAWAY, with or without an error code', async (t) => {
+        for (const step of ['goaway', 'goawayError'] as const) {
+            const server = await h2Scripted(t, ['ok', step, 'ok']);
+            const client = clientOf(t, true, { retry: 1, timeoutMs: 5000 });
+            await client.get(server.url);
+            const res = await client.get(server.url);
+            assert.equal(res.statusCode, 200, step);
+            assert.equal(res.text(), 'ok');
+            assert.equal(server.streams(), 3, step);
+        }
+    });
+
+    it('a stream already answered is never taken for refused, even if a GOAWAY disowns it', async (t) => {
+        const server = await h2Scripted(t, ['ok', 'answerThenGoaway', 'ok']);
+        const client = clientOf(t, true, { timeoutMs: 3000 });
+        await client.post(server.url, { json: {} });
+        await assert.rejects(
+            client.post(server.url, { json: {}, retry: { limit: 1, methods: ['POST'] } }),
+            (err: any) => err.code !== 'NGHTTP2_REFUSED_STREAM',
+        );
+        assert.equal(server.streams(), 2);
+    });
+
+    it('a stream the GOAWAY covers still completes', async (t) => {
+        const server = await h2Scripted(t, ['goawayCovering', 'ok']);
+        const client = clientOf(t, true);
+        assert.equal((await client.get(server.url)).text(), 'ok');
+        // The retired session is replaced by a new one for the next request.
+        assert.equal((await client.get(server.url)).text(), 'ok');
+        assert.equal(server.streams(), 2);
+    });
+
+    it('watches GOAWAY with one listener per session, however many streams are in flight', async (t) => {
+        const server = await h2Scripted(t, ['ok']);
+        const warnings: Error[] = [];
+        const onWarning = (w: Error) => warnings.push(w);
+        process.on('warning', onWarning);
+        t.after(() => process.off('warning', onWarning));
+        const connect = t.mock.fn(nativeH2Connect);
+        const client = new UltraTonClient({ http2: true, permitReservedIps: true, [kSessionManager]: new Http2SessionManager({}, connect) } as any);
+        t.after(() => client.close());
+        const before = await Promise.all(Array.from({ length: 20 }, () => client.get(server.url)));
+        assert.ok(before.every(res => res.statusCode === 200));
+        assert.equal(connect.mock.callCount(), 1);
+        const session = connect.mock.calls[0].result as ClientHttp2Session;
+        const listeners = session.listenerCount('goaway');
+        await Promise.all(Array.from({ length: 20 }, () => client.get(server.url)));
+        assert.equal(session.listenerCount('goaway'), listeners);
+        assert.ok(listeners <= 2, `${listeners} goaway listeners`);
+        await new Promise(r => setImmediate(r));
+        assert.deepEqual(warnings.filter(w => w.name === 'MaxListenersExceededWarning'), []);
+    });
+
+    it('POST is still only retried when listed', async (t) => {
+        const server = await h2Scripted(t, ['refuse', 'ok']);
+        await assert.rejects(clientOf(t, true, { retry: 2 }).post(server.url, { json: {} }), REFUSED);
+        const listed = await h2Scripted(t, ['refuse', 'ok']);
+        assert.equal((await clientOf(t, true).post(listed.url, { json: {}, retry: { limit: 1, methods: ['POST'] } })).statusCode, 200);
+    });
+});
 
 describe('retry option validation', () => {
     const url = 'https://example.com/';

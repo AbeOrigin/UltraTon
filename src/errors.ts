@@ -30,6 +30,12 @@ export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
 /** `timeoutMs` ran out. Never retried: the budget it measures covers every attempt. */
 export const absoluteTimeout = (timeoutMs: number) =>
     new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`, { code: 'ERR_ULTRATON_TIMEOUT' });
+/**
+ * HTTP/2: the server never processed the request, so sending it again is safe (RFC 9113 8.7). Either it reset the
+ * stream with REFUSED_STREAM before answering, or a GOAWAY left the stream above its last processed one.
+ */
+export const refusedStream = (cause?: unknown) =>
+    new UltraTonNetworkError('UltraTon: The server did not process the request (REFUSED_STREAM).', { code: 'NGHTTP2_REFUSED_STREAM', cause });
 /** No bytes arrived for `socketTimeoutMs`. */
 export const idleTimeout = (socketTimeoutMs: number) =>
     new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`, { code: 'ERR_ULTRATON_SOCKET_TIMEOUT' });
