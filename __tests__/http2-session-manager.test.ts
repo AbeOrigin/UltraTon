@@ -22,6 +22,8 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         closed: false,
         destroyed: false,
         setTimeout: () => {},
+        ref: () => {},
+        unref: () => {},
         close() { this.closed = true; this.emit('close'); },
         destroy() { this.destroyed = true; }
     });

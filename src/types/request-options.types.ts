@@ -30,7 +30,9 @@ export interface UltraTonRequestOptions {
     readonly auth?: string;
 
     /**
-     * Aborts the request when the signal fires.
+     * Aborts the request when the signal fires, in any phase (before connecting, while connecting or resolving DNS,
+     * waiting for the response, or mid-body). The request rejects with `signal.reason`, which is a DOMException
+     * `AbortError` when `abort()` was called without a reason. A signal that is already aborted rejects without connecting.
      */
     readonly signal?: AbortSignal;
 
@@ -41,8 +43,9 @@ export interface UltraTonRequestOptions {
     readonly maxBodySize?: number;
 
     /**
-     * The maximum time to wait for the socket to connect in milliseconds.
-     * Default is 10000ms.
+     * The maximum time the connection may stay idle, in milliseconds: no bytes received for that long rejects with
+     * `UltraTonNetworkTimeoutError`. On HTTP/1 it is the socket's idle time; on HTTP/2 it is per stream.
+     * `0` disables it. Default is 10000ms.
      */
     readonly socketTimeoutMs?: number;
 

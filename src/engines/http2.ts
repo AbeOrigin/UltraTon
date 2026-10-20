@@ -7,6 +7,7 @@ import type {
   OutgoingHttpHeaders,
 } from "node:http2";
 import type { UltraTonResponse } from "../types/request-response.ts";
+import { holdSession } from "./http2-session-manager.ts";
 import type { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
   ResolvedRequestOptions,
@@ -83,6 +84,8 @@ export class Http2Engine {
 
     while (true) {
       if (this.#closed) throw clientClosed();
+      // Before anything is resolved or opened; throws the signal's reason (an AbortError when it had none).
+      reqOpts.signal?.throwIfAborted();
       const parsedUrl = parseSafeUrl(currentUrl);
       const origin = parsedUrl.origin;
       const path = parsedUrl.pathname + parsedUrl.search;
@@ -137,6 +140,8 @@ export class Http2Engine {
         remainingMs,
         reqOpts.timeoutMs,
         reqOpts.maxBodySize,
+        reqOpts.socketTimeoutMs,
+        reqOpts.signal,
       );
 
       const statusCode = response.statusCode;
@@ -237,11 +242,13 @@ export class Http2Engine {
     reqOpts: SecureUltraTonRequestOptions,
     remainingMs: number,
   ): Promise<ClientHttp2Session> {
+    const callerSignal = reqOpts.signal;
     if (remainingMs <= 0) {
       return this.#sessionManager.getSession(
         origin,
         undefined,
         reqOpts.permitReservedIps,
+        callerSignal,
       );
     }
 
@@ -258,7 +265,10 @@ export class Http2Engine {
         origin,
         undefined,
         reqOpts.permitReservedIps,
-        controller.signal,
+        // Whichever fires first: the budget or the caller. The rejection carries that signal's own reason.
+        callerSignal
+          ? AbortSignal.any([controller.signal, callerSignal])
+          : controller.signal,
       );
     } finally {
       clearTimeout(timer);
@@ -286,8 +296,13 @@ export class Http2Engine {
     remainingMs: number,
     timeoutMs: number,
     maxBodySize: number,
+    socketTimeoutMs: number,
+    signal: AbortSignal | undefined,
   ): Promise<UltraTonResponse<T>> {
     return new Promise((resolve, reject) => {
+      // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
+      if (signal?.aborted) return reject(signal.reason);
+
       let settled = false;
       let statusCode: number | undefined;
       let responseHeaders: IncomingHttpHeaders = {};
@@ -305,12 +320,17 @@ export class Http2Engine {
         return reject(this.#orClosed(toNetworkError(err)));
       }
 
+      // Holds the session (and so the process) for as long as the stream lives; 'close' always fires, so it always lets go.
+      const release = holdSession(session);
+      stream.once("close", release);
+
       // remainingMs is what is left of the shared budget; timeoutMs is the configured total, for the message.
       const streamTimer =
         remainingMs > 0
           ? setTimeout(() => {
             if (settled) return;
             settled = true;
+            cleanup();
             stream.close(constants.NGHTTP2_CANCEL);
             reject(
               new UltraTonNetworkTimeoutError(
@@ -320,14 +340,51 @@ export class Http2Engine {
           }, remainingMs)
           : undefined;
 
+      // socketTimeoutMs: no bytes received for that long closes the stream (0 disables it). Reset by every chunk.
+      let idleTimer: NodeJS.Timeout | undefined;
+      const armIdleTimer = () => {
+        if (socketTimeoutMs <= 0) return;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          stream.close(constants.NGHTTP2_CANCEL);
+          reject(
+            new UltraTonNetworkTimeoutError(
+              `UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`,
+            ),
+          );
+        }, socketTimeoutMs);
+      };
+
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        stream.close(constants.NGHTTP2_CANCEL);
+        reject(signal!.reason);
+      };
+
+      // Stops every timer and listener this stream armed; runs on every path that settles the promise.
+      const cleanup = () => {
+        clearTimeout(streamTimer);
+        clearTimeout(idleTimer);
+        signal?.removeEventListener("abort", onAbort);
+      };
+
+      signal?.addEventListener("abort", onAbort, { once: true });
+      armIdleTimer();
+
       stream.on("response", (headers) => {
         if (settled) return;
+        armIdleTimer();
         statusCode = Number(headers[":status"]);
         responseHeaders = headers;
 
         if (pseudoHeaders[":method"] === "HEAD") {
           settled = true;
-          clearTimeout(streamTimer);
+          cleanup();
           stream.close();
 
           return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
@@ -337,10 +394,11 @@ export class Http2Engine {
       let totalBytes = 0;
       stream.on("data", (chunk: Buffer) => {
         if (settled) return;
+        armIdleTimer();
         totalBytes += chunk.length;
         if (totalBytes > maxBodySize) {
           settled = true;
-          clearTimeout(streamTimer);
+          cleanup();
           stream.close(constants.NGHTTP2_CANCEL);
           reject(
             new UltraTonMemoryError(
@@ -364,7 +422,7 @@ export class Http2Engine {
       stream.on("end", () => {
         if (settled) return;
         settled = true;
-        clearTimeout(streamTimer);
+        cleanup();
 
         // close() ends a stream whose body is still arriving with a clean NO_ERROR: that is not a complete response.
         if (this.#closed) return reject(clientClosed());
@@ -389,7 +447,7 @@ export class Http2Engine {
       stream.on("error", (err: Error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(streamTimer);
+        cleanup();
         // A session that dies (e.g. ECONNREFUSED while connecting) cancels its streams with a generic
         // ERR_HTTP2_STREAM_CANCEL whose cause is the real error: report that one.
         const { code, cause } = err as NodeJS.ErrnoException;
@@ -407,7 +465,7 @@ export class Http2Engine {
       stream.on("close", () => {
         if (settled) return;
         settled = true;
-        clearTimeout(streamTimer);
+        cleanup();
         reject(this.#orClosed(lostResponse()));
       });
 

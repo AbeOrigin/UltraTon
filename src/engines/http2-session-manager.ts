@@ -80,6 +80,29 @@ const bareHostOf = (hostname: string): string => {
   return bareHost.replace(/^\[|\]$/g, "");
 };
 
+/** Streams in flight per session, for `holdSession`. */
+const activeStreams = new WeakMap<ClientHttp2Session, number>();
+
+/**
+ * Keeps the process alive for as long as a request is using `session`: the first holder `ref()`s it and the last one to
+ * release it `unref()`s it again. A pooled session with nothing in flight does not hold the process open, so a script
+ * that never calls `close()` exits when its work is done instead of waiting out the session's idle timeout.
+ * @returns A function that releases the hold; calling it more than once does nothing.
+ */
+export function holdSession(session: ClientHttp2Session): () => void {
+  const count = activeStreams.get(session) ?? 0;
+  activeStreams.set(session, count + 1);
+  if (count === 0 && !session.destroyed) session.ref();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (activeStreams.get(session) ?? 1) - 1;
+    activeStreams.set(session, left);
+    if (left === 0 && !session.destroyed) session.unref();
+  };
+}
+
 export class Http2SessionManager {
   #sessions: Map<string, SessionEntry> = new Map();
   /** Sessions that got a GOAWAY: out of the pool, finishing their streams, still closed by closeAll(). Value: pool key. */
@@ -308,6 +331,8 @@ export class Http2SessionManager {
     newSession.on("error", () => this.#destroySession(key, newSession));
 
     newSession.setTimeout(IDLE_TIMEOUT);
+    // Idle until a request holds it (holdSession): a pooled session must not keep the process alive by itself.
+    newSession.unref();
     // A GOAWAY lets the streams it covers finish: destroying the session here would end them early, and a stream
     // whose body was cut could look complete. Take it out of the pool so new requests open a fresh session, and close
     // it gracefully (Node also destroys it by itself when the GOAWAY carries an error code).

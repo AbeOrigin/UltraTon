@@ -38,6 +38,8 @@ interface MockSession extends EventEmitter {
   close(): void;
   destroy(): void;
   setTimeout(ms: number): void;
+  ref(): void;
+  unref(): void;
   request(_headers: unknown): MockStream;
 }
 
@@ -65,6 +67,8 @@ const createMockSession = (streamFactory: () => MockStream): MockSession => {
     session.destroyed = true;
   };
   session.setTimeout = () => {};
+  session.ref = () => {};
+  session.unref = () => {};
   session.request = () => streamFactory();
   return session;
 };

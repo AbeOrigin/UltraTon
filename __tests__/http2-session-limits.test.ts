@@ -39,6 +39,7 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
     const mockSession = {
       on: mock.fn(),
       setTimeout: mock.fn(),
+      unref: mock.fn(),
       closed: false,
       destroyed: false,
     } as unknown as ClientHttp2Session;
@@ -76,6 +77,7 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
     const mockSession = {
       on: mock.fn(),
       setTimeout: mock.fn(),
+      unref: mock.fn(),
       closed: false,
       destroyed: false,
     } as unknown as ClientHttp2Session;

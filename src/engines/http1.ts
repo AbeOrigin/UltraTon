@@ -85,13 +85,11 @@ export class Http1Engine {
             }
         } catch (err: unknown) {
             if (err instanceof UltraTonMemoryError) throw err;
+            // A caller abort is not a network fault: it surfaces as the signal's own reason, like before the body started.
+            if (reqOpts.signal?.aborted) throw reqOpts.signal.reason;
             // close() destroyed the socket mid-body: say so instead of reporting a reset connection.
             if (this.#closed) throw clientClosed();
             const code = (err as NodeJS.ErrnoException | undefined)?.code;
-            // A caller abort is not a network fault: keep it a plain SecureHttpError, as before.
-            if ((err as Error | undefined)?.name === 'AbortError') {
-                throw new SecureHttpError('UltraTon: The incoming network stream was closed prematurely.', { cause: err, code: typeof code === 'string' ? code : undefined });
-            }
             // A socket error with a code (ECONNRESET, ERR_STREAM_PREMATURE_CLOSE, ...) maps like any other network error;
             // a stream that just ends early has none, which is a reset connection as far as the caller is concerned.
             if (typeof code === 'string') throw toNetworkError(err);
@@ -193,7 +191,8 @@ export class Http1Engine {
                 clearTimeout(executionTimer);
                 // close() destroyed the socket: that is the reason, not the reset it causes.
                 // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
-                reject(this.#closed ? clientClosed() : toNetworkError(err));
+                // A caller abort is reported as the signal's reason (Node's own AbortError only wraps it).
+                reject(reqOpts.signal?.aborted ? reqOpts.signal.reason : this.#closed ? clientClosed() : toNetworkError(err));
             });
 
             req.end(body);
@@ -213,6 +212,8 @@ export class Http1Engine {
 
         while (true) {
             if (this.#closed) throw clientClosed();
+            // Before anything is resolved or opened; throws the signal's reason (an AbortError when it had none).
+            reqOpts.signal?.throwIfAborted();
             const urlObj: URL = parseSafeUrl(currentUrl);
 
             // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.

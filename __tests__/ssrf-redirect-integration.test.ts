@@ -387,6 +387,7 @@ describe('UltraTonClient - network errors are actionable and never echo addresse
             await assert.rejects(pending, (err: unknown) => {
                 assert.ok(!(err instanceof UltraTonNetworkError), 'abort must stay an AbortError');
                 assert.equal((err as Error).name, 'AbortError');
+                assert.strictEqual(err, controller.signal.reason, 'the rejection is the signal reason itself');
                 return true;
             });
         } finally {

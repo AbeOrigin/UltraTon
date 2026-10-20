@@ -179,6 +179,8 @@ const fakeSession = () =>
     closed: false,
     destroyed: false,
     setTimeout: () => {},
+    ref: () => {},
+    unref: () => {},
     close() {
       this.closed = true;
       this.emit("close");
