@@ -76,6 +76,6 @@ These are accepted and documented. Reports about them are not vulnerabilities (s
 5. `src/engines/http2-session-manager.ts` and `src/engines/http2.ts`: session pooling and reuse across policies, GOAWAY and refused streams, PING liveness.
 6. `src/helpers/body-reader.ts`: the limits on decoded bytes, truncation detection.
 
-**Running the tests:** `npm ci && npm test` (Node ≥ 22.12). The suite preloads a guard that refuses any connection outside loopback, so nothing leaves the machine. `compat/` has the third-party client tests (see its README).
+**Running the tests:** `npm ci && npm test` (Node ≥ 22.12). The property tests in `__tests__/fuzz/` cover the `baseUrl` check, IPv6 parsing, header validation and both proxy handshakes; run more cases with `FUZZ_RUNS=5000` and another seed with `FUZZ_SEED=<n>`. The suite preloads a guard that refuses any connection outside loopback, so nothing leaves the machine. `compat/` has the third-party client tests (see its README).
 
 **Reporting:** privately, as described in [SECURITY.md](SECURITY.md).

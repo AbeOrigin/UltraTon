@@ -1,0 +1,38 @@
+# Nightly property tests (__tests__/fuzz) with many runs and a fresh seed. npm test runs the same properties with
+# 200 runs and a fixed seed on every PR. A failure prints the command that replays it locally:
+# FUZZ_SEED=<seed + run> FUZZ_RUNS=1 npm test
+name: Nightly fuzz
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: Property tests (5000 runs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 24.x
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci --ignore-scripts
+
+    - name: Run the properties
+      run: node --import ./__tests__/fixtures/loopback-only.ts --test "__tests__/fuzz/*.test.ts"
+      env:
+        FUZZ_RUNS: '5000'
+        FUZZ_SEED: ${{ github.run_id }}

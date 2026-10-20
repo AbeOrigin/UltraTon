@@ -143,3 +143,17 @@ for (const http2 of [false, true]) {
         });
     });
 }
+
+describe('header keys that name the prototype, in any case', () => {
+    it('are dropped, never assigned as the prototype of the sanitized headers', async () => {
+        const { buildSafeRequestOptions } = await import('../src/helpers/request-options.ts');
+        for (const key of ['__PROTO__', '__Proto__', 'CONSTRUCTOR', 'Prototype', '__proto__']) {
+            const headers = buildSafeRequestOptions({ headers: { [key]: ['evil: 1'] } as any }).headers as object;
+            assert.equal(Object.getPrototypeOf(headers), Object.prototype, key);
+            assert.deepEqual(Object.keys(headers), [], key);
+            const inherited: string[] = [];
+            for (const k in headers) inherited.push(k);
+            assert.deepEqual(inherited, [], key);
+        }
+    });
+});
