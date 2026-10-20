@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 
+/** A complete response, whatever its status code. `T` is the default type of `json()`. */
 export interface UltraTonResponse<T = unknown> {
     /**
      * The HTTP status code of the response (e.g., 200, 404, 500). Always a number: a connection that fails

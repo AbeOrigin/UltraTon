@@ -137,30 +137,45 @@ export class UltraTonClient {
             : new Http1Engine(resolved.tls, own(kTransport));
     }
 
+    /**
+     * Sends a GET request. Every method works the same way; only the HTTP method differs.
+     * @param url - An absolute `https:` URL (plain `http:` only to loopback), or a relative path when `baseUrl` is set.
+     * @param options - Per-request options; they override the client's defaults. See {@link UltraTonRequestOptions}.
+     * @returns The response, for any status code: check `ok` or `statusCode`. Not-followed redirects resolve too.
+     * @throws {TypeError} Before connecting, on an invalid option or URL, or a path that escapes `baseUrl`.
+     * @throws {SecureHttpError} On a policy rejection (`code` `ERR_ULTRATON_*`), or a subclass: network failure,
+     *   timeout, `maxBodySize` or `maxRedirects` exceeded. An abort rejects with `signal.reason`.
+     */
     public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('GET', url, options);
     }
 
+    /** Sends a POST request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('POST', url, options);
     }
 
+    /** Sends a PUT request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('PUT', url, options);
     }
 
+    /** Sends a PATCH request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('PATCH', url, options);
     }
 
+    /** Sends a DELETE request. See {@link UltraTonClient.get}. */
     public async delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('DELETE', url, options);
     }
 
+    /** Sends a HEAD request. Cannot have a body; `data` is empty. See {@link UltraTonClient.get}. */
     public async head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('HEAD', url, options);
     }
 
+    /** Sends an OPTIONS request. See {@link UltraTonClient.get}. */
     public async options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
         return this.#request<T>('OPTIONS', url, options);
     }
