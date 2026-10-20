@@ -9,8 +9,12 @@ on:
     - cron: '41 5 * * 1'
   pull_request:
     branches: [ "main" ]
+    # The harness, the pinned clients and UltraTon itself: any of them can move the numbers.
     paths:
       - 'compat/bench/**'
+      - 'compat/package.json'
+      - 'compat/package-lock.json'
+      - 'src/**'
       - '.github/workflows/bench.yml'
 
 permissions:
