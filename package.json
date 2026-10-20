@@ -3,7 +3,7 @@
   "version": "1.0.3",
   "type": "module",
   "description": "Ultra safe HTTP client for critical environments in Node.js",
-  "homepage":"https://abeorigin.github.io/UltraTon/",
+  "homepage": "https://abeorigin.github.io/UltraTon/",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AbeOrigin/UltraTon.git"
@@ -11,36 +11,43 @@
   "bugs": {
     "url": "https://github.com/AbeOrigin/UltraTon/issues"
   },
-  "main": "./dist/http-client.js",
-  "types": "./dist/http-client.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/http-client.js",
-      "types": "./dist/http-client.d.ts"
-    }
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"import('node:fs').then(f=>f.rmSync('dist',{recursive:true,force:true,maxRetries:3,retryDelay:100}))\" && tsc",
     "build:strict": "tsc --noEmit --strict",
     "test": "node --test __tests__/**/*.test.ts",
-    "prepublishOnly": "npm run test && npm run build",
+    "test:package": "node scripts/smoke-package.mjs",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test && npm run test:package",
+    "lint:package": "publint --strict && attw --pack . --profile esm-only",
     "demo:http2:server": "node demo/http2.server.ts",
     "demo:http2:client": "node demo/http2.client.ts",
     "demo:server": "node demo/server.ts",
     "demo:client": "node demo/client.ts"
   },
   "engines": {
-    "node": ">=24.14.0"
+    "node": ">=22.12.0"
   },
   "files": [
     "dist",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.4.0"
+    "@arethetypeswrong/cli": "0.18.5",
+    "@types/node": "^22",
+    "publint": "0.3.25",
+    "typescript": "~5.9.3"
   }
 }

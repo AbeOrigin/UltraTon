@@ -4,7 +4,6 @@ dist/
 *.log
 coverage/
 .env
-CHANGELOG.md
 task.md
 
 # Agent Tooling
