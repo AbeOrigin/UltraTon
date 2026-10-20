@@ -284,7 +284,13 @@ export class Http2SessionManager {
     // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
     // timeout (c-ares), not done here because it ignores /etc/hosts.
     // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
-    const addresses = await resolveAndPinAll(bareHost, permitReservedIps);
+    // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback.
+    const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
+    const addresses = await resolveAndPinAll(
+      bareHost,
+      permitReservedIps,
+      connectUrl.startsWith("http://"),
+    );
 
     const {
       // Each of these would let the socket go somewhere other than the validated addresses.
@@ -340,7 +346,6 @@ export class Http2SessionManager {
 
     // The origin itself (scheme, name, port): http2.connect hands the name, the options and so `lookup` to
     // net.connect (h2c) or tls.connect, where autoSelectFamily (on by default) races the validated addresses.
-    const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
 
     let newSession: ClientHttp2Session;
     try {

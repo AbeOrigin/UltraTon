@@ -51,6 +51,29 @@ export function isReservedIp(ip: string): boolean {
     return reservedIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
 }
 
+// What plain http may reach: 127.0.0.0/8 (BlockList also matches it against the IPv4-mapped ::ffff:127.0.0.0/104
+// forms) and ::1. Deliberately not the other IPv4 embeddings (::7f00:1, 64:ff9b::7f00:1): they are not loopback.
+const loopbackIps = new BlockList();
+loopbackIps.addSubnet('127.0.0.0', 8, 'ipv4');
+loopbackIps.addAddress('::1', 'ipv6');
+
+export function isLoopbackIp(ip: string): boolean {
+    const family = isIP(ip);
+    if (family === 0) return false;
+
+    return loopbackIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+}
+
+/**
+ * Throws unless `ip` is a loopback address. Plain http is accepted only for loopback names, but a name such as
+ * `api.localhost` is resolved like any other and a resolver may answer it with any address: without this check a
+ * spoofed or forwarded answer would receive the request, credentials included, in cleartext. Names neither the IP
+ * nor the hostname. It does not replace the reserved-IP policy: loopback still needs `permitReservedIps`.
+ */
+export function assertLoopbackIp(ip: string): void {
+    if (!isLoopbackIp(ip)) throw new SecureHttpError('UltraTon: Plain http is only allowed to loopback addresses.');
+}
+
 /**
  * What a caller may reach among the reserved addresses: `true` allows all of them, `false` (or `[]`) none, and a list
  * allows only the IPs/CIDRs it names, plus any address reached through a hostname it names (exact, no wildcards).
@@ -184,10 +207,12 @@ const resolutionFailed = (code: string) =>
  * whole lookup is rejected (fail closed), so a caller that lets Node pick any address of the result (Happy Eyeballs)
  * can only ever reach validated ones. An empty answer, or an entry that is not an IP address, is a resolution failure.
  * An IP literal is judged as itself and never resolved, like Node itself never resolves one.
+ * With `plainHttp` (the hop is `http:`) every address must also be loopback (see `assertLoopbackIp`).
  */
-export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolicy = false): Promise<PinnedAddress[]> {
+export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolicy = false, plainHttp = false): Promise<PinnedAddress[]> {
     const literal = isIP(hostname);
     if (literal !== 0) {
+        if (plainHttp) assertLoopbackIp(hostname);
         assertAllowedIp(hostname, policy, hostname);
         return [{ address: hostname, family: literal as 4 | 6 }];
     }
@@ -206,6 +231,8 @@ export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolic
         pinned.push({ address: address as string, family: family as 4 | 6 });
     }
     // Only once the whole answer is known to be well formed, and before anything is returned: all of it, or nothing.
+    // The loopback rule first, over the whole answer: a non-loopback address over http is refused as such, whatever the policy.
+    if (plainHttp) for (const { address } of pinned) assertLoopbackIp(address);
     for (const { address } of pinned) assertAllowedIp(address, policy, hostname);
     return pinned;
 }

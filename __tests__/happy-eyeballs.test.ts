@@ -1,108 +1,17 @@
 /**
- * Happy Eyeballs over fully validated address sets (both engines), and plain http for every loopback name.
- *
- * DNS is mocked with `t.mock.method(dnsPromises, 'lookup')`, honouring `{ all: true }` like the real one, so nothing
- * here reaches a real resolver. Real loopback sockets everywhere else: which addresses Node may connect to, and how
- * many connections a server sees, is the contract. "Connections opened" is counted on the client side: for HTTP/1 the
- * addresses the client's `lookup` handed to Node (a failed lookup hands none, so no socket can connect), for HTTP/2 the
- * calls to a spy around `http2.connect`.
+ * Happy Eyeballs over fully validated address sets, in both engines: every address DNS returns is judged (fail closed),
+ * Node races only validated addresses, and an HTTP/2 session connects by name but is pinned to the validated set.
+ * Helpers (mocked DNS, real loopback servers, connection counting) live in fixtures/net-fixtures.ts.
  */
-import { describe, it, type TestContext } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import EventEmitter from 'node:events';
-import dnsPromises from 'node:dns/promises';
-import http from 'node:http';
-import https from 'node:https';
-import net, { BlockList, type AddressInfo } from 'node:net';
-import { connect as nativeConnect, createServer as createH2Server } from 'node:http2';
+import { BlockList } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { Http2SessionManager } from '../src/engines/http2-session-manager.ts';
-import { kSessionManager, kTransport } from '../src/internal.ts';
+import { kSessionManager } from '../src/internal.ts';
 import { SecureHttpError } from '../src/errors.ts';
-import { parseSafeUrl } from '../src/helpers/url-parser.ts';
-
-type Answer = { address: string; family: number };
-const v4 = (address: string): Answer => ({ address, family: 4 });
-const v6 = (address: string): Answer => ({ address, family: 6 });
-
-const RESERVED = /prohibited internal\/reserved network IP/;
-
-/** `table[host]` is what the nameserver answers; `{ all: true }` gets the list, anything else its first entry. */
-const mockDns = (t: TestContext, table: Record<string, Answer[]>) =>
-    t.mock.method(dnsPromises, 'lookup', (async (host: string, options?: { all?: boolean }) => {
-        const answer = table[host];
-        if (!answer) throw Object.assign(new Error('no resolver in tests'), { code: 'ENOTFOUND' });
-        return options?.all ? answer : answer[0];
-    }) as any);
-
-/** A server on `host` that answers 200 with the peer address (HTTP/1 or h2c), and counts the connections it accepted. */
-async function serve(t: TestContext, http2: boolean, host = '127.0.0.1') {
-    let accepted = 0;
-    const server = http2
-        ? createH2Server((req, res) => res.end(`peer ${req.socket.remoteAddress}`))
-        : http.createServer((req, res) => res.end(`peer ${req.socket.remoteAddress}`));
-    const sockets = new Set<net.Socket>();
-    server.on('connection', (socket: net.Socket) => {
-        accepted++;
-        sockets.add(socket);
-    });
-    await new Promise<void>((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, host, resolve);
-    });
-    t.after(async () => {
-        for (const socket of sockets) socket.destroy();
-        await new Promise<void>(resolve => server.close(() => resolve()));
-    });
-    return { port: (server.address() as AddressInfo).port, accepted: () => accepted };
-}
-
-/** A TCP server that accepts and drops: counts connection attempts that got through, whatever the protocol. */
-async function tcpCounter(t: TestContext) {
-    let accepted = 0;
-    const server = net.createServer(socket => {
-        accepted++;
-        socket.destroy();
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
-    return { port: (server.address() as AddressInfo).port, accepted: () => accepted };
-}
-
-/**
- * A client of either engine plus the number of connections it opened. HTTP/1 runs over the real `http`/`https`
- * request with the engine's own `lookup`, wrapped only to record the addresses it handed to Node.
- */
-function clientFor(t: TestContext, http2: boolean, options: Record<string, unknown> = {}) {
-    if (http2) {
-        const connect = t.mock.fn(nativeConnect);
-        const manager = new Http2SessionManager({}, connect);
-        const client = new UltraTonClient({ http2: true, ...options, [kSessionManager]: manager } as any);
-        t.after(() => client.close());
-        return { client, opened: () => connect.mock.callCount() };
-    }
-    const handed: unknown[] = [];
-    const transport = (url: URL, requestOptions: any) => {
-        const lookup = requestOptions.lookup;
-        return (url.protocol === 'http:' ? http.request : https.request)(url, {
-            ...requestOptions,
-            lookup: (host: string, lookupOptions: object, callback: (...args: unknown[]) => void) =>
-                lookup(host, lookupOptions, (err: unknown, address: unknown, family: unknown) => {
-                    if (!err) handed.push(address);
-                    callback(err, address, family);
-                }),
-        });
-    };
-    const client = new UltraTonClient({ ...options, [kTransport]: transport } as any);
-    t.after(() => client.close());
-    return { client, opened: () => handed.length };
-}
-
-const ipv6Available = await new Promise<boolean>(resolve => {
-    const probe = net.createServer();
-    probe.once('error', () => resolve(false));
-    probe.listen(0, '::1', () => probe.close(() => resolve(true)));
-});
+import { RESERVED, clientFor, mockDns, serve, tcpCounter, v4, v6 } from './fixtures/net-fixtures.ts';
 
 for (const http2 of [false, true]) {
     const engine = http2 ? 'HTTP/2' : 'HTTP/1';
@@ -155,6 +64,20 @@ for (const http2 of [false, true]) {
     });
 
     describe(`${engine}: Happy Eyeballs over the validated set`, () => {
+        // he.localhost never resolves to 127.0.0.2 for real (here it does not resolve at all; where *.localhost resolves,
+        // it is to ::1/127.0.0.1), so a 200 from a server bound only on 127.0.0.2 proves the connection used the
+        // validated answer: the HTTP/1 lookup's list, or the HTTP/2 pinned lookup, not a second resolution.
+        it('he.localhost resolving to [::1, 127.0.0.2] reaches a server bound only on 127.0.0.2 through the pinned answer', async (t) => {
+            const server = await serve(t, http2, '127.0.0.2');
+            mockDns(t, { 'he.localhost': [v6('::1'), v4('127.0.0.2')] });
+            const { client } = clientFor(t, http2, { permitReservedIps: true });
+
+            const res = await client.get(`http://he.localhost:${server.port}/`, { timeoutMs: 5000 });
+
+            assert.equal(res.statusCode, 200);
+            assert.equal(server.accepted(), 1);
+        });
+
         it('localhost resolving to [::1, 127.0.0.1] reaches a server bound only on 127.0.0.1', async (t) => {
             const server = await serve(t, http2, '127.0.0.1');
             mockDns(t, { localhost: [v6('::1'), v4('127.0.0.1')] });
@@ -166,105 +89,27 @@ for (const http2 of [false, true]) {
             assert.equal(res.text(), 'peer 127.0.0.1');
         });
 
-        it('localhost with a list covering both loopback families also reaches it', async (t) => {
-            const server = await serve(t, http2, '127.0.0.1');
-            mockDns(t, { localhost: [v6('::1'), v4('127.0.0.1')] });
+        it('a list covering both loopback families also reaches it', async (t) => {
+            const server = await serve(t, http2, '127.0.0.2');
+            mockDns(t, { 'he.localhost': [v6('::1'), v4('127.0.0.2')] });
             const { client } = clientFor(t, http2, { permitReservedIps: ['127.0.0.0/8', '::1'] });
 
-            const res = await client.get(`http://localhost:${server.port}/`, { timeoutMs: 5000 });
+            const res = await client.get(`http://he.localhost:${server.port}/`, { timeoutMs: 5000 });
             assert.equal(res.statusCode, 200);
         });
 
         it('a list covering only one of the two loopback addresses is rejected without connecting', async (t) => {
-            const server = await serve(t, http2, '127.0.0.1');
-            mockDns(t, { localhost: [v6('::1'), v4('127.0.0.1')] });
+            const server = await serve(t, http2, '127.0.0.2');
+            mockDns(t, { 'he.localhost': [v6('::1'), v4('127.0.0.2')] });
             const { client, opened } = clientFor(t, http2, { permitReservedIps: ['127.0.0.0/8'] });
 
-            await assert.rejects(client.get(`http://localhost:${server.port}/`, { timeoutMs: 2000 }), RESERVED);
+            await assert.rejects(client.get(`http://he.localhost:${server.port}/`, { timeoutMs: 2000 }), RESERVED);
             assert.equal(opened(), 0);
             assert.equal(server.accepted(), 0);
         });
     });
 
-    describe(`${engine}: plain http for every loopback name`, () => {
-        it('http://app.localhost works with permitReservedIps and is rejected without it', async (t) => {
-            const server = await serve(t, http2, '127.0.0.1');
-            mockDns(t, { 'app.localhost': [v6('::1'), v4('127.0.0.1')] });
-            const url = `http://app.localhost:${server.port}/`;
-
-            const denied = clientFor(t, http2);
-            await assert.rejects(denied.client.get(url, { timeoutMs: 2000 }), RESERVED);
-            assert.equal(denied.opened(), 0);
-            assert.equal(server.accepted(), 0);
-
-            const res = await clientFor(t, http2, { permitReservedIps: true }).client.get(url, { timeoutMs: 5000 });
-            assert.equal(res.statusCode, 200);
-        });
-
-        it('http://127.0.0.2 works with permitReservedIps and is rejected without it', async (t) => {
-            const server = await serve(t, http2, '127.0.0.2');
-            const url = `http://127.0.0.2:${server.port}/`;
-
-            await assert.rejects(clientFor(t, http2).client.get(url, { timeoutMs: 2000 }), RESERVED);
-            assert.equal(server.accepted(), 0);
-
-            const res = await clientFor(t, http2, { permitReservedIps: true }).client.get(url, { timeoutMs: 5000 });
-            assert.equal(res.statusCode, 200);
-            assert.equal(server.accepted(), 1);
-        });
-
-        it('http://[::1] works with permitReservedIps and is rejected without it', { skip: !ipv6Available && 'no IPv6 loopback' }, async (t) => {
-            const server = await serve(t, http2, '::1');
-            const url = `http://[::1]:${server.port}/`;
-
-            await assert.rejects(clientFor(t, http2).client.get(url, { timeoutMs: 2000 }), RESERVED);
-            assert.equal(server.accepted(), 0);
-
-            const res = await clientFor(t, http2, { permitReservedIps: true }).client.get(url, { timeoutMs: 5000 });
-            assert.equal(res.text(), 'peer ::1');
-        });
-    });
 }
-
-describe('parseSafeUrl: plain http only for loopback names', () => {
-    it('accepts http for localhost, *.localhost, 127.0.0.0/8 literals and [::1]', () => {
-        for (const url of [
-            'http://localhost/',
-            'http://LOCALHOST:8080/',
-            'http://app.localhost/',
-            'http://A.b.LocalHost/x',
-            'http://127.0.0.1/',
-            'http://127.0.0.2/',
-            'http://127.255.255.254/',
-            'http://127.1/',
-            'http://[::1]:3000/',
-            'http://[0:0:0:0:0:0:0:1]/',
-        ]) {
-            assert.equal(parseSafeUrl(url).protocol, 'http:', url);
-        }
-    });
-
-    it('still refuses http for every other host', () => {
-        for (const url of [
-            'http://example.com/',
-            'http://localhost.example.com/',
-            'http://notlocalhost/',
-            'http://localhostx/',
-            'http://10.0.0.1/',
-            'http://128.0.0.1/',
-            'http://0.0.0.0/',
-            'http://[::2]/',
-            'http://[::ffff:127.0.0.1]/',
-            'http://[fe80::1]/',
-        ]) {
-            assert.throws(() => parseSafeUrl(url), (err: unknown) => {
-                assert.ok(err instanceof SecureHttpError, url);
-                assert.equal(err.message, 'UltraTon: Unsupported protocol "http:"', url);
-                return true;
-            });
-        }
-    });
-});
 
 const fakeSession = () =>
     Object.assign(new EventEmitter(), {

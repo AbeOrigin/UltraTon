@@ -126,7 +126,8 @@ export class Http1Engine {
                 timeout: reqOpts.socketTimeoutMs,
                 agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void) => {
-                    resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps)
+                    // Over plain http every address must also be loopback: a `*.localhost` name can resolve anywhere.
+                    resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps, urlObj.protocol === 'http:')
                         .then(addresses => {
                             // close() ran while DNS was pending: a socket opened now would outlive it, unpooled and unreachable.
                             if (this.#closed) throw clientClosed();

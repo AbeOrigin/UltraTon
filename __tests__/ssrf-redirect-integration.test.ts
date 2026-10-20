@@ -83,7 +83,8 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
         assert.equal(hits, 0);
     });
 
-    // http is only accepted for localhost/127.0.0.1, so these use https: the literal is rejected before any connection.
+    // http is only accepted for loopback names (and only to loopback addresses); [::ffff:127.0.0.1] is not one, so these
+    // use https: the literal is rejected by the reserved-IP policy before any connection.
     it('permitReservedIps: an IPv6 allowlist (::/0) does not reach an IPv4-embedding IPv6 literal, directly or by redirect', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const mapped = `[::ffff:127.0.0.1]:${port}`;

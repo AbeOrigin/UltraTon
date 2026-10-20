@@ -2,7 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import dnsPromises from 'node:dns/promises';
 
-import { assertAllowedIp, isReservedIp, policyKey, resolveAndPinAll } from '../src/security/dns-pinner.ts';
+import { assertAllowedIp, isLoopbackIp, isReservedIp, policyKey, resolveAndPinAll } from '../src/security/dns-pinner.ts';
 import { SecureHttpError } from '../src/errors.ts';
 
 describe('DNS Pinner Security Validation (Dual-Stack SSRF Mitigation)', () => {
@@ -336,6 +336,38 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
                 return true;
             }, JSON.stringify(answer));
         }
+    });
+
+    it('isLoopbackIp: 127.0.0.0/8, ::1 and IPv4-mapped 127/8 only', () => {
+        for (const ip of ['127.0.0.1', '127.255.255.254', '::1', '0:0:0:0:0:0:0:1', '::ffff:127.0.0.1', '::ffff:7f00:1']) {
+            assert.equal(isLoopbackIp(ip), true, ip);
+        }
+        for (const ip of ['8.8.8.8', '10.0.0.1', '128.0.0.1', '0.0.0.0', '::', '::2', '::7f00:1', '::127.0.0.1', '64:ff9b::7f00:1', '::ffff:8.8.8.8', 'fe80::1', 'localhost', '']) {
+            assert.equal(isLoopbackIp(ip), false, ip);
+        }
+    });
+
+    it('resolveAndPinAll for a plain http hop requires every address to be loopback, on top of the policy', async (t) => {
+        const PLAIN = /^UltraTon: Plain http is only allowed to loopback addresses\.$/;
+        for (const answer of [['93.184.216.34'], ['127.0.0.1', '93.184.216.34'], ['93.184.216.34', '127.0.0.1'], ['::1', '10.0.0.1'], ['::7f00:1']]) {
+            t.mock.method(dnsPromises, 'lookup', async () => answer.map(address => ({ address, family: address.includes(':') ? 6 : 4 })));
+            await assert.rejects(() => resolveAndPinAll('api.localhost', true, true), (err: unknown) => {
+                assert.ok(err instanceof SecureHttpError);
+                assert.match(err.message, PLAIN);
+                assert.doesNotMatch(err.message, /api\.localhost|93\.184|10\.0\.0\.1|7f00/);
+                return true;
+            }, answer.join(','));
+        }
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '::1', family: 6 }, { address: '::ffff:127.0.0.1', family: 6 }]);
+        assert.equal((await resolveAndPinAll('api.localhost', true, true)).length, 2);
+        // Loopback still needs the policy.
+        await assert.rejects(() => resolveAndPinAll('api.localhost', false, true), /prohibited internal\/reserved/);
+        // Without plainHttp a public answer is fine.
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '93.184.216.34', family: 4 }]);
+        assert.equal((await resolveAndPinAll('api.localhost', false, false)).length, 1);
+        // Literals follow the same rule.
+        await assert.rejects(() => resolveAndPinAll('93.184.216.34', true, true), { message: 'UltraTon: Plain http is only allowed to loopback addresses.' });
+        assert.equal((await resolveAndPinAll('127.0.0.2', true, true)).length, 1);
     });
 
     it('resolveAndPinAll judges an IP literal as itself, without DNS', async (t) => {
