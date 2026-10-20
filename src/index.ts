@@ -13,5 +13,8 @@ export type {
   UltraTonClientOptions,
   UltraTonRequestOptions,
   ReservedIpPolicy,
+  UltraTonStreamOptions,
+  UltraTonStreamMethod,
+  QueryValue,
 } from './types/request-options.types.ts';
-export type { UltraTonResponse } from './types/request-response.ts';
+export type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';

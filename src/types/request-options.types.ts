@@ -95,6 +95,21 @@ export interface UltraTonRequestOptions {
     readonly permitReservedIps?: ReservedIpPolicy;
 }
 
+/** The HTTP methods `client.stream()` accepts. */
+export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+/** The options of `client.stream()`: the request options plus the method, and a `maxBodySize` that may go past 2 GiB. */
+export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
+    /** The HTTP method. Default 'GET'. */
+    readonly method?: UltraTonStreamMethod;
+    /**
+     * The maximum size of the body in bytes, counted as it is read (decoded bytes included): an integer from 0 to
+     * Number.MAX_SAFE_INTEGER. There is no "unlimited": a large download sets a large, explicit limit. Default as for
+     * the other methods (the client's `maxBodySize`, else 2MB).
+     */
+    readonly maxBodySize?: number;
+}
+
 /** What the client methods hand to the engines: the caller's options plus the HTTP method they set. Not public. */
 export interface InternalRequestOptions extends UltraTonRequestOptions {
     readonly method?: string;

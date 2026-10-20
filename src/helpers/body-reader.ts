@@ -1,6 +1,7 @@
 import zlib from 'node:zlib';
-import { finished, pipeline, type Transform } from 'node:stream';
+import { finished, pipeline, Transform, type Readable } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
+import { incompleteResponse } from './response.ts';
 
 const DECODERS = new Map<string, () => Transform>([
     ['gzip', () => zlib.createGunzip()],
@@ -152,4 +153,123 @@ export class BodyReader {
         });
         return decoders[0];
     }
+}
+
+export interface BodyStreamOptions {
+    /** The response as it comes off the wire: an IncomingMessage (HTTP/1) or a ClientHttp2Stream (HTTP/2). */
+    readonly source: Readable;
+    readonly contentEncoding: string | string[] | undefined;
+    readonly decompress: boolean;
+    readonly maxBodySize: number;
+    /** The content-length the wire bytes must match, if the response promised one (see declaredBodyLength). */
+    readonly declaredLength: number | undefined;
+    readonly socketTimeoutMs: number;
+    readonly signal: AbortSignal | undefined;
+    readonly tooLarge: () => Error;
+    readonly idle: () => Error;
+    /** Maps an error (socket, stream reset, a limit) to what the caller sees; a closed client wins over all of them. */
+    readonly mapError: (err: unknown) => unknown;
+    /** Called once when the body ended (no argument) or failed (the error the caller got); not on a cancel. */
+    readonly onSettled?: (err?: unknown) => void;
+}
+
+/**
+ * The body of a streamed response, with the same limits as a buffered one: wire bytes and decoded bytes bounded by
+ * `maxBodySize`, a body cut short of its content-length or a corrupt compressed body failing the stream (never ending it
+ * cleanly), the signal's reason on abort. Backpressure reaches the socket (HTTP/1) or the flow-control window (HTTP/2).
+ * `socketTimeoutMs` only runs while the consumer is waiting for data (highWaterMark 0: nothing is read ahead), so a
+ * slow consumer never times out the server, while a server that goes silent mid-body does. Cancelling it destroys the
+ * source: the socket is closed or the HTTP/2 stream reset.
+ */
+export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Array> {
+    const codings = o.decompress ? codingsFor(o.contentEncoding) : [];
+    const codingError = codings instanceof Error ? codings : undefined;
+    let wireBytes = 0;
+    let size = 0;
+    let decodeFailure: unknown;
+    const wire = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+            if (codingError) return callback(codingError);
+            wireBytes += chunk.length;
+            if (wireBytes > o.maxBodySize) return callback(o.tooLarge());
+            callback(null, chunk);
+        },
+        flush(callback) {
+            callback(o.declaredLength !== undefined && wireBytes !== o.declaredLength ? incompleteResponse() : null);
+        },
+    });
+    const decoders = (codingError ? [] : (codings as string[])).map(coding => {
+        const decoder = DECODERS.get(coding)!();
+        decoder.once('error', err => { decodeFailure ??= err; });
+        return decoder;
+    });
+    const bounded = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+            size += chunk.length;
+            if (size > o.maxBodySize) return callback(o.tooLarge());
+            callback(null, chunk);
+        },
+    });
+    // Errors reach the consumer through the iterator; the pipeline only has to tear every stage down together.
+    const out = pipeline([o.source, wire, ...decoders, bounded], () => {}) as unknown as Transform;
+    const iterator = out[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
+
+    let settled = false;
+    // A failure this function forced (abort, idle): it wins over whatever error the teardown produces.
+    let forced: { error: unknown } | undefined;
+    const stopListening = () => o.signal?.removeEventListener('abort', onAbort);
+    const settle = (err?: unknown) => {
+        if (settled) return;
+        settled = true;
+        stopListening();
+        o.onSettled?.(err);
+    };
+    const force = (error: unknown) => {
+        forced ??= { error };
+        out.destroy();
+    };
+    const onAbort = () => force(o.signal!.reason);
+    if (o.signal?.aborted) onAbort();
+    else o.signal?.addEventListener('abort', onAbort, { once: true });
+
+    const toCaller = (err: unknown) => {
+        if (forced) return forced.error;
+        // mapError keeps SecureHttpErrors as they are, unless the client was closed: then that is the reason.
+        return o.mapError(err === decodeFailure ? decodeError(err) : err);
+    };
+    const whileWaiting = <V>(next: Promise<V>): Promise<V> => {
+        if (o.socketTimeoutMs <= 0) return next;
+        let timer: NodeJS.Timeout | undefined;
+        const idle = new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(() => {
+                force(o.idle());
+                reject(forced!.error);
+            }, o.socketTimeoutMs);
+        });
+        return Promise.race([next, idle]).finally(() => clearTimeout(timer));
+    };
+
+    return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+            try {
+                const next = await whileWaiting(iterator.next());
+                if (next.done) {
+                    settle();
+                    controller.close();
+                } else {
+                    controller.enqueue(next.value);
+                }
+            } catch (err: unknown) {
+                const error = toCaller(err);
+                settle(error);
+                controller.error(error);
+            }
+        },
+        cancel() {
+            settled = true;
+            stopListening();
+            forced ??= { error: undefined };
+            out.destroy();
+        },
+    }, { highWaterMark: 0 });
 }

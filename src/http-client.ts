@@ -5,11 +5,11 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, withAcceptEncoding, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, splitStreamOptions, withAcceptEncoding, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
-import type { UltraTonClientOptions, UltraTonRequestOptions } from './types/request-options.types.ts';
-import type { UltraTonResponse } from './types/request-response.ts';
+import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
+import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
 interface InternalClientOptions extends UltraTonClientOptions {
@@ -148,37 +148,50 @@ export class UltraTonClient {
      *   timeout, `maxBodySize` or `maxRedirects` exceeded. An abort rejects with `signal.reason`.
      */
     public async get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('GET', url, options);
+        return this.#request<T>('GET', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends a POST request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('POST', url, options);
+        return this.#request<T>('POST', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends a PUT request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('PUT', url, options);
+        return this.#request<T>('PUT', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends a PATCH request. Send the payload as `{ json }` or `{ body }`. See {@link UltraTonClient.get}. */
     public async patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('PATCH', url, options);
+        return this.#request<T>('PATCH', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends a DELETE request. See {@link UltraTonClient.get}. */
     public async delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('DELETE', url, options);
+        return this.#request<T>('DELETE', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends a HEAD request. Cannot have a body; `data` is empty. See {@link UltraTonClient.get}. */
     public async head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('HEAD', url, options);
+        return this.#request<T>('HEAD', url, options) as Promise<UltraTonResponse<T>>;
     }
 
     /** Sends an OPTIONS request. See {@link UltraTonClient.get}. */
     public async options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
-        return this.#request<T>('OPTIONS', url, options);
+        return this.#request<T>('OPTIONS', url, options) as Promise<UltraTonResponse<T>>;
+    }
+
+    /**
+     * Sends a request and resolves as soon as the response headers arrive, with the body as a `ReadableStream`. Every
+     * check of the other methods applies (SSRF, redirects, credentials, `timeoutMs` until the headers), and the body
+     * keeps its limits as it is read: `maxBodySize` (here up to Number.MAX_SAFE_INTEGER), content-length, decoding,
+     * `socketTimeoutMs` while waiting on the server, abort and `close()`. Read the body to the end or cancel it.
+     * @param options - The request options plus `method` (default 'GET').
+     * @throws {TypeError} As the other methods, and for a method outside GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+     */
+    public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
+        const { method, maxBodySize, rest } = splitStreamOptions(options);
+        return this.#request(method, url, rest, { maxBodySize }) as Promise<UltraTonStreamResponse>;
     }
 
     /**
@@ -191,7 +204,7 @@ export class UltraTonClient {
         this.#engine.close();
     }
 
-    async #request<T>(method: string, url: string, options: unknown): Promise<UltraTonResponse<T>> {
+    async #request<T>(method: string, url: string, options: unknown, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         if (this.#closed) throw new SecureHttpError('UltraTon: Client is closed.');
         const resolved = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
         // The caller's own options are validated (unknown keys, json/body, body type) and `json` serialized before any
@@ -202,6 +215,7 @@ export class UltraTonClient {
         const target = withQuery(resolved, requested.query);
         Reflect.deleteProperty(requested, 'query');
         const merged = withAcceptEncoding(mergeClientDefaults(resolveRequestBody(requested), this.#defaults));
-        return this.#engine.request<T>(target, requested.json === undefined ? merged : withJsonContentType(merged));
+        const resolvedOptions = requested.json === undefined ? merged : withJsonContentType(merged);
+        return stream ? this.#engine.request(target, resolvedOptions, stream) : this.#engine.request<T>(target, resolvedOptions);
     }
 }

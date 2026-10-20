@@ -177,6 +177,19 @@ setTimeout(() => controller.abort(), 1000);
 await api.get('search?q=x', { signal: controller.signal }); // rejects with controller.signal.reason
 ```
 
+**Stream a large download.** `stream()` resolves on the headers and hands you the body as a `ReadableStream`. Its limits still apply as it is read, and `maxBodySize` may go up to `Number.MAX_SAFE_INTEGER` here:
+
+```ts
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+
+const res = await client.stream('https://files.example.com/big.csv', { maxBodySize: 500 * 1024 * 1024 });
+if (!res.ok) await res.body.cancel();
+else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'));
+```
+
+`stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+
 ### baseUrl
 
 With `baseUrl` set, request URLs must be relative. `'users/7'` and `'/users/7'` both resolve under the base path. An absolute or protocol-relative URL throws.
@@ -193,7 +206,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is.
-- **Bodies are buffered, not streamed.** Responses are read into memory up to `maxBodySize`. For large downloads, use a streaming client.
+- **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. Request bodies are always buffered (no upload streaming).
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
 

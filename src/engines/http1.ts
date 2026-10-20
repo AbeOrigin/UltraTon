@@ -3,15 +3,15 @@ import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNet
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
-import type { UltraTonResponse } from "../types/request-response.ts";
+import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 import { assertAllowedIp, policyKey, resolveAndPinAll } from "../security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
-import { createResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
-import { BodyReader } from '../helpers/body-reader.ts';
+import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
+import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -118,8 +118,9 @@ export class Http1Engine {
         reqOpts: SecureUltraTonRequestOptions,
         body: Buffer | undefined,
         currentTimeoutMs: number,
-        followRedirects: boolean
-    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean }> {
+        followRedirects: boolean,
+        stream?: { maxBodySize: number }
+    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean, body?: ReadableStream<Uint8Array> }> {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
@@ -184,6 +185,33 @@ export class Http1Engine {
                     });
                 }
 
+                // A stream hands the body over with the headers. timeoutMs covered the wait for them; from here the
+                // socket's own idle timer must stop (a paused socket is idle whenever the consumer is slow) and the
+                // body stream's timer, which only runs while the consumer waits for data, takes over.
+                if (stream) {
+                    clearTimeout(executionTimer);
+                    req.setTimeout(0);
+                    req.off('timeout', onSocketTimeout);
+                    return resolve({
+                        statusCode: res.statusCode as number,
+                        headers: res.headers,
+                        data: Buffer.alloc(0),
+                        isRedirect: false,
+                        body: createBodyStream({
+                            source: res,
+                            contentEncoding: res.headers['content-encoding'],
+                            decompress: reqOpts.decompress,
+                            maxBodySize: stream.maxBodySize,
+                            declaredLength: declaredBodyLength(reqOpts.method, res.statusCode as number, res.headers),
+                            socketTimeoutMs: reqOpts.socketTimeoutMs,
+                            signal: reqOpts.signal,
+                            tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${stream.maxBodySize} bytes`),
+                            idle: () => new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${reqOpts.socketTimeoutMs}ms.`),
+                            mapError: err => this.#closed ? clientClosed() : toNetworkError(err),
+                        }),
+                    });
+                }
+
                 this._consumeResponseBuffer(res, req as ClientRequest, reqOpts, executionTimer)
                     .then(({ data, wireBytes }) => {
                         // llhttp already fails a body cut short of its content-length; checked here too so both
@@ -201,11 +229,12 @@ export class Http1Engine {
                     .catch(reject);
             });
 
-            req.on('timeout', () => {
+            const onSocketTimeout = () => {
                 req.destroy();
                 clearTimeout(executionTimer);
                 reject(new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${reqOpts.socketTimeoutMs}ms.`));
-            });
+            };
+            req.on('timeout', onSocketTimeout);
 
             req.on('error', (err: Error) => {
                 req.destroy();
@@ -223,7 +252,9 @@ export class Http1Engine {
     /**
      * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
      */
-    public async request<T = unknown>(url: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>> {
+    public async request<T = unknown>(url: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>>;
+    public async request(url: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }): Promise<UltraTonStreamResponse>;
+    public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         const startTime = Date.now();
         let redirectCount = 0;
         let currentUrl = url;
@@ -252,7 +283,8 @@ export class Http1Engine {
                 }
             }
 
-            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0);
+            const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0,
+                stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize });
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 if (redirectCount >= reqOpts.maxRedirects) {
@@ -297,6 +329,7 @@ export class Http1Engine {
                 continue;
             }
 
+            if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl);
             return createResponse<T>(hop.statusCode, hop.headers, hop.data);
         }
     }
