@@ -188,6 +188,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Bodies are buffered, not streamed.** Responses are read into memory up to `maxBodySize`. For large downloads, use a streaming client.
+- **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
 
 ## Migrating from 1.x

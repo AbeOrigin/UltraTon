@@ -185,7 +185,11 @@ describe('HTTP/2 session manager: connect by name, pinned to the validated set',
         assert.ok(!first.destroyed);
     });
 
-    it('a real TLS connect to an IP literal emits no DEP0123 warning', async (t) => {
+    // Before 22.14, http2.connect itself sets an IP literal as SNI (initializeTLSOptions(options, host)), whatever the
+    // caller passes; Node then warns DEP0123 once per process. Nothing to fix on our side there.
+    const [major, minor] = process.versions.node.split('.').map(Number);
+    const coreSendsIpSni = major === 22 && minor < 14;
+    it('a real TLS connect to an IP literal emits no DEP0123 warning', { skip: coreSendsIpSni && 'Node < 22.14 sends IP SNI itself' }, async (t) => {
         const server = await tcpCounter(t);
         const manager = new Http2SessionManager();
         const client = new UltraTonClient({ http2: true, permitReservedIps: true, [kSessionManager]: manager } as any);
