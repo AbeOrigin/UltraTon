@@ -304,6 +304,30 @@ describe('proxy (both engines)', () => {
         assert.ok(Date.now() - started < 2000, `took ${Date.now() - started}ms`);
     });
 
+    it('refuses an oversized or malformed CONNECT answer as malformed, never as a tunnel', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        // A proxy that answers any CONNECT with these exact bytes and keeps the connection open.
+        const rawProxy = async (answer: Buffer) => {
+            const sockets = new Set<net.Socket>();
+            const srv = net.createServer(socket => {
+                sockets.add(socket);
+                socket.on('error', () => undefined);
+                socket.once('data', () => socket.write(answer));
+            });
+            await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+            t.after(async () => { for (const s of sockets) s.destroy(); await new Promise<void>(r => srv.close(() => r())); });
+            return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
+        };
+        const malformed = { code: 'ERR_ULTRATON_PROXY', message: 'UltraTon: The proxy sent a malformed response.' };
+        // 17 KiB of header bytes with no blank line: past the 16 KiB cap.
+        const endless = await rawProxy(Buffer.from(`HTTP/1.1 200 OK\r\nx-pad: ${'a'.repeat(17 * 1024)}\r\n`));
+        await assert.rejects(proxied(t, false, endless, { timeoutMs: 5000 }).get('https://localhost:9/'), malformed);
+        for (const statusLine of ['HTTP/1.1 2e2 OK', 'HTTP/2 200 OK', 'HTTP/1.1 200OK', 'SOCKS 200']) {
+            const proxy = await rawProxy(Buffer.from(`${statusLine}\r\n\r\n`));
+            await assert.rejects(proxied(t, false, proxy, { timeoutMs: 5000 }).get('https://localhost:9/'), malformed, statusLine);
+        }
+    });
+
     it('validates the proxy option on the constructor', () => {
         const bad: Array<[unknown, RegExp]> = [
             ['ftp://proxy:21', /^UltraTon: Expected 'proxy' to be an http:, https:, socks5: or socks5h: URL/],

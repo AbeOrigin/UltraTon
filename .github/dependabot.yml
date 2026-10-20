@@ -1,0 +1,38 @@
+# Update PRs only, reviewed by hand. UltraTon has no runtime dependencies: this covers the GitHub Actions (pinned by
+# SHA), the root build tooling, and the third-party clients compat/ tests against. A 14-day cooldown keeps freshly
+# published versions out: compromised releases are usually caught and pulled within days.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    ignore:
+      # @types/node follows the minimum supported Node (engines >= 22.12): newer majors would type APIs it lacks.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+    groups:
+      dev-tooling:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /compat
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 14
+    groups:
+      compat-clients:
+        patterns: ["*"]

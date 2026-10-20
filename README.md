@@ -1,5 +1,7 @@
 # UltraTon
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AbeOrigin/UltraTon/badge)](https://scorecard.dev/viewer/?uri=github.com/AbeOrigin/UltraTon)
+
 > A secure HTTP client for Node.js. The safe choice is the default, and the risky ones are opt-in.
 
 UltraTon is an HTTP/1.1 and HTTP/2 client built only on Node's own modules (`node:https`, `node:http2`, `node:dns`, `node:net`, `node:tls`, `node:zlib`), with **zero runtime dependencies**. It is built for code that sends requests to URLs it does not fully control: webhooks, link previews, integrations, internal service clients. It blocks SSRF (including DNS rebinding), caps memory and time, and never silently ignores a mistake in its options.
@@ -381,6 +383,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md).
 ## Security
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for it.
+
+[THREAT_MODEL.md](THREAT_MODEL.md) explains what UltraTon defends, against whom, where each defense lives in the code, and the risks it deliberately leaves to you. Releases carry npm provenance, so you can check that a version was built by this repository's CI with `npm audit signatures`.
 
 ## License
 
