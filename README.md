@@ -69,6 +69,37 @@ await api.close(); // when the client is no longer needed
 | Retries | **Off**. When on: idempotent methods only, `Retry-After` waited (or the response returned when it asks for too long), and policy, memory and redirect errors never retried. Every attempt is validated again. | `retry` (0–10, or `{ limit, methods, statusCodes, maxDelayMs, onRetry }`) |
 | Proxies | **Not used**, and never read from `HTTP_PROXY`/`HTTPS_PROXY`. When set, the proxy gets the validated IP (CONNECT or SOCKS5), never a name, and the target's certificate is still checked. | `proxy` (client option) |
 
+## Choosing a client
+
+UltraTon does not try to be the fastest HTTP client: Node's built-in `fetch` (undici) is faster, and it should be. UltraTon is the client for code that sends requests to URLs it does not fully control, and for teams that want safe defaults without writing them by hand.
+
+- **The URL is yours and you want maximum throughput:** use `fetch`.
+- **The URL comes from outside (webhooks, link previews, integrations, user input), or you want safe defaults:** use UltraTon. It is also 1.3–1.8× faster than axios, got and node-fetch in [our benchmarks](compat/bench/RESULTS.md).
+- **You already use axios, got or node-fetch:** keep them and add [`createSecureAgents()`](#protect-the-client-you-already-use). It costs nothing measurable.
+
+How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`, axios 1.20, got 16.1, node-fetch 3.3):
+
+| | UltraTon | `fetch` (undici) | axios | got | node-fetch |
+|---|---|---|---|---|---|
+| Blocks SSRF (reserved IPs, DNS rebinding, redirects inside) | ✅ all 30 [corpus](compat/ssrf-corpus/RESULTS.md) cases | ❌ none | ❌ none (✅ with `createSecureAgents`) | ❌ none (✅ with `createSecureAgents`) | ❌ none (✅ with `createSecureAgents`) |
+| Redirects | off by default | followed (up to 20) | followed (up to 21) | followed (up to 10) | followed (up to 20) |
+| Response size limit | 2 MB, also on decoded bytes | none | none | none | none |
+| Total timeout | 30 s | none (300 s idle) | none | none | none |
+| Retries | opt-in, idempotent only | — | — (plugin) | on (2), idempotent | — |
+| Proxies | CONNECT and SOCKS5, opt-in, target pinned | `NODE_USE_ENV_PROXY` (recent Node) | from `HTTP_PROXY` by default | through an agent | through an agent |
+| HTTP/2 | `http2: true` | not by default | `httpVersion: 2` | `http2: true` | — |
+| Hooks / interceptors | `diagnostics_channel` (hooks planned) | — | interceptors | hooks | — |
+| Cookies, HTTP cache, pagination | — | — | — | ✅ | — |
+| Upload streaming | — (planned) | ✅ | ✅ | ✅ | ✅ |
+| Runs in browsers, Bun, Deno | — (Node only) | ✅ | ✅ | — | — |
+| Runtime dependencies | 0 | built in | 4 | 10 | 3 |
+| Maturity | new (2.x in 2026), one maintainer | Node core team | many years, large community | many years | many years |
+
+**Where UltraTon is not the right choice:**
+- **Raw throughput against an API you trust:** `fetch` and Node's own `http.request` are about 1.5× faster on small bodies.
+- **Other runtimes:** browsers, Bun or Deno.
+- **Features it does not have:** request-rewriting interceptors, a cookie jar, HTTP caching or upload streaming. Hooks and upload streaming are planned.
+
 ## Options
 
 **Client options** go to `new UltraTonClient(options)`. All of them are optional:
