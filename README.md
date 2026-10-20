@@ -2,7 +2,15 @@
 
 > A secure HTTP client for Node.js. The safe choice is the default, and the risky ones are opt-in.
 
-UltraTon is an HTTP/1.1 and HTTP/2 client built only on Node's own `node:https`, `node:http2` and `node:dns`, with **zero runtime dependencies**. It is built for code that sends requests to URLs it does not fully control: webhooks, link previews, integrations, internal service clients. It blocks SSRF (including DNS rebinding), caps memory and time, and never silently ignores a mistake in its options.
+UltraTon is an HTTP/1.1 and HTTP/2 client built only on Node's own modules (`node:https`, `node:http2`, `node:dns`, `node:net`, `node:tls`, `node:zlib`), with **zero runtime dependencies**. It is built for code that sends requests to URLs it does not fully control: webhooks, link previews, integrations, internal service clients. It blocks SSRF (including DNS rebinding), caps memory and time, and never silently ignores a mistake in its options.
+
+It is also a complete everyday client, and every feature keeps the same protections:
+
+- **Requests:** `query` parameters, JSON, `form` fields and `FormData` uploads ([forms](#recipes)).
+- **Responses:** gzip, deflate and brotli decoded with the size limit applied to the decoded bytes, and [`stream()`](#recipes) for large downloads.
+- **[`client.fetch()`](#recipes):** a standard `fetch` you can hand to any SDK.
+- **[Retries](#retries):** opt-in, idempotent methods only, `Retry-After` respected, one time budget for all attempts.
+- **[Proxies](#proxy):** HTTP CONNECT and SOCKS5, tunnelled to the IP UltraTon validated, so the proxy cannot resolve the name elsewhere.
 
 ```bash
 npm install ultraton
@@ -54,6 +62,8 @@ await api.close(); // when the client is no longer needed
 | JSON prototype pollution | `__proto__`, `constructor` and `prototype` keys are stripped by `json()`. | — |
 | Unknown options or wrong option types | **Throw a `TypeError`**, with a hint for common mistakes. | — |
 | Truncated response (`content-length` mismatch, GOAWAY or reset mid-body) | **Rejected**. It never resolves as a short body. | — |
+| Retries | **Off**. When on: idempotent methods only, `Retry-After` waited (or the response returned when it asks for too long), and policy, memory and redirect errors never retried. Every attempt is validated again. | `retry` (0–10, or `{ limit, methods, statusCodes, maxDelayMs, onRetry }`) |
+| Proxies | **Not used**, and never read from `HTTP_PROXY`/`HTTPS_PROXY`. When set, the proxy gets the validated IP (CONNECT or SOCKS5), never a name, and the target's certificate is still checked. | `proxy` (client option) |
 
 ## Options
 
@@ -112,6 +122,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | A request on a closed client | — |
 | `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |
+| `UltraTonNetworkError` | HTTP/2: the server never processed the request (a `REFUSED_STREAM` reset, or above a GOAWAY's last stream). `retry` retries it. | `NGHTTP2_REFUSED_STREAM` |
+| `UltraTonNetworkError` | The proxy refused the tunnel (CONNECT status or SOCKS5 reason), or answered outside its protocol | `ERR_ULTRATON_PROXY` |
 | `SecureHttpError` | More than 2 content-encodings on a response | `ERR_ULTRATON_CONTENT_ENCODING` |
 | `UltraTonMemoryError` | The body exceeded `maxBodySize` | — |
 | `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
