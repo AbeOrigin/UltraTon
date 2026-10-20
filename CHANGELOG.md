@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`query` option.** `get(url, { query: { q: 'café', page: 2, tags: ['a', 'b'] } })` appends URLSearchParams-encoded pairs to the URL's own query, which is kept byte for byte. An array repeats its key and `undefined` is skipped. `null`, nested objects, non-finite numbers and anything that is not a plain object or `URLSearchParams` throw a `TypeError` before connecting. The query is applied after `baseUrl`'s path check and can never change the path. The `params` and `searchParams` hints now point at `query`, and `query` passed to the constructor says it is a per-request option.
+
 ## [2.0.0] - 2026-10-20
 
 The first release since 1.0.3. It is a breaking release: the README has a migration table from 1.x.

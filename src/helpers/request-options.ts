@@ -139,7 +139,7 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'body'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
@@ -148,7 +148,7 @@ const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs'
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
-const QUERY_HINT = " Put the query string in the URL.";
+const QUERY_HINT = " Use 'query'.";
 const TLS_HINT = " TLS is configured with the 'tls' option of the client constructor.";
 const BASE_URL_HINT = " 'baseUrl' is an option of the client constructor, not of a request.";
 const TIMEOUT_HINT = " Use 'timeoutMs' (milliseconds).";
@@ -161,7 +161,6 @@ const OPTION_HINTS = new Map<string, string>([
     ['baseUrl', BASE_URL_HINT],
     ['data', " Use 'json' for a JSON payload or 'body' for a string or Buffer."],
     ['params', QUERY_HINT],
-    ['query', QUERY_HINT],
     ['searchParams', QUERY_HINT],
     ['agent', TLS_HINT],
     ['ca', TLS_HINT],
@@ -186,6 +185,7 @@ const CLIENT_OPTION_HINTS = new Map<string, string>([
     ['auth', perRequestOnly('auth')],
     ['json', perRequestOnly('json')],
     ['body', perRequestOnly('body')],
+    ['query', perRequestOnly('query')],
 ]);
 
 /** @throws {TypeError} For any own key outside the allowlist, whatever its value (`undefined` included). */
@@ -294,6 +294,50 @@ export function withJsonContentType(options: ResolvedRequestOptions): ResolvedRe
     const hasContentType = Object.keys(map).some(key => key.toLowerCase() === 'content-type' && map[key] !== undefined);
     if (hasContentType) return options;
     return { ...options, headers: { ...map, 'content-type': 'application/json' } as ResolvedRequestOptions['headers'] };
+}
+
+const describeValue = (value: unknown): string => {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) return 'an array';
+    if (typeof value === 'number') return String(value);
+    if (typeof value === 'object') return `a ${(Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null)?.constructor?.name ?? 'null-prototype object'}`;
+    return typeof value;
+};
+
+function queryValue(key: string, value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) return String(value);
+    throw new TypeError(`UltraTon: Expected query parameter '${key}' to be a string, a finite number or a boolean, received ${describeValue(value)}.`);
+}
+
+/**
+ * Appends the `query` option to a request URL. Values are encoded with URLSearchParams (spaces as '+'), an array repeats
+ * its key, an `undefined` value is skipped. The URL's own query is kept byte for byte: the new pairs are appended to it,
+ * never re-serialized with it. Encoded values can only ever land in the query, so they cannot change the path (baseUrl
+ * is checked on the path before this runs) or add a fragment.
+ * @throws {TypeError} If `query` is not a plain object or URLSearchParams, or a value is not a string, a finite number
+ *   or a boolean (`null`, nested objects and arrays inside arrays included). A malformed URL is left for the engine to reject.
+ */
+export function withQuery(url: string, query: unknown): string {
+    if (query === undefined) return url;
+    let params: URLSearchParams;
+    if (query instanceof URLSearchParams) {
+        params = query;
+    } else if (isPlainObject(query)) {
+        params = new URLSearchParams();
+        for (const key of Object.keys(query)) {
+            const value = query[key];
+            if (value === undefined) continue;
+            for (const item of Array.isArray(value) ? value : [value]) params.append(key, queryValue(key, item));
+        }
+    } else {
+        throw new TypeError(`UltraTon: Expected 'query' to be a plain object or URLSearchParams, received ${describeValue(query)}.`);
+    }
+    const extra = params.toString();
+    if (extra === '' || !URL.canParse(url)) return url;
+    const target = new URL(url);
+    target.search = target.search.length > 1 ? `${target.search.slice(1)}&${extra}` : extra;
+    return target.href;
 }
 
 /** `auth` as the value of a Basic `authorization` header, the same encoding `node:http` applies to its own `auth` option. */

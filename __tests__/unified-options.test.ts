@@ -265,9 +265,9 @@ describe('Unified API: json option and content-length (real servers)', () => {
                 const e = await start(t);
                 const cases: Array<[string, RegExp]> = [
                     ['timeout', /Unknown option 'timeout'\..*timeoutMs/],
-                    ['params', /Unknown option 'params'\..*query string in the URL/i],
-                    ['query', /query string in the URL/i],
-                    ['searchParams', /query string in the URL/i],
+                    ['params', /Unknown option 'params'\. Use 'query'\./],
+                    ['query', /Expected 'query' to be a plain object or URLSearchParams, received 1\./],
+                    ['searchParams', /Unknown option 'searchParams'\. Use 'query'\./],
                     ['data', /Unknown option 'data'\..*json.*body/],
                     ['baseURL', /baseUrl/],
                     ['prefixUrl', /baseUrl/],

@@ -26,6 +26,7 @@ if (res.ok) {
   console.log(user.name);
 }
 
+await api.get('users', { query: { page: 2, tags: ['a', 'b'] } }); // users?page=2&tags=a&tags=b
 await api.post('users', { json: { name: 'Ada' } });
 await api.close(); // when the client is no longer needed
 ```
@@ -72,6 +73,7 @@ await api.close(); // when the client is no longer needed
 | `json` | `unknown` | Serialized, and sent with `content-type: application/json` unless you set one. |
 | `body` | `string \| Buffer \| Uint8Array` | Raw payload. Cannot be combined with `json`. GET and HEAD cannot have a body. |
 | `headers` | plain object | — |
+| `query` | plain object or `URLSearchParams` | Appended to the URL's own query. Arrays repeat the key, `undefined` is skipped, `null` and nested objects throw. |
 | `auth` | `'user:password'` | Sent as Basic auth. Dropped on a cross-origin redirect. |
 | `signal` | `AbortSignal` | Aborts in any phase. The request rejects with `signal.reason`. |
 | `timeoutMs` | integer ms | `30000` |
