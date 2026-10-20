@@ -5,7 +5,9 @@
 export class SecureHttpError extends Error {
     /**
      * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`.
-     * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...); absent on timeouts.
+     * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...). On
+     * `UltraTonNetworkTimeoutError`, `ERR_ULTRATON_TIMEOUT` when `timeoutMs` ran out and `ERR_ULTRATON_SOCKET_TIMEOUT`
+     * when the connection sat idle for `socketTimeoutMs`.
      */
     readonly code?: string;
 
@@ -18,8 +20,19 @@ export class SecureHttpError extends Error {
 
 /** DNS, connect, TLS or mid-body failure, or a response truncated against its `content-length`. `code` says which. */
 export class UltraTonNetworkError extends SecureHttpError {}
-/** A timeout is a network failure too: `instanceof UltraTonNetworkError` catches it along with resets and refusals. */
+/**
+ * A timeout is a network failure too: `instanceof UltraTonNetworkError` catches it along with resets and refusals.
+ * `code` says which: `ERR_ULTRATON_TIMEOUT` (the `timeoutMs` budget is spent) or `ERR_ULTRATON_SOCKET_TIMEOUT` (no
+ * bytes for `socketTimeoutMs`: the server or the network stalled).
+ */
 export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
+
+/** `timeoutMs` ran out. Never retried: the budget it measures covers every attempt. */
+export const absoluteTimeout = (timeoutMs: number) =>
+    new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`, { code: 'ERR_ULTRATON_TIMEOUT' });
+/** No bytes arrived for `socketTimeoutMs`. */
+export const idleTimeout = (socketTimeoutMs: number) =>
+    new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`, { code: 'ERR_ULTRATON_SOCKET_TIMEOUT' });
 /** The response body exceeded `maxBodySize`; the response was aborted. */
 export class UltraTonMemoryError extends SecureHttpError {}
 /** `json()` was called on a body that is not valid JSON; the `SyntaxError` is in `cause`. */

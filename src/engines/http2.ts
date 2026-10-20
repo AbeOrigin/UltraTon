@@ -18,6 +18,8 @@ import {
   UltraTonMemoryError,
   UltraTonNetworkTimeoutError,
   UltraTonRedirectError,
+  absoluteTimeout,
+  idleTimeout,
   toNetworkError,
 } from "../errors.ts";
 import { HTTP_CODES_REDIRECTS } from "../constants.ts";
@@ -247,9 +249,7 @@ export class Http2Engine {
     if (timeoutMs <= 0) return timeoutMs;
     const remainingMs = timeoutMs - (Date.now() - startTime);
     if (remainingMs <= 0) {
-      throw new UltraTonNetworkTimeoutError(
-        `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
-      );
+      throw absoluteTimeout(timeoutMs);
     }
     return remainingMs;
   }
@@ -276,9 +276,7 @@ export class Http2Engine {
     const controller = new AbortController();
     const timer = setTimeout(() => {
       controller.abort(
-        new UltraTonNetworkTimeoutError(
-          `UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`,
-        ),
+        absoluteTimeout(reqOpts.timeoutMs),
       );
     }, remainingMs);
     try {
@@ -376,9 +374,7 @@ export class Http2Engine {
             cleanup();
             abandonOnTimeout();
             reject(
-              new UltraTonNetworkTimeoutError(
-                `UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`,
-              ),
+              absoluteTimeout(timeoutMs),
             );
           }, remainingMs)
           : undefined;
@@ -394,9 +390,7 @@ export class Http2Engine {
           cleanup();
           abandonOnTimeout();
           reject(
-            new UltraTonNetworkTimeoutError(
-              `UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`,
-            ),
+            idleTimeout(socketTimeoutMs),
           );
         }, socketTimeoutMs);
       };
@@ -469,7 +463,7 @@ export class Http2Engine {
               new UltraTonMemoryError(
                 `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${streaming.maxBodySize} bytes.`,
               ),
-            idle: () => new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`),
+            idle: () => idleTimeout(socketTimeoutMs),
             mapError: (err) => {
               const { code, cause } = err as NodeJS.ErrnoException;
               return this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));

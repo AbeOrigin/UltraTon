@@ -104,10 +104,57 @@ export interface UltraTonRequestOptions {
      * `false` and `[]` allow none. Default is false (Strict SSRF mitigation).
      */
     readonly permitReservedIps?: ReservedIpPolicy;
+
+    /**
+     * Retries, off by default. A number is the most retries (an integer from 0 to 10) with the default rules; an
+     * object sets the rules (see {@link UltraTonRetryOptions}). On a request it merges over the client's `retry` field
+     * by field, and `retry: 0` turns retries off for that request. Never used by `client.fetch()`.
+     */
+    readonly retry?: number | UltraTonRetryOptions;
 }
 
 /** The HTTP methods `client.stream()` accepts. */
 export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+/**
+ * When and how a request is retried. Each attempt is a full request: DNS is resolved and validated again for a new
+ * connection, and every SSRF check runs again. `timeoutMs` is the budget of every attempt and wait together.
+ * Retried: `UltraTonNetworkError` with code `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN` or `EPIPE`, the idle
+ * timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`) and the statuses in `statusCodes`. Never retried: policy errors
+ * (`ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`, ...), `TypeError`,
+ * `UltraTonMemoryError`, `UltraTonRedirectError`, the absolute timeout (`ERR_ULTRATON_TIMEOUT`) and an abort.
+ * On HTTP/2, a stream the server refused or a GOAWAY fails with an `ERR_HTTP2_*` code, which is not retried.
+ * When the retries run out on a status, the last response is returned.
+ */
+export interface UltraTonRetryOptions {
+    /** The most retries, an integer from 0 to 10. Default 2 once `retry` is an object (inherited from the client's). */
+    readonly limit?: number;
+    /** The methods that may be retried. Default GET, PUT, DELETE, HEAD and OPTIONS: never POST or PATCH unless listed. */
+    readonly methods?: readonly UltraTonStreamMethod[];
+    /** The statuses that are retried, integers from 400 to 599. Replaces the default 408, 429, 502, 503 and 504. */
+    readonly statusCodes?: readonly number[];
+    /**
+     * The longest wait between attempts in ms, an integer from 0 to 2147483647. Default 30000. Backoff is exponential
+     * with full jitter (base 300ms) up to it. A `Retry-After` (seconds or an HTTP date) is waited exactly; when it asks
+     * for more than this or than what is left of `timeoutMs`, the request is not retried and that response is returned.
+     */
+    readonly maxDelayMs?: number;
+    /**
+     * Called before each wait, to log or observe. Throwing from it ends the request with that error. It cannot change
+     * the retry; abort through `signal` for that.
+     */
+    readonly onRetry?: (info: UltraTonRetryInfo) => void;
+}
+
+/** What `onRetry` receives: the retry about to happen (1 for the first), the wait before it, and what caused it. */
+export interface UltraTonRetryInfo {
+    readonly attempt: number;
+    readonly delayMs: number;
+    /** The status of the response being retried. */
+    readonly statusCode?: number;
+    /** The network error being retried (an `UltraTonNetworkError`). */
+    readonly error?: unknown;
+}
 
 /** The options of `client.stream()`: the request options plus the method, and a `maxBodySize` that may go past 2 GiB. */
 export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
@@ -190,6 +237,12 @@ export interface UltraTonClientOptions {
      * copied when the client is built, so changing your array afterwards does not change the client's policy.
      */
     readonly permitReservedIps?: ReservedIpPolicy;
+
+    /**
+     * Default `retry` for every request. See {@link UltraTonRequestOptions.retry}. A request's own `retry` merges over
+     * it field by field; the lists are copied when the client is built.
+     */
+    readonly retry?: number | UltraTonRetryOptions;
 
     /** Use HTTP/2 (TLS with ALPN `h2`, or h2c over plain http to a loopback name). Default false: HTTP/1.1. */
     readonly http2?: boolean;

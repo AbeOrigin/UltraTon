@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonNetworkTimeoutError, UltraTonRedirectError, toNetworkError } from "../errors.ts";
+import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonRedirectError, absoluteTimeout, idleTimeout, toNetworkError } from "../errors.ts";
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
@@ -163,7 +163,7 @@ export class Http1Engine {
             if (currentTimeoutMs > 0) {
                 executionTimer = setTimeout(() => {
                     req.destroy();
-                    reject(new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`));
+                    reject(absoluteTimeout(reqOpts.timeoutMs));
                 }, currentTimeoutMs);
             }
 
@@ -206,7 +206,7 @@ export class Http1Engine {
                             socketTimeoutMs: reqOpts.socketTimeoutMs,
                             signal: reqOpts.signal,
                             tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${stream.maxBodySize} bytes`),
-                            idle: () => new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${reqOpts.socketTimeoutMs}ms.`),
+                            idle: () => idleTimeout(reqOpts.socketTimeoutMs),
                             mapError: err => this.#closed ? clientClosed() : toNetworkError(err),
                         }),
                     });
@@ -232,7 +232,7 @@ export class Http1Engine {
             const onSocketTimeout = () => {
                 req.destroy();
                 clearTimeout(executionTimer);
-                reject(new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${reqOpts.socketTimeoutMs}ms.`));
+                reject(idleTimeout(reqOpts.socketTimeoutMs));
             };
             req.on('timeout', onSocketTimeout);
 
@@ -279,7 +279,7 @@ export class Http1Engine {
                 const elapsed = Date.now() - startTime;
                 currentTimeoutMs = Math.max(0, reqOpts.timeoutMs - elapsed);
                 if (currentTimeoutMs === 0) {
-                    throw new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${reqOpts.timeoutMs}ms exceeded.`);
+                    throw absoluteTimeout(reqOpts.timeoutMs);
                 }
             }
 

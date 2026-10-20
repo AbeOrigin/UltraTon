@@ -95,6 +95,8 @@ export async function fetchWith(
             headers,
             body,
             signal: signal ?? undefined,
+            // Never retried: libraries that take a fetch bring their own retries, which would multiply with the client's.
+            retry: 0,
             // 'follow' keeps the client's maxRedirects; 'manual' and 'error' see the 3xx itself.
             ...(redirect === 'follow' ? {} : { maxRedirects: 0 }),
         });

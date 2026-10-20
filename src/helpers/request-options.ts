@@ -1,7 +1,7 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
-import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions } from "../types/request-options.types.ts";
-import { MAX_REDIRECTS_CEILING } from "../constants.ts";
+import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
+import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 const INT32_MAX = 2147483647;
 
@@ -140,12 +140,12 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'http2', 'tls', 'userAgent'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -153,10 +153,14 @@ const QUERY_HINT = " Use 'query'.";
 const TLS_HINT = " TLS is configured with the 'tls' option of the client constructor.";
 const BASE_URL_HINT = " 'baseUrl' is an option of the client constructor, not of a request.";
 const TIMEOUT_HINT = " Use 'timeoutMs' (milliseconds).";
+const RETRY_OPTION_KEYS = ['limit', 'methods', 'statusCodes', 'maxDelayMs', 'onRetry'];
+const RETRY_HINT = ` Use 'retry': a number of retries, or { ${RETRY_OPTION_KEYS.join(', ')} }.`;
 const NO_VERIFY_OFF = " Disabling certificate verification is not supported; to trust a private CA use";
 // Maps, not objects: an option named 'constructor' or '__proto__' must not find a hint through the prototype chain.
 const OPTION_HINTS = new Map<string, string>([
     ['timeout', TIMEOUT_HINT],
+    ['retries', RETRY_HINT],
+    ['maxRetries', RETRY_HINT],
     ['baseURL', BASE_URL_HINT],
     ['prefixUrl', BASE_URL_HINT],
     ['baseUrl', BASE_URL_HINT],
@@ -173,6 +177,8 @@ const OPTION_HINTS = new Map<string, string>([
 const perRequestOnly = (key: string) => ` '${key}' is a per-request option, not a client option.`;
 const CLIENT_OPTION_HINTS = new Map<string, string>([
     ['timeout', TIMEOUT_HINT],
+    ['retries', RETRY_HINT],
+    ['maxRetries', RETRY_HINT],
     ['baseURL', " Use 'baseUrl'."],
     ['prefixUrl', " Use 'baseUrl'."],
     ['rejectUnauthorized', `${NO_VERIFY_OFF} tls: { ca }.`],
@@ -339,6 +345,62 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
     return { method, maxBodySize: maxBodySize as number | undefined, rest };
 }
 
+/** A `retry` option once validated: only what the caller set, lists copied and frozen. Merged and defaulted by retry.ts. */
+export interface RetryInput {
+    readonly limit?: number;
+    readonly methods?: readonly string[];
+    readonly statusCodes?: readonly number[];
+    readonly maxDelayMs?: number;
+    readonly onRetry?: (info: UltraTonRetryInfo) => void;
+}
+
+/** The most retries a request can make: bounded, so a server answering 503 forever costs at most 11 requests. */
+const MAX_RETRIES = 10;
+
+function listOption<T>(name: string, value: unknown, valid: (entry: unknown) => boolean, expected: string): readonly T[] {
+    if (!Array.isArray(value)) throw new TypeError(`UltraTon: Expected '${name}' to be ${expected}, received ${describeValue(value)}.`);
+    for (const entry of value) {
+        if (!valid(entry)) {
+            const received = typeof entry === 'string' ? `'${entry}'` : describeValue(entry);
+            throw new TypeError(`UltraTon: Expected '${name}' to be ${expected}, received ${received}.`);
+        }
+    }
+    return Object.freeze([...value] as T[]);
+}
+
+/**
+ * Validates `retry`, of a client or a request: a number of retries (0 to MAX_RETRIES), or a plain object with only the
+ * fields of RETRY_OPTION_KEYS. Lists are copied and frozen, so the caller cannot change them afterwards.
+ * @throws {TypeError} On any other type, an unknown field, or a field of the wrong type or range.
+ */
+export function retryOption(value: unknown): RetryInput | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value === 'number') return Object.freeze({ limit: intOption('retry', value, 0, MAX_RETRIES) });
+    if (!isPlainObject(value)) {
+        throw new TypeError(`UltraTon: Expected 'retry' to be a number or a plain object, received ${describeValue(value)}.`);
+    }
+    const raw = ownOptions(value);
+    for (const key of Object.keys(raw)) {
+        if (!RETRY_OPTION_KEYS.includes(key)) {
+            throw new TypeError(`UltraTon: Unknown retry option '${key}'. Valid retry options: ${RETRY_OPTION_KEYS.join(', ')}.`);
+        }
+    }
+    const retry: { -readonly [K in keyof RetryInput]: RetryInput[K] } = {};
+    if (raw.limit !== undefined) retry.limit = intOption('retry.limit', raw.limit, 0, MAX_RETRIES);
+    if (raw.maxDelayMs !== undefined) retry.maxDelayMs = intOption('retry.maxDelayMs', raw.maxDelayMs, 0);
+    if (raw.methods !== undefined) {
+        retry.methods = listOption('retry.methods', raw.methods, m => typeof m === 'string' && STREAM_METHODS.includes(m), `an array of ${STREAM_METHODS.join(', ')}`);
+    }
+    if (raw.statusCodes !== undefined) {
+        retry.statusCodes = listOption('retry.statusCodes', raw.statusCodes, c => Number.isInteger(c) && (c as number) >= 400 && (c as number) <= 599, 'an array of integers from 400 to 599');
+    }
+    if (raw.onRetry !== undefined) {
+        if (typeof raw.onRetry !== 'function') throw new TypeError(`UltraTon: Expected 'retry.onRetry' to be a function, received ${describeValue(raw.onRetry)}.`);
+        retry.onRetry = raw.onRetry as RetryInput['onRetry'];
+    }
+    return Object.freeze(retry);
+}
+
 /**
  * Adds the default `accept-encoding` (every coding the body reader can decode) unless `decompress` is `false` or the
  * headers already carry one. Run it on the options merged with the client defaults, like withJsonContentType.
@@ -469,7 +531,7 @@ export function buildSafeRequestOptions(options: InternalRequestOptions): Secure
     safeOptions.decompress = validateType('decompress', options.decompress, 'boolean') ? options.decompress : true;
     safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024);
     safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000);
-    safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, 30_000);
+    safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, DEFAULT_TIMEOUT_MS);
     safeOptions.maxRedirects = intOption('maxRedirects', options.maxRedirects, 0, MAX_REDIRECTS_CEILING);
     // Strict fallback: block SSRF
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
@@ -486,6 +548,7 @@ export interface ClientDefaults {
     readonly maxRedirects?: number;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
+    readonly retry?: RetryInput;
 }
 
 /** `new UltraTonClient(options)` once validated. */
@@ -596,6 +659,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             maxRedirects: raw.maxRedirects as number | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
+            retry: retryOption(raw.retry),
         },
     };
 }

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Retries: the `retry` option**, on the client and per request, off by default.
+  - `retry: n` retries up to `n` times (0 to 10). An object sets `limit`, `methods`, `statusCodes`, `maxDelayMs` and `onRetry`, and a request's `retry` merges over the client's field by field.
+  - Defaults: the methods GET, PUT, DELETE, HEAD and OPTIONS (never POST or PATCH unless listed) and the statuses 408, 429, 502, 503 and 504. The network failures `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN` and `EPIPE` are retried, and so is the idle timeout. When the retries run out on a status, the last response is returned.
+  - Never retried: policy errors, `UltraTonMemoryError`, `UltraTonRedirectError`, `TypeError`, the `timeoutMs` timeout and an abort.
+  - Waits use exponential backoff with full jitter (300 ms base, up to `maxDelayMs`, default 30 s). `Retry-After` (seconds or an HTTP date) is waited exactly; when it asks for more than `maxDelayMs` or than the budget left, the response is returned instead of retried.
+  - `timeoutMs` is the budget of every attempt and wait together, and `signal` cancels a wait.
+  - Every attempt is a full request, so DNS is validated again on a new connection.
+  - `onRetry({ attempt, delayMs, statusCode?, error? })` is called before each wait; if it throws, the request ends with that error.
+  - `stream()` retries until the headers arrive. `client.fetch()` never retries.
+  - New public types: `UltraTonRetryOptions` and `UltraTonRetryInfo`.
+- **Timeout codes.** `UltraTonNetworkTimeoutError` now has a `code`: `ERR_ULTRATON_TIMEOUT` when `timeoutMs` ran out, and `ERR_ULTRATON_SOCKET_TIMEOUT` when the connection sat idle for `socketTimeoutMs`. Before, it had none.
 - **Form bodies.**
   - New `form` request option: a plain object or `URLSearchParams`, sent urlencoded (`application/x-www-form-urlencoded;charset=UTF-8`) with the same encoding rules and validation as `query`.
   - `body` now also accepts `URLSearchParams` (sent urlencoded), `FormData` (sent as `multipart/form-data` with its boundary, files included) and `Blob`/`File` (sent with its `type` as content-type). Encoding uses the platform's own `Response`, with no dependencies.
