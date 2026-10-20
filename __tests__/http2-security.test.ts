@@ -39,10 +39,10 @@ import { UltraTonClient } from "../src/http-client.ts";
 import { kSessionManager } from "../src/internal.ts";
 
 const buildClient = (t: { mock: { method: typeof mock.method } }) => {
-  t.mock.method(dnsPromises, "lookup", async () => ({
+  t.mock.method(dnsPromises, "lookup", async () => [{
     address: "93.184.216.34",
     family: 4,
-  }));
+  }]);
 
   const connect = mock.fn(() => {
     throw new Error("connectFn must not be reached");
@@ -190,8 +190,8 @@ const fakeSession = () =>
     },
   });
 
-// No test using this may reach a real resolver: IP literals are echoed back,
-// any other hostname fails fast instead of touching the network.
+// No test using this may reach a real resolver: IP literals are echoed back (the client
+// judges a literal without DNS anyway), any other hostname fails fast instead of touching the network.
 const mockIpLiteralDns = () => {
   mock.method(dnsPromises, "lookup", async (host: string) => {
     const family = isIP(host);
@@ -200,7 +200,7 @@ const mockIpLiteralDns = () => {
         code: "ENOTFOUND",
       });
     }
-    return { address: host, family };
+    return [{ address: host, family }];
   });
 };
 
@@ -396,7 +396,7 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     );
   });
 
-  it("brackets IPv6 pinned addresses in the connect URL", async () => {
+  it("connects to an IPv6 literal by its bracketed URL, without sending it as SNI", async () => {
     const connect = mock.fn((_url: string, _options: unknown) => fakeSession());
     const manager = new Http2SessionManager({}, connect as any);
 
@@ -405,17 +405,25 @@ describe("HTTP/2 safe URLs and reserved-IP enforcement", () => {
     assert.strictEqual(connect.mock.callCount(), 1);
     const [url, options] = connect.mock.calls[0].arguments;
     assert.strictEqual(url, "https://[::1]:8443");
-    assert.strictEqual((options as any).servername, "::1");
+    assert.strictEqual((options as any).servername, undefined);
   });
 });
 
 describe("HTTP/2 hostname entries in permitReservedIps", () => {
   // "localhost" resolves to the fixture's loopback address; any other host is echoed, as for IP literals.
   const mockLocalhostDns = (t: TestContext) =>
-    t.mock.method(dnsPromises, "lookup", async (host: string) => ({
+    t.mock.method(dnsPromises, "lookup", async (host: string) => [{
       address: host === "localhost" ? "127.0.0.1" : host,
       family: 4,
-    }));
+    }]);
+
+  /** What the `lookup` connect option of the `n`th connect answers when Node asks it for every address. */
+  const pinnedAnswer = (connect: { mock: { calls: Array<{ arguments: unknown[] }> } }, n = 0) =>
+    new Promise<unknown>((resolve, reject) =>
+      (connect.mock.calls[n].arguments[1] as any).lookup("localhost", { all: true }, (err: unknown, list: unknown) =>
+        err ? reject(err) : resolve(list),
+      ),
+    );
 
   it("reaches a reserved IP through the hostname the allowlist names", async (t) => {
     mockLocalhostDns(t);
@@ -425,9 +433,10 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
 
     assert.strictEqual(res.statusCode, 200);
     assert.strictEqual(res.text(), "H2-INTERNAL");
-    // The connection went to the pinned address, not to the name.
+    // Connected by name, but the name only ever became the pinned (validated) address.
     assert.strictEqual(connect.mock.callCount(), 1);
-    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://127.0.0.1:${port}`);
+    assert.strictEqual(connect.mock.calls[0].arguments[0], `http://localhost:${port}`);
+    assert.deepStrictEqual(await pinnedAnswer(connect), [{ address: "127.0.0.1", family: 4 }]);
   });
 
   it("blocks a redirect from the allowed hostname to a reserved IP literal without connecting", async (t) => {
@@ -445,10 +454,10 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
         return true;
       },
     );
-    // The second hop was resolved and judged as the literal it is, and no connection was opened for it.
+    // The second hop was judged as the literal it is (without DNS), and no connection was opened for it.
     assert.deepStrictEqual(
       lookup.mock.calls.map((call) => call.arguments[0]),
-      ["localhost", "127.0.0.1"],
+      ["localhost"],
     );
     assert.strictEqual(connect.mock.callCount(), 1, "only the first hop connected");
   });
@@ -457,10 +466,10 @@ describe("HTTP/2 hostname entries in permitReservedIps", () => {
 describe("HTTP/2 redirects never downgrade from https to http", () => {
   it("rejects an https to http redirect even with permitReservedIps, before opening another stream", async (t) => {
     // The first hop's hostname must resolve without touching the network.
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "93.184.216.34",
       family: 4,
-    }));
+    }]);
 
     // A session whose every stream answers 302 to a plaintext loopback service.
     const authorities: unknown[] = [];
@@ -681,7 +690,7 @@ describe("HTTP/2 redirect hygiene and timeout budget", () => {
  * `timeout` so a regression is reported as a failure instead of hanging the run.
  */
 describe("HTTP/2 DNS resolution timeout budget", () => {
-  const PUBLIC_IP = { address: "93.184.216.34", family: 4 };
+  const PUBLIC_IP = [{ address: "93.184.216.34", family: 4 }];
   const neverResolves = () => new Promise<never>(() => {});
 
   const buildHangingDns = (t: TestContext) => {
@@ -887,7 +896,7 @@ describe("HTTP/2 concurrent connection attempts for one pool key", () => {
     const answers: Array<() => void> = [];
     t.mock.method(dnsPromises, "lookup", (() =>
       new Promise((resolve) => {
-        answers.push(() => resolve({ address: "127.0.0.1", family: 4 }));
+        answers.push(() => resolve([{ address: "127.0.0.1", family: 4 }]));
       })) as any);
     const origin = `http://race.test:${port}`;
     const giveUp = new AbortController();

@@ -169,13 +169,43 @@ export function assertAllowedIp(ip: string, policy: ReservedIpPolicy, hostname?:
     );
 }
 
-export async function resolveAndPinHost(hostname: string, policy: ReservedIpPolicy = false): Promise<string> {
-    // { family: 0 } instructs getaddrinfo to return the OS-preferred address type (Dual-Stack)
-    const { address } = await dnsPromises.lookup(hostname, { family: 0 }).catch((err: NodeJS.ErrnoException) => {
-        // The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
-        throw new SecureHttpError(`UltraTon: Hostname resolution failed (${err.code || 'UNKNOWN_DNS_ERROR'}).`);
-    });
+/** One validated address, in the shape `dns.lookup(..., { all: true })` and a socket `lookup` callback use. */
+export interface PinnedAddress {
+    address: string;
+    family: 4 | 6;
+}
 
-    assertAllowedIp(address, policy, hostname);
-    return address;
+// The code only: the hostname is already known to the caller and must not be echoed into a message that may be relayed.
+const resolutionFailed = (code: string) =>
+    new SecureHttpError(`UltraTon: Hostname resolution failed (${code}).`, { code });
+
+/**
+ * Every address `hostname` resolves to, each one judged by `policy`. If any of them is reserved and not allowed, the
+ * whole lookup is rejected (fail closed), so a caller that lets Node pick any address of the result (Happy Eyeballs)
+ * can only ever reach validated ones. An empty answer, or an entry that is not an IP address, is a resolution failure.
+ * An IP literal is judged as itself and never resolved, like Node itself never resolves one.
+ */
+export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolicy = false): Promise<PinnedAddress[]> {
+    const literal = isIP(hostname);
+    if (literal !== 0) {
+        assertAllowedIp(hostname, policy, hostname);
+        return [{ address: hostname, family: literal as 4 | 6 }];
+    }
+
+    const answer: unknown = await dnsPromises.lookup(hostname, { all: true }).catch((err: NodeJS.ErrnoException) => {
+        throw resolutionFailed(err.code || 'UNKNOWN_DNS_ERROR');
+    });
+    if (!Array.isArray(answer) || answer.length === 0) throw resolutionFailed('ENODATA');
+
+    const pinned: PinnedAddress[] = [];
+    for (const entry of answer) {
+        const address = (entry as { address?: unknown } | null)?.address;
+        // isReservedIp() calls a non-IP "not reserved": never let one through as if it were a public address.
+        const family = typeof address === 'string' ? isIP(address) : 0;
+        if (family === 0) throw resolutionFailed('EBADRESP');
+        pinned.push({ address: address as string, family: family as 4 | 6 });
+    }
+    // Only once the whole answer is known to be well formed, and before anything is returned: all of it, or nothing.
+    for (const { address } of pinned) assertAllowedIp(address, policy, hostname);
+    return pinned;
 }

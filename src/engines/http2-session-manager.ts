@@ -11,19 +11,21 @@ import {
   MAX_SESSION_MEMORY_MB,
 } from "../constants.ts";
 import { isIP } from "node:net";
+import type { LookupFunction } from "node:net";
 import {
   assertAllowedIp,
+  type PinnedAddress,
   policyKey,
   type ReservedIpPolicy,
-  resolveAndPinHost,
+  resolveAndPinAll,
 } from "../security/dns-pinner.ts";
 import { SecureHttpError, toNetworkError } from "../errors.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
   createdAt: number;
-  /** The IP the session is pinned to; every caller is checked against it. */
-  ip: string;
+  /** Every address the session may have connected to (all validated); every caller is checked against all of them. */
+  ips: readonly string[];
 }
 
 /** A DNS lookup plus connect in flight for one pool key, shared by every caller that arrives while it runs. */
@@ -79,6 +81,19 @@ const bareHostOf = (hostname: string): string => {
   // URL.hostname keeps the brackets of an IPv6 literal ("[::1]"); DNS and SNI need the bare address.
   return bareHost.replace(/^\[|\]$/g, "");
 };
+
+/**
+ * A socket `lookup` that answers only with `addresses`, already validated, and never asks DNS again: whichever address
+ * Node connects to, Happy Eyeballs included, is one of them. Answers on the next tick, as a real lookup would.
+ */
+const pinnedLookup =
+  (addresses: readonly PinnedAddress[]): LookupFunction =>
+  (_hostname, options, callback) => {
+    process.nextTick(() => {
+      if (options.all) callback(null, addresses.map((a) => ({ ...a })));
+      else callback(null, addresses[0].address, addresses[0].family);
+    });
+  };
 
 /** Streams in flight per session, for `holdSession`. */
 const activeStreams = new WeakMap<ClientHttp2Session, number>();
@@ -172,13 +187,13 @@ export class Http2SessionManager {
     permitReservedIps: ReservedIpPolicy = false,
     signal?: AbortSignal,
   ): Promise<ClientHttp2Session> {
-    const { session, ip } = await this.#acquire(
+    const { session, ips } = await this.#acquire(
       hostname,
       overrideOptions,
       permitReservedIps,
       signal,
     );
-    assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
+    for (const ip of ips) assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
     return session;
   }
 
@@ -265,25 +280,43 @@ export class Http2SessionManager {
   ): Promise<SessionEntry> {
     const bareHost = bareHostOf(hostname);
 
+    // ponytail: getaddrinfo cannot be cancelled. A caller that gives up stops waiting, but its threadpool thread stays
+    // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
+    // timeout (c-ares), not done here because it ignores /etc/hosts.
+    // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
+    const addresses = await resolveAndPinAll(bareHost, permitReservedIps);
+
+    const {
+      // Each of these would let the socket go somewhere other than the validated addresses.
+      host: _host,
+      port: _port,
+      path: _path,
+      socket: _socket,
+      createConnection: _createConnection,
+      lookup: _lookup,
+      servername: _servername,
+      ...baseOptions
+    } = {
+      ...this.#tlsConfig,
+      ...overrideOptions,
+    } as SecureClientSessionOptions & Record<string, unknown>;
     const connectionOptions: SecureClientSessionOptions & {
       maxHeaderListPairs?: number;
     } = {
       maxHeaderListPairs: MAX_HEADER_LIST_PAIRS,
       maxSessionMemory: MAX_SESSION_MEMORY_MB,
-      ...this.#tlsConfig,
-      ...overrideOptions,
+      ...baseOptions,
       settings: {
         maxHeaderListSize: MAX_HEADER_LIST_SIZE,
         ...this.#tlsConfig?.settings,
         ...overrideOptions?.settings,
       },
-      servername: bareHost,
+      // The connect URL keeps the name; this is the only way it becomes addresses (see pinnedLookup). Node never
+      // calls it for an IP literal, which connects to the literal resolveAndPinAll just judged.
+      lookup: pinnedLookup(addresses),
+      // SNI and the certificate check use the name. An IP literal is never sent as SNI (RFC 6066; Node's DEP0123).
+      ...(isIP(bareHost) === 0 ? { servername: bareHost } : {}),
     };
-
-    // ponytail: getaddrinfo cannot be cancelled. A caller that gives up stops waiting, but its threadpool thread stays
-    // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
-    // timeout (c-ares), not done here because it ignores /etc/hosts.
-    const pinnedHost = await resolveAndPinHost(bareHost, permitReservedIps);
 
     // Every caller timed out while the lookup hung: do not open a connection nobody will use.
     if (!wanted()) {
@@ -305,22 +338,9 @@ export class Http2SessionManager {
       return pooled;
     }
 
-    // http2.connect() requires a full URL (e.g. "https://172.233.17.91"), not a
-    // bare IP. Reconstruct it using the original origin's scheme and port so the
-    // TCP connection targets the resolved IP while SNI (servername) stays as the
-    // original hostname for correct TLS certificate validation.
-    let connectUrl: string;
-    try {
-      const parsed = new URL(
-        hostname.includes("://") ? hostname : `https://${hostname}`,
-      );
-      const port = parsed.port ? `:${parsed.port}` : "";
-      // A bare IPv6 address is not a valid URL host: it needs its brackets back.
-      const host = isIP(pinnedHost) === 6 ? `[${pinnedHost}]` : pinnedHost;
-      connectUrl = `${parsed.protocol}//${host}${port}`;
-    } catch {
-      connectUrl = `https://${pinnedHost}`;
-    }
+    // The origin itself (scheme, name, port): http2.connect hands the name, the options and so `lookup` to
+    // net.connect (h2c) or tls.connect, where autoSelectFamily (on by default) races the validated addresses.
+    const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
 
     let newSession: ClientHttp2Session;
     try {
@@ -351,7 +371,7 @@ export class Http2SessionManager {
     const entry: SessionEntry = {
       session: newSession,
       createdAt: Date.now(),
-      ip: pinnedHost,
+      ips: addresses.map(({ address }) => address),
     };
     this.#sessions.set(key, entry);
 

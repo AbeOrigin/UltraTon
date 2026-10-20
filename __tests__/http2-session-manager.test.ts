@@ -28,8 +28,12 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         destroy() { this.destroyed = true; }
     });
 
-    it('DNS Injection: http2.connect receives the resolved IP from pinner', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '8.8.8.8', family: 4 }));
+    /** What the `lookup` connect option of the `n`th connect answers when Node asks it for every address. */
+    const pinnedAnswer = (n = 0) => new Promise<unknown>((resolve, reject) =>
+        mockConnect.mock.calls[n].arguments[1].lookup('any', { all: true }, (err: unknown, list: unknown) => err ? reject(err) : resolve(list)));
+
+    it('DNS Injection: http2.connect only ever turns the name into the pinned IP', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '8.8.8.8', family: 4 }]);
         
         mockConnect = mock.fn(() => createMockSession());
         
@@ -39,7 +43,8 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         assert.equal(mockConnect.mock.callCount(), 1);
         const args = mockConnect.mock.calls[0].arguments;
         
-        assert.equal(args[0], 'https://8.8.8.8', 'The resolved IP must be passed to connect as a full URL');
+        assert.equal(args[0], 'https://example.com', 'connect by name: the lookup option supplies the address');
+        assert.deepEqual(await pinnedAnswer(), [{ address: '8.8.8.8', family: 4 }], 'the lookup answers with the pinned IP');
         assert.equal(args[1].servername, 'example.com', 'SNI/authority must be preserved');
     });
 
@@ -50,7 +55,7 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         let dnsCalls = 0;
         t.mock.method(dnsPromises, 'lookup', async () => {
             dnsCalls++;
-            return { address: `8.8.8.${dnsCalls + 10}`, family: 4 }; // e.g. 8.8.8.11 then 8.8.8.12
+            return [{ address: `8.8.8.${dnsCalls + 10}`, family: 4 }]; // e.g. 8.8.8.11 then 8.8.8.12
         });
 
         const sess1 = createMockSession();
@@ -90,13 +95,13 @@ describe('Http2SessionManager - DNS Pinning & Rotation', () => {
         global.Date.now = () => currentTime;
         
         let currentIp = '8.8.8.8';
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: currentIp, family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: currentIp, family: 4 }]);
 
         mockConnect = mock.fn(() => createMockSession());
         const manager = new Http2SessionManager({}, mockConnect as any);
         
         await manager.getSession('rebind.com');
-        assert.equal(mockConnect.mock.calls[0].arguments[0], 'https://8.8.8.8', 'Safe DNS applies initially');
+        assert.deepEqual(await pinnedAnswer(), [{ address: '8.8.8.8', family: 4 }], 'Safe DNS applies initially');
         
         // Fast forward cache duration
         currentTime += MAX_SESSION_LIFESPAN + 500;

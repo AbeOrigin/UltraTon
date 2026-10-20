@@ -58,7 +58,7 @@ run();
 - **The `timeout` option is removed.** It never had any effect, and it now throws. Use `timeoutMs` (absolute time budget) or `socketTimeoutMs` (socket idle time).
 - **Methods are `(url, options)`.** Send a payload with `post(url, { json: { a: 1 } })` or `post(url, { body })` (`string`, `Buffer` or `Uint8Array`), never both. Bodies always go out with a `content-length`, never chunked.
 - **Unknown options throw.** An option outside the documented list (`headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `signal`, `auth`, `json`, `body`) throws a `TypeError`, with a hint for the usual suspects (`timeout`, `params`, `data`, `rejectUnauthorized`...), instead of being silently ignored.
-- **`http://127.0.0.1` and `http://localhost` now need `permitReservedIps: true`.** Plain HTTP is still accepted for them, but they are reserved addresses, so the SSRF guard rejects them unless you opt in.
+- **Loopback names need `permitReservedIps`.** Plain HTTP is accepted for every loopback name (`localhost`, `*.localhost`, `127.0.0.0/8` literals and `[::1]`), but they are reserved addresses, so the SSRF guard rejects them unless you opt in. `localhost` usually resolves to both `::1` and `127.0.0.1`, and every address must be allowed: use `true`, `['localhost']`, or a list covering both, such as `['127.0.0.0/8', '::1']`.
 
 ## Security Goals & Roadmap
 

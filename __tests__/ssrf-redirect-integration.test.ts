@@ -85,7 +85,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
 
     // http is only accepted for localhost/127.0.0.1, so these use https: the literal is rejected before any connection.
     it('permitReservedIps: an IPv6 allowlist (::/0) does not reach an IPv4-embedding IPv6 literal, directly or by redirect', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const mapped = `[::ffff:127.0.0.1]:${port}`;
         const redirector = http.createServer((_req, res) => { res.writeHead(302, { location: `https://${mapped}/landing` }); res.end(); });
         await new Promise<void>(r => redirector.listen(0, '127.0.0.1', r));
@@ -115,7 +115,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
     });
 
     it('permitReservedIps: a hostname entry lets that host through, but a redirect to a reserved IP literal is still blocked', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const other = http.createServer((_req, res) => { hits++; res.end('OTHER'); });
         await new Promise<void>(r => other.listen(0, '127.0.0.1', r));
         const otherPort = (other.address() as AddressInfo).port;
@@ -136,7 +136,7 @@ describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets
     });
 
     it('permitReservedIps: a hostname entry does not cover a different hostname resolving to a reserved IP', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         hits = 0;
         await assert.rejects(
             new UltraTonClient().get(`https://rebound.example:${port}/`, { permitReservedIps: ['localhost'] }),
@@ -223,7 +223,7 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
     const reservedBlocked = (err: unknown) => err instanceof SecureHttpError && /prohibited internal\/reserved/.test(err.message);
 
     it('never reuses a keep-alive socket across reserved-IP policies', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const { port, connections } = await startCountingServer(t);
         const client = new UltraTonClient();
         const url = `http://localhost:${port}/`;
@@ -243,7 +243,7 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
     });
 
     it('gives each distinct allowlist its own keep-alive pool', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const { port, connections } = await startCountingServer(t);
         const client = new UltraTonClient();
         const url = `http://localhost:${port}/`;
@@ -256,7 +256,7 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
     });
 
     it('still reuses the keep-alive socket within one policy, however its allowlist is ordered or cased', async (t) => {
-        t.mock.method(dnsPromises, 'lookup', async () => ({ address: '127.0.0.1', family: 4 }));
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '127.0.0.1', family: 4 }]);
         const { port, connections } = await startCountingServer(t);
         const client = new UltraTonClient();
         const url = `http://localhost:${port}/`;

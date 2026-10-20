@@ -4,7 +4,7 @@ import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
 import type { UltraTonResponse } from "../types/request-response.ts";
-import { assertAllowedIp, policyKey, resolveAndPinHost } from "../security/dns-pinner.ts";
+import { assertAllowedIp, policyKey, resolveAndPinAll } from "../security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
@@ -125,14 +125,15 @@ export class Http1Engine {
                 headers,
                 timeout: reqOpts.socketTimeoutMs,
                 agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
-                lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family: number) => void) => {
-                    resolveAndPinHost(lookupHostname, reqOpts.permitReservedIps)
-                        .then(ip => {
+                lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void) => {
+                    resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps)
+                        .then(addresses => {
                             // close() ran while DNS was pending: a socket opened now would outlive it, unpooled and unreachable.
                             if (this.#closed) throw clientClosed();
-                            const family = ip.includes(':') ? 6 : 4;
-                            const result = lookupOptions.all ? [{ address: ip, family }] : ip;
-                            callback(null, result, family);
+                            // With autoSelectFamily (Node's default) the socket asks for every address and races them
+                            // (Happy Eyeballs). Each one was validated, so whichever connects is allowed.
+                            if (lookupOptions.all) callback(null, addresses);
+                            else callback(null, addresses[0].address, addresses[0].family);
                         })
                         .catch(err => {
                             // Passing the error back into the Node HTTP machinery so it emits an 'error' event on req

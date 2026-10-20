@@ -142,7 +142,7 @@ export interface UltraTonClientOptions {
      */
     readonly permitReservedIps?: ReservedIpPolicy;
 
-    /** Use HTTP/2 (TLS with ALPN `h2`, or h2c on the `http://localhost` escape hatch). Default false: HTTP/1.1. */
+    /** Use HTTP/2 (TLS with ALPN `h2`, or h2c over plain http to a loopback name). Default false: HTTP/1.1. */
     readonly http2?: boolean;
 
     /**

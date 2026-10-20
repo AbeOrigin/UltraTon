@@ -84,10 +84,10 @@ const buildTestClient = (
   t: { mock: { method: typeof mock.method } },
 ): { client: UltraTonClient; session: MockSession } => {
   // Bypass the DNS pinner with a safe public IP (non-reserved)
-  t.mock.method(dnsPromises, "lookup", async () => ({
+  t.mock.method(dnsPromises, "lookup", async () => [{
     address: "93.184.216.34", // example.com public IP
     family: 4,
-  }));
+  }]);
 
   const session = createMockSession(streamFactory);
 

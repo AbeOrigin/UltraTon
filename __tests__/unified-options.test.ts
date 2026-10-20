@@ -104,7 +104,7 @@ const engines: Array<[string, (t: TestContext) => Promise<Engine>]> = [
 describe('Unified API: json option and content-length (real servers)', () => {
     beforeEach(() => {
         // The HTTP/2 client resolves IP literals through dns.promises; echo them, never touch a resolver.
-        mock.method(dnsPromises, 'lookup', async (host: string) => ({ address: host, family: isIP(host) || 4 }));
+        mock.method(dnsPromises, 'lookup', async (host: string) => [{ address: host, family: isIP(host) || 4 }]);
     });
     afterEach(() => mock.restoreAll());
 

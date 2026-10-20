@@ -31,10 +31,10 @@ type MockConnectFn = (
 
 describe("Sprint 7 – Native Configuration Hardening", () => {
   it("passes paranoid limits to http2.connect", async (t) => {
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "1.2.3.4",
       family: 4,
-    }));
+    }]);
 
     const mockSession = {
       on: mock.fn(),
@@ -69,10 +69,10 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
   });
 
   it("allows overriding paranoid limits via overrideOptions", async (t) => {
-    t.mock.method(dnsPromises, "lookup", async () => ({
+    t.mock.method(dnsPromises, "lookup", async () => [{
       address: "1.2.3.4",
       family: 4,
-    }));
+    }]);
 
     const mockSession = {
       on: mock.fn(),
