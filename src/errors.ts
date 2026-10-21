@@ -4,7 +4,8 @@
  */
 export class SecureHttpError extends Error {
     /**
-     * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`.
+     * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`,
+     * and from `createSecureAgents()`, `ERR_ULTRATON_NON_CANONICAL_IP` (a host such as `127.1`).
      * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...). On
      * `UltraTonNetworkTimeoutError`, `ERR_ULTRATON_TIMEOUT` when `timeoutMs` ran out and `ERR_ULTRATON_SOCKET_TIMEOUT`
      * when the connection sat idle for `socketTimeoutMs`. A request body: `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` (on

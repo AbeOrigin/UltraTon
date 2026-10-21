@@ -12,6 +12,7 @@ UltraTon has one maintainer, so answers can take a few days.
 UltraTon supports every Node.js line from 22.12 on that is still maintained upstream: Current, Active LTS and Maintenance LTS (see Node's [release schedule](https://github.com/nodejs/release#release-schedule)).
 
 - **CI:** every change is tested on Node 22.12.0 (the oldest supported version), the latest 22.x, 24.x and 26.x.
+- **Security releases of Node:** supported does not mean safe. Run the latest release of your line; [SECURITY.md](SECURITY.md#nodejs-releases) lists the minimum releases with the fixes UltraTon depends on, and what UltraTon does on older ones.
 - **Dropping a Node line:** only in a new UltraTon major, and only once that line has reached end-of-life upstream.
 - **New Node lines:** added to CI when they are released. A bug that only shows on a new line is fixed in a patch or minor.
 

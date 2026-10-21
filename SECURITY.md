@@ -7,6 +7,15 @@
 | 2.x | Yes |
 | 1.x | No. Upgrade to 2.x: 1.x has known SSRF bypasses. |
 
+### Node.js releases
+
+Run UltraTon on a Node.js release with the October 2026 security fixes: **22.23.4, 24.22.1, 26.12.1 or later**. Node's own fixes are what protect you; UltraTon only narrows the exposure on older releases:
+
+- **CVE-2026-111497, Brotli decoder out-of-bounds write (remote code execution):** a client decoding responses from servers it does not control is exposed. On an unpatched release, UltraTon neither requests nor decodes `br`, and a `br` body comes back raw.
+- **CVE-2026-106069, -106072, -105483, TLS hostname checks with non-canonical IP addresses:** the client always canonicalizes the host first. `createSecureAgents()` refuses a host given as an IPv4 in a non-canonical form (`ERR_ULTRATON_NON_CANONICAL_IP`).
+- **CVE-2026-105481, a keep-alive socket can take a response written before the request:** not mitigated in UltraTon. Pools are per origin, so only the server you are talking to could do it.
+- **The eMudhra intermediate CA compromise:** fixed by the CA store of the patched releases, which UltraTon uses unless you pass your own `tls.ca`.
+
 ## Reporting a vulnerability
 
 Please **do not open a public issue**. Report it privately through GitHub:

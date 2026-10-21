@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **No Brotli on Node releases without the decoder fix.** Node fixed an out-of-bounds write in its Brotli decoder that a malicious server could use for remote code execution (CVE-2026-111497) in 22.23.4, 24.22.1 and 26.12.1. On any earlier release, UltraTon no longer sends `br` in `accept-encoding` and never feeds a `br` body to the decoder: the body comes back raw, as for any coding the runtime cannot decode. Upgrade Node to get Brotli back. SECURITY.md lists the minimum releases.
+- **`createSecureAgents()` refuses a host that is an IPv4 in a non-canonical form** (`127.1`, `0x7f.0.0.1`, `2130706433`), with `ERR_ULTRATON_NON_CANONICAL_IP`. A library may pass one as is; getaddrinfo can resolve it to that IPv4 while TLS checks it as a DNS name, the confusion behind CVE-2026-106069, -106072 and -105483. `UltraTonClient` already canonicalized the host.
+
 - **6to4 and Teredo addresses carrying a reserved IPv4 are blocked.** A 6to4 address (`2002::/16`) holds an IPv4 in bits 16–47, and a Teredo address (`2001:0::/32`) holds a server IPv4 and an inverted client IPv4; a host with a tunnel interface or a relay delivers to them. They used to be judged as public IPv6 (a documented residual risk); now a reserved IPv4 inside one makes the address reserved, `2002:a9fe:a9fe::1` (cloud metadata) and `2001:0:808:808::80ff:fffe` (a Teredo client on 127.0.0.1) included. In an allowlist only an IPv6 entry allows such an address: an IPv4 entry does not cover it. Two new cases in the SSRF corpus (now 32).
 
 ## [2.4.1] - 2026-10-21

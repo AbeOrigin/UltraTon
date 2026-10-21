@@ -56,6 +56,21 @@ function refuseForwardProxy(req: http.ClientRequest): boolean {
 }
 
 /**
+ * A host Node does not take for an IP but a URL parser reads as an IPv4: `127.1`, `0x7f.0.0.1`, `0177.0.0.1`,
+ * `2130706433`, fullwidth digits. The client never sees one (its URL parser canonicalizes the host first), but a library
+ * may hand one to the agent as is. getaddrinfo may resolve it to that IPv4 while TLS checks it as a DNS name: the
+ * confusion behind CVE-2026-106069, -106072 and -105483 in unpatched Node releases.
+ */
+function isLooseIpv4(host: string): boolean {
+    if (isIP(host) !== 0) return false;
+    try {
+        return isIP(new URL(`http://${host}/`).hostname) === 4;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * Resolves and validates the target, then opens the socket through `connect` (the agent's own net/tls connect) with a
  * lookup pinned to the validated addresses. Everything the calling library passed that could point the socket
  * elsewhere is overridden: its `lookup` is replaced, a `socket`/`fd`/`handle` to reuse is dropped, and a
@@ -67,6 +82,9 @@ function secureConnect(connect: Connect, options: any, callback: Callback, polic
     }
     // Node hands the agent the bare host (no brackets around an IPv6 literal); the loopback name check expects them.
     const host = String(options.host ?? 'localhost').replace(/^\[|\]$/g, '').toLowerCase();
+    if (isLooseIpv4(host)) {
+        return callback(new SecureHttpError('UltraTon: A secure agent refuses an IP address in a non-canonical form; write it as a dotted-decimal IPv4.', { code: 'ERR_ULTRATON_NON_CANONICAL_IP' }), noSocket);
+    }
     if (plainHttp && !isLoopbackHost(isIP(host) === 6 ? `[${host}]` : host)) {
         return callback(new SecureHttpError('UltraTon: Plain http is only allowed for loopback hosts; use https.', { code: 'ERR_ULTRATON_PLAIN_HTTP' }), noSocket);
     }
