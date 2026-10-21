@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Streamed uploads.** `body` accepts a `Readable`, a `ReadableStream` or any async iterable of `Uint8Array` or string chunks, on both engines and in `client.fetch` (which no longer rejects them, and also streams a `Request` input's body). The body is sent as it is read, never buffered.
+  - **Framing:** the request's own `content-length` is sent as is, and the stream must match it exactly (`ERR_ULTRATON_REQUEST_BODY_LENGTH` otherwise, never a truncated body). Without it, HTTP/1.1 sends chunked.
+  - **Sent once:** a request with a streamed body is never retried, whatever `retry` says, and a 307/308 resolves as the 3xx response instead of being followed. 301/302/303 are followed as a GET without a body, as before.
+  - **Ending early:** an abort, a timeout or a failure destroys the stream (a `ReadableStream` is cancelled), even while it waits for data. An error from the stream rejects the request as is.
+- **`maxRequestBodySize`** (request and client option, no default): a buffered body larger than it throws before connecting, a streamed one is aborted as soon as it goes past it. Both reject with `UltraTonMemoryError`, code `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE`.
+
 ## [2.3.0] - 2026-10-20
 
 Protection for the clients you already use, and the evidence behind it: `createSecureAgents()` for axios, got and node-fetch, observability through `diagnostics_channel`, a public SSRF corpus, fuzzing and benchmarks run in CI, an honest comparison, and a fix for prototype header keys spelled in another case. All additive.

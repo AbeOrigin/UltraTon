@@ -211,10 +211,8 @@ describe('client.fetch() errors and init validation', () => {
             err instanceof TypeError && (err as any).cause instanceof SecureHttpError && (err as any).cause.code === 'ERR_ULTRATON_RESERVED_IP');
     });
 
-    it('rejects a streaming request body and options that would change the connection', async () => {
+    it('rejects options that would change the connection', async () => {
         const client = new UltraTonClient();
-        await assert.rejects(client.fetch('https://example.com/', { method: 'POST', body: new ReadableStream(), duplex: 'half' } as any),
-            { name: 'TypeError', message: /^UltraTon: Streaming request bodies are not supported/ });
         for (const key of ['dispatcher', 'agent', 'timeout']) {
             await assert.rejects(client.fetch('https://example.com/', { [key]: {} } as any),
                 { name: 'TypeError', message: new RegExp(`^UltraTon: Unsupported fetch option '${key}'`) });

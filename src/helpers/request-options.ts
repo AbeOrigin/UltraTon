@@ -4,6 +4,7 @@ import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequ
 import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
+import { isStreamBody, StreamedBody } from './request-body.ts';
 const INT32_MAX = 2147483647;
 
 /**
@@ -142,12 +143,12 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -166,7 +167,7 @@ const OPTION_HINTS = new Map<string, string>([
     ['baseURL', BASE_URL_HINT],
     ['prefixUrl', BASE_URL_HINT],
     ['baseUrl', BASE_URL_HINT],
-    ['data', " Use 'json' for a JSON payload, 'form' for urlencoded fields or 'body' for a string, Buffer, Blob, FormData or URLSearchParams."],
+    ['data', " Use 'json' for a JSON payload, 'form' for urlencoded fields or 'body' for a string, Buffer, Blob, FormData, URLSearchParams or a stream."],
     ['params', QUERY_HINT],
     ['searchParams', QUERY_HINT],
     ['agent', TLS_HINT],
@@ -209,7 +210,9 @@ function assertKnownOptions(options: object): void {
 }
 
 const isBody = (body: unknown): boolean => typeof body === 'string' || body instanceof Uint8Array
-    || body instanceof Blob || body instanceof FormData || body instanceof URLSearchParams;
+    || body instanceof Blob || body instanceof FormData || body instanceof URLSearchParams || isStreamBody(body)
+    // Already resolved: what the engines pass back through buildSafeRequestOptions.
+    || body instanceof StreamedBody;
 
 /** @throws {TypeError} If more than one of `json`, `form` and `body` is set, or `body` is of a type it cannot be. */
 function assertBodyOptions(options: { json?: unknown; form?: unknown; body?: unknown }): void {
@@ -217,12 +220,30 @@ function assertBodyOptions(options: { json?: unknown; form?: unknown; body?: unk
         throw new TypeError("UltraTon: Use only one of 'json', 'form' or 'body'.");
     }
     if (options.body !== undefined && !isBody(options.body)) {
-        throw new TypeError(`UltraTon: Expected 'body' to be a string, Buffer, Uint8Array, Blob, FormData or URLSearchParams, received ${describeValue(options.body)}. Use 'json' to send an object.`);
+        throw new TypeError(`UltraTon: Expected 'body' to be a string, Buffer, Uint8Array, Blob, FormData, URLSearchParams or a stream (Readable, ReadableStream, async iterable), received ${describeValue(options.body)}. Use 'json' to send an object.`);
     }
 }
 
 const hasContentType = (headers: unknown): boolean => isPlainObject(headers)
     && Object.keys(headers).some(key => key.toLowerCase() === 'content-type' && headers[key] !== undefined);
+
+/**
+ * The caller's own `content-length` for a streamed body, or `undefined` (then it is sent chunked). Only the request's
+ * headers count: a client default cannot know the size of a stream.
+ * @throws {TypeError} If it is set but not a non-negative integer.
+ */
+function declaredContentLength(headers: unknown): number | undefined {
+    if (!isPlainObject(headers)) return undefined;
+    // null is dropped like undefined, as sanitizeHeaders does for every other header.
+    const key = Object.keys(headers).find(name => name.toLowerCase() === 'content-length' && headers[name] !== undefined && headers[name] !== null);
+    if (key === undefined) return undefined;
+    const value = headers[key];
+    const length = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : typeof value === 'number' ? value : NaN;
+    if (!Number.isSafeInteger(length) || length < 0) {
+        throw new TypeError(`UltraTon: Expected 'content-length' to be a non-negative integer to send a streamed body with it, received ${describeValue(value)}.`);
+    }
+    return length;
+}
 
 /** An object whose prototype is `Object.prototype` or `null`: not an array, a class instance, a Map or a Headers. */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -301,6 +322,9 @@ export async function resolveRequestBody(options: InternalRequestOptions): Promi
     }
     if (typeof body === 'string' || body instanceof Uint8Array) {
         return { options: { ...rest, body: Buffer.isBuffer(body) ? body : Buffer.from(body) } };
+    }
+    if (isStreamBody(body)) {
+        return { options: { ...rest, body: new StreamedBody(body, declaredContentLength(rest.headers)) } };
     }
     if (body !== undefined) {
         if (body instanceof FormData && hasContentType(rest.headers)) {
@@ -507,7 +531,7 @@ export function basicAuthorization(auth: string): string {
  * and enforces strict runtime primitive types to prevent C++ thread exhaustion or V8 crashes.
  * Throws TypeError synchronously on malformed security primitives to fail loud.
  */
-export function buildSafeRequestOptions(options: InternalRequestOptions): SecureUltraTonRequestOptions {
+export function buildSafeRequestOptions(options: InternalRequestOptions | ResolvedRequestOptions): SecureUltraTonRequestOptions {
     options = ownOptions(options);
     assertKnownOptions(options);
     assertBodyOptions(options);
@@ -533,6 +557,10 @@ export function buildSafeRequestOptions(options: InternalRequestOptions): Secure
     // Defaults when unset: 2MB body, 10s idle, 30s total, no redirects. 0 disables the two timeouts.
     safeOptions.decompress = validateType('decompress', options.decompress, 'boolean') ? options.decompress : true;
     safeOptions.maxBodySize = intOption('maxBodySize', options.maxBodySize, 2 * 1024 * 1024);
+    // No default: unset means no limit, as for a buffered body before this option existed.
+    if (options.maxRequestBodySize !== undefined) {
+        safeOptions.maxRequestBodySize = intOption('maxRequestBodySize', options.maxRequestBodySize, 0, Number.MAX_SAFE_INTEGER);
+    }
     safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000);
     safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, DEFAULT_TIMEOUT_MS);
     safeOptions.maxRedirects = intOption('maxRedirects', options.maxRedirects, 0, MAX_REDIRECTS_CEILING);
@@ -548,6 +576,7 @@ export interface ClientDefaults {
     readonly timeoutMs?: number;
     readonly socketTimeoutMs?: number;
     readonly maxBodySize?: number;
+    readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
@@ -730,6 +759,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         timeoutMs: raw.timeoutMs as number | undefined,
         socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
         maxBodySize: raw.maxBodySize as number | undefined,
+        maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
         maxRedirects: raw.maxRedirects as number | undefined,
         permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
         decompress: raw.decompress as boolean | undefined,
@@ -774,6 +804,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             timeoutMs: raw.timeoutMs as number | undefined,
             socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
             maxBodySize: raw.maxBodySize as number | undefined,
+            maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
             maxRedirects: raw.maxRedirects as number | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
@@ -799,6 +830,7 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         timeoutMs: or(own.timeoutMs, defaults.timeoutMs),
         socketTimeoutMs: or(own.socketTimeoutMs, defaults.socketTimeoutMs),
         maxBodySize: or(own.maxBodySize, defaults.maxBodySize),
+        maxRequestBodySize: or(own.maxRequestBodySize, defaults.maxRequestBodySize),
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
         decompress: or(own.decompress, defaults.decompress),

@@ -94,7 +94,7 @@
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 12h7M9 16h7"/></svg></div>
                     <h3>Queries, Forms &amp; Uploads</h3>
-                    <p><code>query</code> builds the query string, <code>json</code> serializes, <code>form</code> sends urlencoded fields for OAuth and older APIs, and a <code>FormData</code> body goes as multipart with its boundary set for you. Values that cannot be encoded throw instead of being dropped.</p>
+                    <p><code>query</code> builds the query string, <code>json</code> serializes, <code>form</code> sends urlencoded fields for OAuth and older APIs, and a <code>FormData</code> body goes as multipart with its boundary set for you. A stream body is sent as it is read, with an optional <code>maxRequestBodySize</code>. Values that cannot be encoded throw instead of being dropped.</p>
                 </div>
 
                 <div class="card glass">
@@ -189,7 +189,7 @@
                     <p>Keep them, and plug in <code>createSecureAgents()</code>. Every connection is then validated and pinned, at no measurable cost. With axios, pass <code>proxy: false</code>.</p>
                 </div>
             </div>
-            <p class="compare-note">Not for browsers, Bun or Deno, and no cookie jar, HTTP cache or upload streaming (yet). The <a href="https://github.com/AbeOrigin/UltraTon#choosing-a-client" target="_blank" rel="noopener noreferrer">full comparison</a> lists each library's defaults, including where UltraTon falls short.</p>
+            <p class="compare-note">Not for browsers, Bun or Deno, and no cookie jar or HTTP cache. The <a href="https://github.com/AbeOrigin/UltraTon#choosing-a-client" target="_blank" rel="noopener noreferrer">full comparison</a> lists each library's defaults, including where UltraTon falls short.</p>
         </section>
 
         <section id="installation" class="usage-section glass">
@@ -253,7 +253,7 @@
             <div class="pitch-content">
                 <h2>Limits and Things to Know</h2>
                 <h3 class="highlight-text">What it does not do</h3>
-                <p><strong>No environment proxies.</strong> UltraTon never reads <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code>, <code>NODE_USE_ENV_PROXY</code> or <code>http.globalAgent</code>: a proxy is used only when you pass <code>proxy</code>, so the SSRF policy cannot be bypassed through a shared pool. HTTP CONNECT and SOCKS5 are supported, not SOCKS4. <strong>No upload streaming.</strong> Request bodies are buffered whole, a large <code>File</code> included; responses can be streamed with <code>stream()</code>. Plain <code>http:</code> only reaches loopback, and never through a proxy.</p>
+                <p><strong>No environment proxies.</strong> UltraTon never reads <code>HTTP_PROXY</code>/<code>HTTPS_PROXY</code>, <code>NODE_USE_ENV_PROXY</code> or <code>http.globalAgent</code>: a proxy is used only when you pass <code>proxy</code>, so the SSRF policy cannot be bypassed through a shared pool. HTTP CONNECT and SOCKS5 are supported, not SOCKS4. <strong>Streams are read once.</strong> A request with a stream body is never retried, and a 307/308 comes back as the response; a <code>File</code> or <code>Blob</code> body is read whole, so pass a stream for a large upload. Plain <code>http:</code> only reaches loopback, and never through a proxy.</p>
 
                 <h3 class="highlight-text">Where the policy ends</h3>
                 <p>Redirects into ranges your <code>permitReservedIps</code> allows are followed, so keep allowlists narrow, or keep <code>maxRedirects: 0</code> on clients that allow private ranges. A hostname in the allowlist trusts whatever that name resolves to. With <code>resolve: 'proxy'</code> (or a <code>socks5h:</code> URL) the proxy resolves names, so SSRF protection for hostnames depends on the proxy, and SOCKS5 credentials cross the network to the proxy in cleartext. DNS lookups cannot be cancelled: <code>timeoutMs</code> and <code>signal</code> reject the request on time, but the lookup keeps running until the resolver answers. <code>json()</code> strips <code>__proto__</code>, <code>constructor</code> and <code>prototype</code> keys, so a legitimate field with one of those names disappears.</p>

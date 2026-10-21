@@ -7,7 +7,8 @@ export class SecureHttpError extends Error {
      * A stable code. Policy rejections: `ERR_ULTRATON_RESERVED_IP`, `ERR_ULTRATON_PLAIN_HTTP`, `ERR_ULTRATON_DOWNGRADE`.
      * On `UltraTonNetworkError`, the underlying Node or resolver code (`ECONNREFUSED`, `ENOTFOUND`, ...). On
      * `UltraTonNetworkTimeoutError`, `ERR_ULTRATON_TIMEOUT` when `timeoutMs` ran out and `ERR_ULTRATON_SOCKET_TIMEOUT`
-     * when the connection sat idle for `socketTimeoutMs`.
+     * when the connection sat idle for `socketTimeoutMs`. A request body: `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` (on
+     * `UltraTonMemoryError`) and `ERR_ULTRATON_REQUEST_BODY_LENGTH` (a stream that did not match its `content-length`).
      */
     readonly code?: string;
 
@@ -39,8 +40,17 @@ export const refusedStream = (cause?: unknown) =>
 /** No bytes arrived for `socketTimeoutMs`. */
 export const idleTimeout = (socketTimeoutMs: number) =>
     new UltraTonNetworkTimeoutError(`UltraTon: Socket completely idle for ${socketTimeoutMs}ms.`, { code: 'ERR_ULTRATON_SOCKET_TIMEOUT' });
-/** The response body exceeded `maxBodySize`; the response was aborted. */
+/**
+ * The response body exceeded `maxBodySize`, and the response was aborted. Or, with `code`
+ * `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE`, the request body exceeded `maxRequestBodySize`.
+ */
 export class UltraTonMemoryError extends SecureHttpError {}
+/** The request body went past `maxRequestBodySize`: before connecting for a buffered one, mid-upload for a stream. */
+export const requestBodyTooLarge = (limit: number) =>
+    new UltraTonMemoryError(`UltraTon: Request body exceeded the maximum allowed size of ${limit} bytes.`, { code: 'ERR_ULTRATON_REQUEST_BODY_TOO_LARGE' });
+/** A streamed body yielded more or fewer bytes than the `content-length` it was sent with; the request was aborted. */
+export const requestBodyLength = (length: number) =>
+    new SecureHttpError(`UltraTon: Request body did not match its content-length of ${length} bytes.`, { code: 'ERR_ULTRATON_REQUEST_BODY_LENGTH' });
 /** `json()` was called on a body that is not valid JSON; the `SyntaxError` is in `cause`. */
 export class UltraTonParseError extends SecureHttpError {}
 /** The server redirected more times than `maxRedirects` allows. */

@@ -1,4 +1,6 @@
+import type { Readable } from "node:stream";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
+import type { StreamedBody } from "../helpers/request-body.ts";
 
 export type { ReservedIpPolicy };
 
@@ -38,13 +40,22 @@ export interface UltraTonRequestOptions {
     readonly form?: Readonly<Record<string, QueryValue | readonly QueryValue[] | undefined>> | URLSearchParams;
 
     /**
-     * The payload as bytes, always sent with a `content-length` (never chunked). A `URLSearchParams` is sent urlencoded,
-     * a `FormData` as `multipart/form-data` with its boundary, and a `Blob` (or `File`) with its `type`, if it has one, as content-type.
-     * Those content-types replace a client default one; the request's own `content-type` header is kept, except with a
-     * `FormData`, where it throws a `TypeError` (the boundary must match the body). Everything is read into memory
-     * before sending, a large `File` included. Cannot be combined with `json` or `form`.
+     * The payload. Cannot be combined with `json` or `form`.
+     *
+     * A string, `Buffer`, `Uint8Array`, `Blob` (or `File`), `FormData` or `URLSearchParams` is read into memory and
+     * sent with its exact `content-length`. A `URLSearchParams` is sent urlencoded, a `FormData` as
+     * `multipart/form-data` with its boundary, and a `Blob` with its `type`, if it has one, as content-type. Those
+     * content-types replace a client default one; the request's own `content-type` header is kept, except with a
+     * `FormData`, where it throws a `TypeError` (the boundary must match the body).
+     *
+     * A stream (a `Readable`, a `ReadableStream` or any async iterable of `Uint8Array` or string chunks) is sent as it
+     * is read, never buffered: with the request's own `content-length` header if it sets one (the stream must then yield
+     * exactly that many bytes, else `ERR_ULTRATON_REQUEST_BODY_LENGTH`), chunked otherwise on HTTP/1.1. A stream can
+     * only be read once, so a request with one is never retried, and a 307 or 308 redirect resolves as the 3xx response
+     * instead of being followed (301, 302 and 303 are followed as a GET without a body, as usual). If the request ends
+     * early (abort, timeout, error), the stream is destroyed or cancelled.
      */
-    readonly body?: string | Buffer | Uint8Array | Blob | FormData | URLSearchParams;
+    readonly body?: string | Buffer | Uint8Array | Blob | FormData | URLSearchParams | Readable | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | string>;
 
     /**
      * Credentials as `user:password`, sent as a Basic `authorization` header. Dropped when a redirect changes origin.
@@ -71,6 +82,13 @@ export interface UltraTonRequestOptions {
      * `TypeError`). Default is 2MB.
      */
     readonly maxBodySize?: number;
+
+    /**
+     * The maximum size of the request body in bytes: an integer from 0 to Number.MAX_SAFE_INTEGER. A buffered body
+     * larger than this throws before connecting; a streamed one is aborted as soon as it goes past it. Both reject with
+     * `UltraTonMemoryError`, `code` `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE`. No default: unset means no limit.
+     */
+    readonly maxRequestBodySize?: number;
 
     /**
      * The maximum time the connection may stay idle, in milliseconds: no bytes received for that long rejects with
@@ -176,8 +194,8 @@ export interface InternalRequestOptions extends UltraTonRequestOptions {
     readonly method?: string;
 }
 
-/** Request options once `json`, `form` or `body` has been encoded: the body, if any, is the exact bytes that go on the wire. */
-export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'form' | 'body'> & { readonly body?: Buffer };
+/** Request options once `json`, `form` or `body` has been encoded: the exact bytes that go on the wire, or a stream of them. */
+export type ResolvedRequestOptions = Omit<InternalRequestOptions, 'json' | 'form' | 'body'> & { readonly body?: Buffer | StreamedBody };
 
 /**
  * Internal system type assigned after security fallbacks have been applied.
@@ -231,6 +249,9 @@ export interface UltraTonClientOptions {
 
     /** Default `maxBodySize` for every request. See {@link UltraTonRequestOptions.maxBodySize}. */
     readonly maxBodySize?: number;
+
+    /** Default `maxRequestBodySize` for every request. See {@link UltraTonRequestOptions.maxRequestBodySize}. */
+    readonly maxRequestBodySize?: number;
 
     /** Default `maxRedirects` for every request. See {@link UltraTonRequestOptions.maxRedirects}. */
     readonly maxRedirects?: number;

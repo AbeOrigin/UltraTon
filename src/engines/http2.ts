@@ -36,6 +36,7 @@ import {
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
+import { isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -108,6 +109,8 @@ export class Http2Engine {
     let currentOptions: ResolvedRequestOptions = options;
     let redirectCount = 0;
     let reqOpts = this.#buildRequestOptions(currentOptions);
+    // Before connecting: a buffered body over maxRequestBodySize throws here, a streamed one as it is read.
+    limitRequestBody(currentOptions.body, reqOpts.maxRequestBodySize);
 
     // `auth` has no HTTP/2 equivalent of node:http's option, so it becomes a Basic authorization header like there (an
     // explicit authorization header wins). Moving it into the headers is what lets a cross-origin redirect strip it.
@@ -154,10 +157,15 @@ export class Http2Engine {
       for (const name of HOP_BY_HOP_HEADERS) delete safeHeaders[name];
       if (safeHeaders["te"] !== "trailers") delete safeHeaders["te"];
 
-      // Always present with a body, and the real byte length wins over anything the caller put in the header.
-      // Without a body a caller content-length would promise bytes that never come: drop it.
-      if (currentOptions.body !== undefined) {
-        safeHeaders["content-length"] = String(currentOptions.body.length);
+      // Always present with a buffered body, and the real byte length wins over anything the caller put in the header.
+      // A streamed body keeps the caller's content-length (StreamedBody holds it to it), or has none. Without a body a
+      // caller content-length would promise bytes that never come: drop it.
+      const body = currentOptions.body;
+      if (body instanceof StreamedBody) {
+        if (body.length !== undefined) safeHeaders["content-length"] = String(body.length);
+        else delete safeHeaders["content-length"];
+      } else if (body !== undefined) {
+        safeHeaders["content-length"] = String(body.length);
       } else {
         delete safeHeaders["content-length"];
       }
@@ -192,11 +200,13 @@ export class Http2Engine {
       const statusCode = response.statusCode;
       const location = response.headers.location;
 
+      // A streamed body cannot be sent again: a 307/308 is returned to the caller instead of being followed.
       if (
         statusCode &&
         HTTP_CODES_REDIRECTS.has(statusCode) &&
         location &&
-        typeof location === "string"
+        typeof location === "string" &&
+        !(body instanceof StreamedBody && (statusCode === 307 || statusCode === 308))
       ) {
         if (reqOpts.maxRedirects > 0) {
           if (redirectCount >= reqOpts.maxRedirects) {
@@ -334,7 +344,7 @@ export class Http2Engine {
   #executeStream<T = unknown>(
     session: ClientHttp2Session,
     pseudoHeaders: OutgoingHttpHeaders,
-    body: Buffer | undefined,
+    body: Buffer | StreamedBody | undefined,
     remainingMs: number,
     timeoutMs: number,
     maxBodySize: number,
@@ -351,6 +361,8 @@ export class Http2Engine {
       let settled = false;
       // A streamed body was handed to its consumer: the upload keeps going even though this promise has settled.
       let handedOff = false;
+      // The streamed body's own failure (its stream, a limit, the length): what a handed-off body fails with too.
+      let bodyError: Error | undefined;
       let statusCode: number | undefined;
       let responseHeaders: IncomingHttpHeaders = {};
       // Created with the response headers (content-encoding); collects, decodes and bounds the body.
@@ -362,7 +374,7 @@ export class Http2Engine {
         // node ends the stream by itself for GET, HEAD and DELETE: keep it open when there is a body to write.
         stream = session.request(
           pseudoHeaders,
-          body && body.length > 0 ? { endStream: false } : undefined,
+          body instanceof StreamedBody || (body && body.length > 0) ? { endStream: false } : undefined,
         );
       } catch (err: unknown) {
         return reject(this.#orClosed(toNetworkError(err)));
@@ -460,7 +472,8 @@ export class Http2Engine {
         // A redirect that will be followed: its body is never read (a large one must not hit maxBodySize, nor be
         // buffered for nothing). End the stream at once, cleanly if the server sent no body, else cancelled.
         const location = headers.location;
-        if (followRedirects && HTTP_CODES_REDIRECTS.has(statusCode) && typeof location === "string" && location) {
+        const replayable = !(body instanceof StreamedBody && (statusCode === 307 || statusCode === 308));
+        if (followRedirects && replayable && HTTP_CODES_REDIRECTS.has(statusCode) && typeof location === "string" && location) {
           settled = true;
           cleanup();
           if (!stream.closed && !stream.destroyed) {
@@ -503,11 +516,13 @@ export class Http2Engine {
               ),
             idle: () => idleTimeout(socketTimeoutMs),
             mapError: (err) => {
+              if (bodyError) return bodyError;
               const { code, cause } = err as NodeJS.ErrnoException;
               return this.#orClosed(toNetworkError(code === "ERR_HTTP2_STREAM_CANCEL" && cause ? cause : err));
             },
             // A stream ends normally even when its connection was lost or close() ran: judged as the buffered path does.
             verifyEnd: () => {
+              if (bodyError) return bodyError;
               if (this.#closed) return clientClosed();
               const reset = stream.rstCode !== undefined && stream.rstCode !== constants.NGHTTP2_NO_ERROR;
               return stream.aborted || reset ? incompleteResponse() : undefined;
@@ -652,6 +667,31 @@ export class Http2Engine {
       // socketTimeoutMs but keeps moving is not idle. Node acknowledges a write once the data got through flow control
       // (queued writes are acknowledged all at once at the end, which would hide the progress), so the next chunk waits
       // for it. A stalled upload (the server stopped reading) stops acknowledging and times out.
+      if (body instanceof StreamedBody) {
+        // The same, one chunk of the stream at a time. A failure before the response (the stream errored, went past a
+        // limit) fails the request with that error; after it, or once the request is over, the upload just stops.
+        body.pump(stream, () => {
+          if (!handedOff) armIdleTimer();
+        }).then(() => {
+          if (!stream.destroyed && !stream.closed) stream.end();
+        }, (err: unknown) => {
+          // The request ending first (answered, aborted, timed out) reports its own outcome.
+          if (isSinkClosed(err)) return;
+          // The body's own failure ends the exchange with that error, even once the server started answering: the
+          // response cannot complete without the body. A buffered response already resolved keeps its result; a
+          // handed-off body fails with it (mapError and verifyEnd return it).
+          bodyError = err instanceof Error ? err : new Error(String(err));
+          if (!settled) {
+            settled = true;
+            cleanup();
+            abandon();
+            reject(err);
+          } else if (handedOff && !stream.destroyed && !stream.closed) {
+            stream.close(constants.NGHTTP2_CANCEL);
+          }
+        });
+        return;
+      }
       const writeFrom = (offset: number): void => {
         if (body === undefined || offset >= body.length) {
           stream.end();

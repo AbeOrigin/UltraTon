@@ -8,7 +8,7 @@ UltraTon is an HTTP/1.1 and HTTP/2 client built only on Node's own modules (`nod
 
 It is also a complete everyday client, and every feature keeps the same protections:
 
-- **Requests:** `query` parameters, JSON, `form` fields and `FormData` uploads ([forms](#recipes)).
+- **Requests:** `query` parameters, JSON, `form` fields, `FormData` uploads, and streamed uploads from a file or any stream ([recipes](#recipes)).
 - **Responses:** gzip, deflate and brotli decoded with the size limit applied to the decoded bytes, and [`stream()`](#recipes) for large downloads.
 - **[`client.fetch()`](#recipes):** a standard `fetch` you can hand to any SDK.
 - **[Retries](#retries):** opt-in, idempotent methods only, `Retry-After` respected, one time budget for all attempts.
@@ -90,7 +90,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | HTTP/2 | `http2: true` | not by default | `httpVersion: 2` | `http2: true` | — |
 | Hooks / interceptors | `diagnostics_channel` (hooks planned) | — | interceptors | hooks | — |
 | Cookies, HTTP cache, pagination | — | — | — | Yes | — |
-| Upload streaming | — (planned) | Yes | Yes | Yes | Yes |
+| Upload streaming | Yes, with an optional size limit | Yes | Yes | Yes | Yes |
 | Runs in browsers, Bun, Deno | — (Node only) | Yes | Yes | — | — |
 | Runtime dependencies | 0 | built in | 4 | 10 | 3 |
 | Maturity | new (2.x in 2026), one maintainer | Node core team | many years, large community | many years | many years |
@@ -98,7 +98,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 **Where UltraTon is not the right choice:**
 - **Raw throughput against an API you trust:** `fetch` and Node's own `http.request` are about 1.5× faster on small bodies.
 - **Other runtimes:** browsers, Bun or Deno.
-- **Features it does not have:** request-rewriting interceptors, a cookie jar, HTTP caching or upload streaming. Hooks and upload streaming are planned.
+- **Features it does not have:** request-rewriting interceptors, a cookie jar or HTTP caching. Hooks are planned.
 
 ## Options
 
@@ -111,7 +111,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
-| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
+| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -119,7 +119,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 |---|---|---|
 | `json` | `unknown` | Serialized, and sent with `content-type: application/json` unless you set one. |
 | `form` | plain object or `URLSearchParams` | Sent urlencoded, with the same rules as `query`. |
-| `body` | `string \| Buffer \| Uint8Array \| Blob \| FormData \| URLSearchParams` | A `FormData` goes as multipart with its boundary, a `Blob` with its `type`. Only one of `json`, `form` and `body`. GET and HEAD cannot have a body. |
+| `body` | `string \| Buffer \| Uint8Array \| Blob \| FormData \| URLSearchParams`, or a stream (`Readable \| ReadableStream \| AsyncIterable`) | A `FormData` goes as multipart with its boundary, a `Blob` with its `type`. A stream is sent as it is read (see [Upload a stream](#recipes)). Only one of `json`, `form` and `body`. GET and HEAD cannot have a body. |
 | `headers` | plain object | — |
 | `query` | plain object or `URLSearchParams` | Appended to the URL's own query. Arrays repeat the key, `undefined` is skipped, `null` and nested objects throw. |
 | `auth` | `'user:password'` | Sent as Basic auth. Dropped on a cross-origin redirect. |
@@ -127,6 +127,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `timeoutMs` | integer ms | `30000` |
 | `socketTimeoutMs` | integer ms | `10000` |
 | `maxBodySize` | integer bytes | `2097152` (2 MB) |
+| `maxRequestBodySize` | integer bytes | None. A larger buffered body throws before connecting; a stream is aborted as it goes past it. |
 | `decompress` | `boolean` | `true`: sends `accept-encoding` (unless you set one) and decodes the body. `false` leaves `data` as received. |
 | `maxRedirects` | integer 0–20 | `0` |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
@@ -161,6 +162,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `UltraTonNetworkError` | The proxy refused the tunnel (CONNECT status or SOCKS5 reason), or answered outside its protocol | `ERR_ULTRATON_PROXY` |
 | `SecureHttpError` | More than 2 content-encodings on a response | `ERR_ULTRATON_CONTENT_ENCODING` |
 | `UltraTonMemoryError` | The body exceeded `maxBodySize` | — |
+| `UltraTonMemoryError` | The request body exceeded `maxRequestBodySize` | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` |
+| `SecureHttpError` | A streamed request body yielded more or fewer bytes than its `content-length` | `ERR_ULTRATON_REQUEST_BODY_LENGTH` |
 | `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
 
@@ -238,7 +241,25 @@ fd.append('file', await fs.openAsBlob('report.pdf', { type: 'application/pdf' })
 await client.post(uploadUrl, { body: fd });
 ```
 
-Your own `content-type` header is kept for `form`, `URLSearchParams` and `Blob`. With a `FormData` it throws, because the header has to carry the boundary of the body. A `content-type` in the client's default headers is replaced by the one the body implies: a form, a `FormData` or a `Blob` with a `type` (for `json`, or a `Blob` without a type, it is kept). The whole body is read into memory before sending, a large file included.
+Your own `content-type` header is kept for `form`, `URLSearchParams` and `Blob`. With a `FormData` it throws, because the header has to carry the boundary of the body. A `content-type` in the client's default headers is replaced by the one the body implies: a form, a `FormData` or a `Blob` with a `type` (for `json`, or a `Blob` without a type, it is kept). These bodies are read into memory before sending: for a large file, stream it instead.
+
+**Upload a stream.** A `Readable`, a `ReadableStream` or any async iterable of bytes (or strings) as `body` is sent as it is read, never held in memory. Set `maxRequestBodySize` to stop a stream that would never end:
+
+```ts
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
+
+const { size } = await stat('backup.tar');
+await client.put(uploadUrl, {
+  body: createReadStream('backup.tar'),
+  headers: { 'content-type': 'application/x-tar', 'content-length': String(size) },
+  maxRequestBodySize: 10 * 1024 ** 3,
+});
+```
+
+- **Framing:** with your `content-length`, it is sent as is, and the stream must yield exactly that many bytes (`ERR_ULTRATON_REQUEST_BODY_LENGTH` otherwise, never a truncated body). Some servers, such as presigned S3 URLs, require it. Without it, HTTP/1.1 sends the body chunked.
+- **Sent once:** a stream can only be read once, so a request with one is never retried, whatever `retry` says, and a 307 or 308 redirect resolves as the 3xx response instead of being followed. 301, 302 and 303 are followed as a GET without a body, as usual.
+- **Ending early:** if the request fails, before or during the upload (invalid input, a blocked address, an abort, a timeout, `close()`), the stream is destroyed (a `ReadableStream` is cancelled). So is the rest of it when the server answers before reading it all. An error from your stream rejects the request as is, even if the server already started answering. `socketTimeoutMs` also runs while your stream produces no data.
 
 **Use it as `fetch`, or hand it to a library.** `client.fetch` takes the same arguments as `fetch` and returns a standard `Response`. Every request still goes through the client's SSRF policy and limits. It is bound to the client, so libraries that accept a custom fetch get the protection without code changes:
 
@@ -253,7 +274,7 @@ Differences from the platform's `fetch`:
 - **Redirects** follow the client's `maxRedirects`, which defaults to 0. With the default, a 3xx comes back as the `Response`; `redirect: 'manual'` and `'error'` work as usual.
 - **Failures:** network and policy failures reject as `TypeError('fetch failed')` with the UltraTon error as `cause`, as undici does. An abort rejects with the signal's reason.
 - **`json()`** strips `__proto__`, `constructor` and `prototype` keys.
-- **Request bodies** are buffered. A `ReadableStream` body in `init` throws, and the body of a `Request` input is read whole.
+- **Request bodies:** a `ReadableStream` or async iterable body is streamed, and so is the body of a `Request` input, with the rules of [Upload a stream](#recipes). With a streamed body, a 307 or 308 comes back as the `Response` (the platform's `fetch` would reject).
 - **`baseUrl`** applies to string paths. A `Request` or `URL` input is absolute, so on a client with `baseUrl` it is rejected as not relative: use a client without `baseUrl` for libraries.
 - **Options:** browser-only options (`mode`, `credentials`, `cache`, …) are ignored. Options that would change the connection (`dispatcher`, `agent`) throw: configure the client instead.
 
@@ -444,7 +465,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is.
-- **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. Request bodies are always buffered (no upload streaming): a `File` or `Blob` body is read whole into memory first.
+- **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. A `File` or `Blob` body is read whole into memory first: pass a stream (`createReadStream`) to upload a large file.
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
 

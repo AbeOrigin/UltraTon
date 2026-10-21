@@ -7,7 +7,7 @@ import type { UltraTonStreamResponse } from '../types/request-response.ts';
 /** The RequestInit fields UltraTon acts on. */
 const SUPPORTED = new Set(['method', 'headers', 'body', 'signal', 'redirect']);
 /**
- * Fields that only mean something in a browser (or, for duplex, to a streaming upload, which is refused on its own):
+ * Fields that only mean something in a browser (or, for duplex, to a streamed upload, which always goes half-duplex):
  * accepted and ignored, so code written for fetch runs unchanged. Anything else (dispatcher, agent, a node-fetch
  * timeout...) throws: ignoring it would let the caller believe it changed the connection.
  */
@@ -42,7 +42,7 @@ const discard = (body: ReadableStream<Uint8Array>) => body.cancel().catch(() => 
 
 const failed = (cause: unknown) => new TypeError('fetch failed', { cause });
 
-const isStreamingBody = (body: unknown) =>
+const isStreamingBody = (body: unknown): body is ReadableStream<Uint8Array> | AsyncIterable<Uint8Array> =>
     body instanceof ReadableStream ||
     (typeof body === 'object' && body !== null && Symbol.asyncIterator in body &&
         !(body instanceof Blob) && !(body instanceof FormData) && !(body instanceof URLSearchParams));
@@ -63,11 +63,10 @@ export async function fetchWith(
         if (SUPPORTED.has(key) || IGNORED.has(key)) continue;
         throw new TypeError(`UltraTon: Unsupported fetch option '${key}'. Configure the connection on the UltraTonClient instead.`);
     }
-    if (isStreamingBody(init.body)) {
-        throw new TypeError('UltraTon: Streaming request bodies are not supported; pass a string, Buffer, Blob, FormData or URLSearchParams.');
-    }
 
     const base = input instanceof Request ? input : undefined;
+    // A ReadableStream or async iterable from init, or a Request's own body (always a ReadableStream): sent as a stream.
+    const streamed = isStreamingBody(init.body) ? init.body : init.body === undefined && base?.body ? base.body : undefined;
     const url = base ? base.url : input instanceof URL ? input.href : String(input);
     // An explicit `signal: null` means no signal, as in fetch: only `undefined` falls back to the Request's.
     const signal = init.signal !== undefined ? init.signal ?? undefined : base?.signal;
@@ -81,11 +80,12 @@ export async function fetchWith(
         method,
         redirect: init.redirect ?? base?.redirect,
         headers: init.headers ?? base?.headers,
-        body: init.body !== undefined ? init.body : base?.body ? await base.arrayBuffer() : undefined,
+        // A streamed body goes to the client as is (it is read once, as it is sent): only its headers are normalized here.
+        body: streamed === undefined && init.body !== undefined ? init.body : undefined,
     });
     const headers: Record<string, string> = {};
     normalized.headers.forEach((value, name) => { headers[name] = value; });
-    const body = normalized.body ? Buffer.from(await normalized.arrayBuffer()) : undefined;
+    const body = streamed ?? (normalized.body ? Buffer.from(await normalized.arrayBuffer()) : undefined);
     const redirect = normalized.redirect;
 
     let res: UltraTonStreamResponse;
