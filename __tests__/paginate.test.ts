@@ -15,7 +15,7 @@ async function pagedServer(t: TestContext, http2: boolean, route: (target: strin
     const sockets = new Set<Socket>();
     const answer = (target: string) => {
         targets.push(target);
-        const { status = 200, link, location, body = target } = route(target);
+        const { status = 200, link, location, body = 'ok' } = route(target);
         const extra = { ...(link === undefined ? {} : { link }), ...(location === undefined ? {} : { location }) };
         return { status, headers: { 'content-type': 'text/plain', ...extra }, body };
     };
@@ -51,10 +51,13 @@ function clientOf(t: TestContext, http2: boolean, options: Record<string, unknow
     return client;
 }
 
-async function collect(pages: AsyncIterable<{ text(): string }>): Promise<string[]> {
-    const texts: string[] = [];
-    for await (const page of pages) texts.push(page.text());
-    return texts;
+/** The path and query each page was served from. */
+const pathOf = (page: { url: string }) => { const url = new URL(page.url); return url.pathname + url.search; };
+
+async function collect(pages: AsyncIterable<{ url: string }>): Promise<string[]> {
+    const paths: string[] = [];
+    for await (const page of pages) paths.push(pathOf(page));
+    return paths;
 }
 
 for (const http2 of [false, true]) {
@@ -117,7 +120,7 @@ for (const http2 of [false, true]) {
             const { base, targets } = await pagedServer(t, http2, numbered(5));
             const client = clientOf(t, http2);
             const seen: string[] = [];
-            await assert.rejects(async () => { for await (const page of client.paginate(`${base}/items`, { maxPages: 2 })) seen.push(page.text()); },
+            await assert.rejects(async () => { for await (const page of client.paginate(`${base}/items`, { maxPages: 2 })) seen.push(pathOf(page)); },
                 { code: 'ERR_ULTRATON_MAX_PAGES' });
             assert.deepEqual(seen, ['/items', '/items?page=2']);
             assert.equal(targets.length, 2);
