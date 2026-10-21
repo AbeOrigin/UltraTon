@@ -1,0 +1,37 @@
+name: Bug report
+description: Something does not work as the README says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **If this lets a request reach somewhere it should not, or gets past a limit, stop here** and report it privately: see [SECURITY.md](https://github.com/AbeOrigin/UltraTon/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: UltraTon version
+      placeholder: 2.2.0
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: 24.11.0
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The client options and the call. A local server is ideal; never a third-party host. Leave out tokens, cookies and internal hostnames.
+      render: ts
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      description: Include the error's `name` and `code` if there is one.
+    validations:
+      required: true

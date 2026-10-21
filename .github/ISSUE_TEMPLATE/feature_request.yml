@@ -1,0 +1,23 @@
+name: Feature request
+description: Something UltraTon should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and why the current options do not cover it.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: An option, a method, a default. Say how it should interact with the SSRF policy and the limits, if it does.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you use today
+      description: A workaround, or another client.
