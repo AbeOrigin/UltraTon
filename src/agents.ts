@@ -61,7 +61,7 @@ function refuseForwardProxy(req: http.ClientRequest): boolean {
  * may hand one to the agent as is. getaddrinfo may resolve it to that IPv4 while TLS checks it as a DNS name: the
  * confusion behind CVE-2026-106069, -106072 and -105483 in unpatched Node releases.
  */
-function isLooseIpv4(host: string): boolean {
+export function isLooseIpv4(host: string): boolean {
     if (isIP(host) !== 0) return false;
     try {
         return isIP(new URL(`http://${host}/`).hostname) === 4;

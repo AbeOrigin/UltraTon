@@ -29,6 +29,7 @@
     "prepublishOnly": "npm test && npm run test:package",
     "lint:package": "publint --strict && attw --pack . --profile esm-only",
     "check:tsdoc": "node scripts/check-tsdoc.mjs",
+    "check:api": "node scripts/check-api.mjs",
     "demo:http2:server": "node demo/http2.server.ts",
     "demo:http2:client": "node demo/http2.client.ts",
     "demo:server": "node demo/server.ts",

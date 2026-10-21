@@ -44,6 +44,9 @@ jobs:
     - name: TSDoc on every public symbol
       run: npm run check:tsdoc
 
+    - name: Public API unchanged
+      run: npm run check:api
+
     - name: Run Test Suite
       run: npm test
       env:
