@@ -81,7 +81,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 
 | | UltraTon | `fetch` (undici) | axios | got | node-fetch |
 |---|---|---|---|---|---|
-| Blocks SSRF (reserved IPs, DNS rebinding, redirects inside) | Yes, all 30 [corpus](compat/ssrf-corpus/RESULTS.md) cases | No | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) |
+| Blocks SSRF (reserved IPs, DNS rebinding, redirects inside) | Yes, all 32 [corpus](compat/ssrf-corpus/RESULTS.md) cases | No | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) | No (yes with `createSecureAgents`) |
 | Redirects | off by default | followed (up to 20) | followed (up to 21) | followed (up to 10) | followed (up to 20) |
 | Response size limit | 2 MB, also on decoded bytes | none | none | none | none |
 | Total timeout | 30 s | none (300 s idle) | none | none | none |
@@ -482,7 +482,7 @@ A path that would land outside the base throws as well. That includes encoded an
 ## Limits and things to know
 
 - **Proxies are only used when you set `proxy`.** UltraTon does not read `HTTP_PROXY`/`HTTPS_PROXY`, `NODE_USE_ENV_PROXY` or `http.globalAgent`. Each client uses its own agents so that the SSRF policy cannot be bypassed through a shared pool. HTTP CONNECT and SOCKS5 proxies are supported (no SOCKS4). The proxy handshake for each address gives up after 10 s, or sooner through `timeoutMs`, `signal` or `close()`; `socketTimeoutMs` only starts once the tunnel is up.
-- **The allowlist keeps IPv4 and IPv6 apart.** An IPv6 entry never covers an IPv4 address, and an IPv6 address that embeds an IPv4 (`::ffff:10.0.0.1`, NAT64) is judged only by your IPv4 entries. A hostname entry trusts whatever that name resolves to, so prefer IPs or CIDRs.
+- **The allowlist keeps IPv4 and IPv6 apart.** An IPv6 entry never covers an IPv4 address, and an IPv6 address that embeds an IPv4 in its last 32 bits (`::ffff:10.0.0.1`, NAT64) is judged only by your IPv4 entries. A 6to4 (`2002::/16`) or Teredo (`2001:0::/32`) address carrying a reserved IPv4 is blocked, and only an IPv6 entry (`2002:a00::/24`) allows it: `10.0.0.0/8` does not. A broad IPv6 entry such as `::/0` therefore allows them too, whatever IPv4 they carry. A hostname entry trusts whatever that name resolves to, so prefer IPs or CIDRs.
 - **Redirects into allowlisted ranges are followed.** A public server can redirect to an address your `permitReservedIps` allows. Keep allowlists narrow, or keep `maxRedirects: 0` on clients that allow private ranges.
 - **Redirects are not bound to `baseUrl`.** A followed redirect can go to another host, and every hop is still checked against the SSRF policy. Redirects are off by default.
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.

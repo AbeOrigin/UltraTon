@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **6to4 and Teredo addresses carrying a reserved IPv4 are blocked.** A 6to4 address (`2002::/16`) holds an IPv4 in bits 16–47, and a Teredo address (`2001:0::/32`) holds a server IPv4 and an inverted client IPv4; a host with a tunnel interface or a relay delivers to them. They used to be judged as public IPv6 (a documented residual risk); now a reserved IPv4 inside one makes the address reserved, `2002:a9fe:a9fe::1` (cloud metadata) and `2001:0:808:808::80ff:fffe` (a Teredo client on 127.0.0.1) included. In an allowlist only an IPv6 entry allows such an address: an IPv4 entry does not cover it. Two new cases in the SSRF corpus (now 32).
+
 ## [2.4.1] - 2026-10-21
 
 A performance release, with no change to the API: HTTP/2 moves large bodies 1.5× faster, and every request does less work around the same checks. On the CI benchmark, UltraTon over HTTP/1.1 reaches 77% of `node:http`'s throughput (from 62–67%). The site now shows those benchmarks, and how they were measured.

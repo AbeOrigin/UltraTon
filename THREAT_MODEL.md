@@ -32,7 +32,7 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 
 | Threat | Defense | Where | Tests |
 |---|---|---|---|
-| A1: a reserved IP in any spelling (decimal, hex, octal, IPv4-mapped and IPv4-compatible IPv6, NAT64) | WHATWG URL normalization, then `assertAllowedIp` against a `BlockList` of reserved ranges; the IPv6 forms that embed an IPv4 are judged by that IPv4. In an allowlist, an IPv6 entry never covers an IPv4 address, native or embedded: an embedded IPv4 is judged only by IPv4 entries | `src/helpers/url-parser.ts`, `src/security/dns-pinner.ts` | `dns-pinner`, `http2-security` |
+| A1: a reserved IP in any spelling (decimal, hex, octal, IPv4-mapped and IPv4-compatible IPv6, NAT64, 6to4, Teredo) | WHATWG URL normalization, then `assertAllowedIp` against a `BlockList` of reserved ranges; the IPv6 forms that embed an IPv4 are judged by that IPv4 (a Teredo address by both its server and its client IPv4). In an allowlist, an IPv6 entry never covers an IPv4 address, native or embedded: an IPv4 in the low 32 bits (mapped, compatible, NAT64) is judged only by IPv4 entries, and a 6to4 or Teredo address only by IPv6 entries | `src/helpers/url-parser.ts`, `src/security/dns-pinner.ts` | `dns-pinner`, `http2-security` |
 | A1/A3: a name that resolves to a reserved IP, or to a mix | `resolveAndPinAll`: **every** address is validated; one bad address fails the whole lookup | `src/security/dns-pinner.ts` | `dns-pinner`, `happy-eyeballs` |
 | A3: DNS rebinding | The socket connects only to the validated addresses (`pinnedLookup`); nothing resolves twice. A pooled HTTP/2 session's pinned addresses are checked again against the caller's policy on every reuse (no new lookup) | `dns-pinner.ts`, `http1.ts`, `http2-session-manager.ts` | `dns-pinner`, `http2-security`, `retry` (rebinding between attempts) |
 | A1/A2: redirects to internal targets, downgrade to http | Each hop is parsed and validated again; https→http is rejected; credentials are dropped across origins; redirects are off by default | `src/engines/http1.ts`, `src/engines/http2.ts` | `redirect`, `ssrf-redirect-integration` |
@@ -55,7 +55,6 @@ These are accepted and documented. Reports about them are not vulnerabilities (s
 
 - **What the operator allows is reachable.** `permitReservedIps: true`, broad CIDRs, and hostname entries (which trust whatever that name resolves to) all mean what they say. Redirects into allowed ranges are followed.
 - **Redirects are not bound to `baseUrl`.** A followed redirect may go to another host or path (every hop is still checked against the SSRF policy). Redirects are off by default.
-- **6to4 (`2002::/16`) and Teredo (`2001::/32`) addresses are not reserved.** They embed public IPv4 addresses legitimately and only reach anything through tunnel interfaces on the host. Decoding the embedded IPv4, as UltraTon already does for NAT64, is a possible future hardening.
 - **Brotli can use up to 16 MiB of working memory per layer**, whatever `maxBodySize` is (zlib has no setting to lower it). The decoded output is still capped by `maxBodySize`.
 - **`resolve: 'proxy'` and `socks5h:` hand name resolution to the proxy.** SSRF protection for hostnames then depends on the proxy. Reserved IP literals are still rejected.
 - **SOCKS5 credentials travel in cleartext to the proxy**, as the protocol has no encryption.
