@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Faster HTTP/2 bodies.** The receive window is 1 MiB per stream (was Node's 64 KiB) and 16 MiB per connection (was 64 KiB, shared by every stream), so a body no longer waits on WINDOW_UPDATE round trips. The stream window is also the most a `stream()` body left unread can hold; the connection window bounds no memory, because Node acknowledges it as data arrives.
+- **Less overhead per request.** HTTP/1.1 response bodies are read with events instead of an async iterator; the client's validated `permitReservedIps` list is reused instead of being validated and copied on every request, and its key is cached; response headers are assigned instead of defined one by one (only `__proto__` is still defined); and a request's options are copied fewer times on their way to the engine, with no promise for a request without a body. No check was removed. On the CI benchmark, UltraTon over HTTP/1.1 went from 62–67% to 77% of `node:http`'s throughput.
+
+### Added
+
+- **A CPU profile of UltraTon in CI.** The Benchmarks workflow now also runs `compat/bench/profile.ts` (`--cpu-prof`, both engines, both body sizes) and uploads a `cpu-profile` artifact: where the time goes, the top functions by self and inclusive time, and the raw `.cpuprofile` files.
+- **"Secure, and Built to Be Fast" on the site:** the benchmark chart (requests per second for every client, 1 KiB and 64 KiB bodies) with how it was measured and what it leaves out.
 
 ## [2.4.0] - 2026-10-21
 

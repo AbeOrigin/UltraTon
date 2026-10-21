@@ -25,6 +25,7 @@
             <a href="#everyday">Features</a>
             <a href="#in-action">Demo</a>
             <a href="#compare">Compare</a>
+            <a href="#performance">Speed</a>
             <a href="#installation">Usage</a>
             <a href="#limits" class="highlight-link">Limits</a>
             <a href="https://github.com/AbeOrigin/UltraTon" class="github-btn" target="_blank" rel="noopener noreferrer">
@@ -174,13 +175,13 @@
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
                     <h3>Your URL, max throughput</h3>
-                    <p>Use Node's built-in <code>fetch</code> (undici). It is Node's own engine, about as fast as UltraTon over HTTP/1.1 in the benchmarks, with nothing to install; the SSRF checks it lacks are ones your own URLs do not need.</p>
+                    <p>Use Node's built-in <code>fetch</code> (undici). It is Node's own engine, with nothing to install, and up to 1.4× faster than UltraTon over HTTP/1.1 with small bodies; the SSRF checks it lacks are ones your own URLs do not need.</p>
                 </div>
 
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
                     <h3>Their URL, or safe defaults</h3>
-                    <p>Use UltraTon. It blocked all 30 cases of the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/ssrf-corpus/RESULTS.md" target="_blank" rel="noopener noreferrer">SSRF corpus</a>, all of which <code>fetch</code>, axios, got and node-fetch reach on their own. It is also 1.4–2.5× faster than axios, got and node-fetch in the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">benchmarks</a>.</p>
+                    <p>Use UltraTon. It blocked all 30 cases of the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/ssrf-corpus/RESULTS.md" target="_blank" rel="noopener noreferrer">SSRF corpus</a>, all of which <code>fetch</code>, axios, got and node-fetch reach on their own. It is also 1.4–1.9× faster than axios, got and node-fetch in the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">benchmarks</a>.</p>
                 </div>
 
                 <div class="card glass">
@@ -190,6 +191,72 @@
                 </div>
             </div>
             <p class="compare-note">Not for browsers, Bun or Deno, and no cookie jar or HTTP cache. The <a href="https://github.com/AbeOrigin/UltraTon#choosing-a-client" target="_blank" rel="noopener noreferrer">full comparison</a> lists each library's defaults, including where UltraTon falls short.</p>
+        </section>
+
+        <section id="performance" class="features">
+            <div class="section-header">
+                <h2>Secure, and Built to Be Fast</h2>
+                <p>Every check costs something. We measure that cost on every pull request, profile where it goes, and keep cutting it, without dropping a single check.</p>
+            </div>
+
+            <div class="perf glass">
+                <div class="perf-head">
+                    <div>
+                        <h3 id="perf-title">Requests per second over HTTP/1.1, higher is better</h3>
+                        <p class="perf-sub" id="perf-sub">Every client speaks the same protocol to the same server, so the bars compare the clients themselves. GET, 16 requests in flight, each client with its own defaults.</p>
+                    </div>
+                    <div class="sim-tabs perf-tabs" id="perf-tabs" role="group" aria-label="Response body size">
+                        <button type="button" class="sim-tab" aria-pressed="true" data-scenario="1 KiB body">1 KiB body</button>
+                        <button type="button" class="sim-tab" aria-pressed="false" data-scenario="64 KiB body">64 KiB body</button>
+                    </div>
+                </div>
+                <p class="perf-legend"><span class="perf-legend-item"><span class="perf-key perf-key-ut" aria-hidden="true"></span>UltraTon, every check on</span><span class="perf-legend-item"><span class="perf-key" aria-hidden="true"></span>Other clients</span></p>
+                <div class="perf-chart" id="perf-chart" role="list" aria-labelledby="perf-title"></div>
+                <div class="perf-tooltip" id="perf-tooltip" role="status" hidden></div>
+                <details class="perf-table">
+                    <summary>Show as a table</summary>
+                    <div class="perf-table-scroll"><table id="perf-table"></table></div>
+                </details>
+
+                <div class="perf-h2">
+                    <h4 id="perf-h2-title">And with HTTP/2? UltraTon against itself, <code>http2: true</code> on and off</h4>
+                    <div class="perf-chart perf-h2-chart" id="perf-h2-chart" role="list" aria-labelledby="perf-h2-title"></div>
+                    <p class="perf-h2-figure" id="perf-h2-figure"></p>
+                    <p id="perf-h2-why"></p>
+                    <p class="perf-h2-note">Not comparable with the bars above: here HTTP/2 also runs against a different test server (<code>node:http2</code>), and <code>fetch</code> and the other clients use HTTP/1.1, which is what Node's <code>fetch</code> does by default. Turn it on when the server you call speaks HTTP/2.</p>
+                </div>
+            </div>
+
+            <div class="perf-stats">
+                <div class="perf-stat glass">
+                    <p class="perf-stat-label">HTTP/1.1, 1 KiB bodies</p>
+                    <p class="perf-stat-value">77%</p>
+                    <p class="perf-stat-note">of Node's own <code>http.request</code> throughput, with every check on. Before our last performance pass it was 62–67%, depending on the run.</p>
+                </div>
+                <div class="perf-stat glass">
+                    <p class="perf-stat-label">CPU per request</p>
+                    <p class="perf-stat-value">1.29×</p>
+                    <p class="perf-stat-note">the CPU of <code>http.request</code> per request, down from 1.47–1.61× on the same runner hardware.</p>
+                </div>
+                <div class="perf-stat glass">
+                    <p class="perf-stat-label">HTTP/2, 64 KiB bodies</p>
+                    <p class="perf-stat-value">1.5×</p>
+                    <p class="perf-stat-note">the throughput of before, from 48% to 74% of <code>http.request</code>, by sizing the flow-control windows.</p>
+                </div>
+            </div>
+            <p class="compare-note">That pass: larger HTTP/2 windows, response bodies read with events, the address allowlist validated once, and fewer copies of each request's options. Each change has its own pull request with before and after numbers.</p>
+
+            <div class="perf-disclosure glass">
+                <h3>How we measured, and what these numbers do not say</h3>
+                <ul>
+                    <li><strong>Where:</strong> a shared GitHub Actions runner (AMD EPYC 7763, 4 vCPUs, Linux), Node 24.21.0, on <code>main</code> at commit <code>9ccf8ac</code> (2026-10-21), after 2.4.0. Clients: undici 7.29.1 (Node's <code>fetch</code>), axios 1.20.0, got 16.1.0, node-fetch 3.3.2.</li>
+                    <li><strong>How:</strong> each client runs in its own process with its own defaults and keep-alive, keeps 16 GET requests in flight and reads the whole body: a 2 s warm-up, then the median of 3 rounds of 5 s. Node's <code>http.request</code> is the baseline, with no checks at all.</li>
+                    <li><strong>No TLS, no DNS, no network.</strong> Plain HTTP (h2c for HTTP/2) on loopback, to an IP literal. TLS and DNS are left out, though UltraTon resolves and validates DNS on every new connection, with no cache. Without network latency, per-request overhead looks much larger than it is: against a real server, the gap to <code>http.request</code> is a small fraction of a request's time.</li>
+                    <li><strong>HTTP/2 is shown apart on purpose:</strong> it runs against its own server (<code>node:http2</code>) over one multiplexed connection, so its number measures the protocol as much as the client. The chart compares clients over HTTP/1.1 only.</li>
+                    <li><strong>Runners are noisy</strong> and land on different CPUs from run to run: compare bars within one chart, not across runs or with your own machine. On other runs, <code>fetch</code> and UltraTon over HTTP/1.1 have been closer.</li>
+                    <li><strong>Reproduce it:</strong> the <a href="https://github.com/AbeOrigin/UltraTon/tree/main/compat/bench" target="_blank" rel="noopener noreferrer">harness</a> and its <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">full results</a> (latency, CPU and memory too) are in the repository, and the <a href="https://github.com/AbeOrigin/UltraTon/actions/workflows/bench.yml" target="_blank" rel="noopener noreferrer">Benchmarks workflow</a> runs it in CI on every pull request that touches the code.</li>
+                </ul>
+            </div>
         </section>
 
         <section id="installation" class="usage-section glass">
