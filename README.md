@@ -476,6 +476,10 @@ The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, wha
 
 [THREAT_MODEL.md](THREAT_MODEL.md) explains what UltraTon defends, against whom, where each defense lives in the code, and the risks it deliberately leaves to you. Releases carry npm provenance, so you can check that a version was built by this repository's CI with `npm audit signatures`.
 
+## Support and contributing
+
+[SUPPORT.md](SUPPORT.md) lists the supported Node.js and UltraTon versions, how long an old major gets security fixes, and what counts as a breaking change. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and send a change.
+
 ## License
 
 MIT
