@@ -36,6 +36,8 @@ export function createResponse<T = unknown>(
   statusCode: number,
   rawHeaders: IncomingHttpHeaders,
   data: Buffer,
+  url = "",
+  redirected = false,
 ): UltraTonResponse<T> {
   // Defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be ignored) instead
   // of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as data.
@@ -49,6 +51,8 @@ export function createResponse<T = unknown>(
     statusCode,
     ok: statusCode >= 200 && statusCode < 300,
     headers,
+    url,
+    redirected,
     data,
     json<R = T>(): R {
       if (data.length === 0) return {} as R;

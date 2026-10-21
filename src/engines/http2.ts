@@ -269,7 +269,8 @@ export class Http2Engine {
         }
       }
 
-      return response;
+      // A buffered response is built without its URL in #executeStream; the stream one already carries it.
+      return stream ? response : Object.assign(response, { url: currentUrl, redirected: redirectCount > 0 });
     }
   }
 

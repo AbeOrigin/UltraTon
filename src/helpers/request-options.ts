@@ -4,7 +4,7 @@ import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequ
 import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
-import { isStreamBody, StreamedBody } from './request-body.ts';
+import { discardBody, isStreamBody, StreamedBody } from './request-body.ts';
 const INT32_MAX = 2147483647;
 
 /**
@@ -370,6 +370,33 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
         throw new TypeError(`UltraTon: Expected 'maxBodySize' to be an integer from 0 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxBodySize)}.`);
     }
     return { method, maxBodySize: maxBodySize as number | undefined, rest };
+}
+
+/** How many pages `client.paginate()` fetches unless `maxPages` says otherwise. */
+const DEFAULT_MAX_PAGES = 100;
+
+/**
+ * Takes `next` and `maxPages` out of the options of `client.paginate()`, validated. The rest goes to `get()` for every
+ * page, so it is checked there.
+ * @throws {TypeError} If `next` is not a function, `maxPages` is not a safe integer >= 1, or a body is set (every page is
+ *   a GET, and a stream could only be read once). A stream body is released first.
+ */
+export function splitPaginateOptions(options: unknown): { next?: (page: never) => unknown; maxPages: number; rest: unknown } {
+    // Not an object: left for withMethod to reject with its usual message.
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) return { maxPages: DEFAULT_MAX_PAGES, rest: options };
+    const { next, maxPages = DEFAULT_MAX_PAGES, ...rest } = ownOptions(options as Record<string, unknown>);
+    for (const key of ['json', 'form', 'body']) {
+        if (rest[key] === undefined) continue;
+        discardBody(rest.body);
+        throw new TypeError(`UltraTon: paginate() sends GET requests; '${key}' is not accepted.`);
+    }
+    if (next !== undefined && typeof next !== 'function') {
+        throw new TypeError(`UltraTon: Expected 'next' to be a function, received ${describeValue(next)}.`);
+    }
+    if (!(Number.isSafeInteger(maxPages) && (maxPages as number) >= 1)) {
+        throw new TypeError(`UltraTon: Expected 'maxPages' to be an integer from 1 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxPages)}.`);
+    }
+    return { next: next as ((page: never) => unknown) | undefined, maxPages: maxPages as number, rest };
 }
 
 /** A `retry` option once validated: only what the caller set, lists copied and frozen. Merged and defaulted by retry.ts. */

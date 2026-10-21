@@ -431,7 +431,7 @@ export class Http1Engine {
             }
 
             if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, redirectCount > 0);
-            return createResponse<T>(hop.statusCode, hop.headers, hop.data);
+            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, redirectCount > 0);
         }
     }
 }

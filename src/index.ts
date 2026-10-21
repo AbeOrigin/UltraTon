@@ -24,6 +24,7 @@ export type {
   UltraTonRequestOptions,
   ReservedIpPolicy,
   UltraTonStreamOptions,
+  UltraTonPaginateOptions,
   UltraTonStreamMethod,
   UltraTonRetryOptions,
   UltraTonRetryInfo,
