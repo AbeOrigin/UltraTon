@@ -1,5 +1,5 @@
 import zlib from 'node:zlib';
-import { finished, pipeline, Transform, type Readable } from 'node:stream';
+import { pipeline, Transform, type Readable } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 import { incompleteResponse } from './response.ts';
 
@@ -170,22 +170,22 @@ export class BodyReader {
         return this.#error;
     }
 
+    /** The decoding chain createBodyStream uses too: its last stage already holds the decoded bytes to maxBodySize. */
     #start(): Transform {
-        const decoders = this.#codings.map(createDecoder);
-        const last = decoders[decoders.length - 1];
-        last.on('data', (chunk: Buffer) => {
+        const chain = decodingChain(this.#codings, this.#options);
+        const { stages } = chain;
+        stages[stages.length - 1].on('data', (chunk: Buffer) => {
             if (this.#error || this.#destroyed) return;
-            if (!this.#collect(chunk)) this.#options.onError(this.#error!);
+            this.#size += chunk.length;
+            this.#chunks.push(chunk);
         });
         this.#done = new Promise<void>(resolve => {
-            const done = (err?: Error | null) => {
-                if (err && !this.#error && !this.#destroyed) this.#options.onError(this.#fail(decodeError(err)));
+            pipeline(stages, (err?: Error | null) => {
+                if (err && !this.#error && !this.#destroyed) this.#options.onError(this.#fail(chain.isDecodeError(err) ? decodeError(err) : err));
                 resolve();
-            };
-            if (decoders.length === 1) finished(last, done);
-            else pipeline(decoders[0], decoders[1], done);
+            });
         });
-        return decoders[0];
+        return stages[0];
     }
 }
 
