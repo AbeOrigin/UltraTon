@@ -428,6 +428,9 @@ for (const [name, http2, start] of engines) {
                     return true;
                 });
                 await assert.rejects(client.get(`${f.base}/`, {}), /prohibited internal\/reserved/);
+                // With a body too: the resolved body options are rebuilt, and must not inherit either.
+                await assert.rejects(client.post(`${f.base}/`, { json: { a: 1 } }), /prohibited internal\/reserved/);
+                await assert.rejects(client.post(`${f.base}/`, { body: 'x' }), /prohibited internal\/reserved/);
                 assert.equal(f.accepted(), 0);
             } finally {
                 delete proto.baseUrl;
