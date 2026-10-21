@@ -174,13 +174,13 @@
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
                     <h3>Your URL, max throughput</h3>
-                    <p>Use Node's built-in <code>fetch</code> (undici). It is about 1.5× faster than UltraTon on small bodies, and it should be: it is Node's own engine, with no SSRF checks to run.</p>
+                    <p>Use Node's built-in <code>fetch</code> (undici). It is Node's own engine, about as fast as UltraTon over HTTP/1.1 in the benchmarks, with nothing to install; the SSRF checks it lacks are ones your own URLs do not need.</p>
                 </div>
 
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
                     <h3>Their URL, or safe defaults</h3>
-                    <p>Use UltraTon. It blocked all 30 cases of the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/ssrf-corpus/RESULTS.md" target="_blank" rel="noopener noreferrer">SSRF corpus</a>, all of which <code>fetch</code>, axios, got and node-fetch reach on their own. It is also 1.3–1.8× faster than axios, got and node-fetch in the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">benchmarks</a>.</p>
+                    <p>Use UltraTon. It blocked all 30 cases of the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/ssrf-corpus/RESULTS.md" target="_blank" rel="noopener noreferrer">SSRF corpus</a>, all of which <code>fetch</code>, axios, got and node-fetch reach on their own. It is also 1.4–2.5× faster than axios, got and node-fetch in the <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">benchmarks</a>.</p>
                 </div>
 
                 <div class="card glass">
