@@ -11,7 +11,8 @@ import zlib from 'node:zlib';
 import { createServer as createH2Server, type IncomingHttpHeaders, type ServerHttp2Stream } from 'node:http2';
 import type { AddressInfo, Socket } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
-import { hasSafeBrotli } from '../src/helpers/body-reader.ts';
+import { createBodyStream, hasSafeBrotli } from '../src/helpers/body-reader.ts';
+import { PassThrough } from 'node:stream';
 
 const MAX = 1024 * 1024;
 const PAYLOAD = JSON.stringify({ hello: 'wörld', list: Array.from({ length: 200 }, (_, i) => i) });
@@ -110,3 +111,18 @@ for (const http2 of [false, true]) {
         }
     });
 }
+
+describe('createBodyStream: what a decoder only passes on is not a decoding failure', () => {
+    it('a source closed with no error and no end, mid-gzip, fails as a premature close', async () => {
+        const source = new PassThrough();
+        const body = createBodyStream({
+            source, contentEncoding: 'gzip', decompress: true, maxBodySize: MAX, declaredLength: undefined,
+            socketTimeoutMs: 0, signal: undefined,
+            tooLarge: () => new Error('too large'), idle: () => new Error('idle'), mapError: err => err,
+        });
+        source.write(GZIP.subarray(0, 30));
+        setImmediate(() => source.destroy());
+        await assert.rejects((async () => { for await (const _ of body) { /* drain */ } })(),
+            (err: Error & { code?: string }) => err.code === 'ERR_STREAM_PREMATURE_CLOSE' && !/could not be decoded/.test(err.message));
+    });
+});

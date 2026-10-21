@@ -209,7 +209,9 @@ export function decodingChain(codings: readonly string[], o: { readonly maxBodyS
     const note = (err: unknown, fromDecoder: boolean) => { first ??= { err, fromDecoder }; };
     const decoders = codings.map(coding => {
         const decoder = createDecoder(coding);
-        decoder.on('error', err => note(err, true));
+        // A premature close is the pipeline's own error for a stage that ended without an error or an end (a source
+        // closed mid-body): zlib never raises it.
+        decoder.on('error', (err: NodeJS.ErrnoException) => note(err, err.code !== 'ERR_STREAM_PREMATURE_CLOSE'));
         return decoder;
     });
     let size = 0;
