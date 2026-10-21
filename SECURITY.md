@@ -13,7 +13,7 @@ Run UltraTon on a Node.js release with the October 2026 security fixes: **22.23.
 
 - **CVE-2026-111497, Brotli decoder out-of-bounds write (remote code execution):** a client decoding responses from servers it does not control is exposed. On an unpatched release, UltraTon neither requests nor decodes `br`, and a `br` body comes back raw.
 - **CVE-2026-106069, -106072, -105483, TLS hostname checks with non-canonical IP addresses:** the client checks the certificate against the host of the URL, which the URL parser canonicalizes, and never against a `host` header. `createSecureAgents()` refuses a host or TLS name given as an IPv4 in a non-canonical form (`ERR_ULTRATON_NON_CANONICAL_IP`).
-- **CVE-2026-105481, a keep-alive socket can take a response written before the request:** not mitigated in UltraTon. Pools are per origin, so only the server you are talking to could do it.
+- **CVE-2026-105481, a keep-alive socket can take a response written before the request:** Node's fix is the protection; UltraTon adds no guard of its own. On the releases CI can run (22.12.0, and the latest 22.x, 24.x and 26.x), the attack does not reproduce: Node destroys a socket whose server sends a second response glued to the first, and drops bytes that reach an idle pooled socket. Regression tests (`__tests__/keepalive-guard.test.ts`) send both kinds of early response to `UltraTonClient` and to `createSecureAgents()` on every release line in CI, and fail if one is ever taken as the next answer. Pools are per origin, so only the server you are talking to could try it.
 - **The eMudhra intermediate CA compromise:** fixed by the CA store of the patched releases, which UltraTon uses unless you pass your own `tls.ca`.
 
 ## Reporting a vulnerability
