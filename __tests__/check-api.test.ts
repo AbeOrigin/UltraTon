@@ -54,11 +54,24 @@ describe('API snapshot (scripts/check-api.mjs)', () => {
     it('lists every error code once, sorted', (t) => {
         const { dist, src } = tree(t, {
             'dist/index.d.ts': '',
-            'src/a.ts': "throw new E('x', { code: 'ERR_ULTRATON_B' });\nconst c = 'ERR_ULTRATON_B';\n",
-            'src/nested/b.ts': 'const d = "ERR_ULTRATON_A";\n',
+            'src/a.ts': "throw new E('x', { code: 'ERR_ULTRATON_B' });\nthrow new E('z', { code: 'ERR_ULTRATON_B' });\n",
+            'src/nested/b.ts': 'throw new E("y", { code: "ERR_ULTRATON_A" });\n',
         });
         const snapshot = apiSnapshot(dist, src);
         assert.match(snapshot, /^## error codes\nERR_ULTRATON_A\nERR_ULTRATON_B\n?$/m);
         assert.equal(snapshot.match(/ERR_ULTRATON_B/g)?.length, 1);
+    });
+
+    it('lists the codes errors are raised with, digits included, not ones only mentioned', (t) => {
+        const { dist, src } = tree(t, {
+            'dist/index.d.ts': '',
+            'src/a.ts': [
+                "/** Rejects with `ERR_ULTRATON_DOCUMENTED_ONLY`. */",
+                "if (err.code === 'ERR_ULTRATON_COMPARED_ONLY') retry();",
+                "throw new E('x', { code: 'ERR_ULTRATON_HTTP2_X' });",
+                'throw new E("y", { code: "ERR_ULTRATON_DOUBLE" });',
+            ].join('\n'),
+        });
+        assert.match(apiSnapshot(dist, src), /^## error codes\nERR_ULTRATON_DOUBLE\nERR_ULTRATON_HTTP2_X\n?$/m);
     });
 });
