@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [2.3.0] - 2026-10-20
 
-- **A header key spelling the prototype in another case (`__PROTO__`, `Constructor`) was not dropped.** The check ran before the key was lowercased, so `__PROTO__` set the prototype of the sanitized headers object to its value; an array value then added inherited keys. All case variants are now dropped, like `__proto__`. The fuzzing review found it, and the header property now covers it.
+Protection for the clients you already use, and the evidence behind it: `createSecureAgents()` for axios, got and node-fetch, observability through `diagnostics_channel`, a public SSRF corpus, fuzzing and benchmarks run in CI, an honest comparison, and a fix for prototype header keys spelled in another case. All additive.
 
 ### Added
 
@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integration tests with axios 1.20.0, got 16.1.0 and node-fetch 3.3.2 run against the packed tarball in a separate `compat/` workspace, as their own CI job. Their dependencies are never part of the package.
   - The options are a closed list (`permitReservedIps`, `tls`, `allowPlainHttp`), validated like the client's.
   - New public types `UltraTonSecureAgentOptions` and `UltraTonSecureAgents`. The README lists what the agents cover and what only the full client does (body limits, timeouts, header validation, redirect policy, proxies).
+
+### Security
+
+- **A header key spelling the prototype in another case (`__PROTO__`, `Constructor`) was not dropped.** The check ran before the key was lowercased, so `__PROTO__` set the prototype of the sanitized headers object to its value; an array value then added inherited keys. All case variants are now dropped, like `__proto__`. The fuzzing review found it, and the header property now covers it.
 
 ## [2.2.0] - 2026-10-20
 
