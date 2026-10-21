@@ -202,8 +202,8 @@
             <div class="perf glass">
                 <div class="perf-head">
                     <div>
-                        <h3 id="perf-title">Requests per second, higher is better</h3>
-                        <p class="perf-sub" id="perf-sub">GET, 16 requests in flight, each client with its own defaults</p>
+                        <h3 id="perf-title">Requests per second over HTTP/1.1, higher is better</h3>
+                        <p class="perf-sub" id="perf-sub">Every client speaks the same protocol to the same server, so the bars compare the clients themselves. GET, 16 requests in flight, each client with its own defaults.</p>
                     </div>
                     <div class="sim-tabs perf-tabs" id="perf-tabs" role="group" aria-label="Response body size">
                         <button type="button" class="sim-tab" aria-pressed="true" data-scenario="1 KiB body">1 KiB body</button>
@@ -217,6 +217,13 @@
                     <summary>Show as a table</summary>
                     <div class="perf-table-scroll"><table id="perf-table"></table></div>
                 </details>
+
+                <div class="perf-h2">
+                    <h4>And with <code>http2: true</code>?</h4>
+                    <p class="perf-h2-figure" id="perf-h2-figure"></p>
+                    <p id="perf-h2-why"></p>
+                    <p class="perf-h2-note">Not comparable with the bars above: here HTTP/2 also runs against a different test server (<code>node:http2</code>), and <code>fetch</code> and the other clients use HTTP/1.1, which is what Node's <code>fetch</code> does by default. Turn it on when the server you call speaks HTTP/2.</p>
+                </div>
             </div>
 
             <div class="perf-stats">
@@ -244,7 +251,7 @@
                     <li><strong>Where:</strong> a shared GitHub Actions runner (AMD EPYC 7763, 4 vCPUs, Linux), Node 24.21.0, on <code>main</code> at commit <code>9ccf8ac</code> (2026-10-21), after 2.4.0. Clients: undici 7.29.1 (Node's <code>fetch</code>), axios 1.20.0, got 16.1.0, node-fetch 3.3.2.</li>
                     <li><strong>How:</strong> each client runs in its own process with its own defaults and keep-alive, keeps 16 GET requests in flight and reads the whole body: a 2 s warm-up, then the median of 3 rounds of 5 s. Node's <code>http.request</code> is the baseline, with no checks at all.</li>
                     <li><strong>No TLS, no DNS, no network.</strong> Plain HTTP (h2c for HTTP/2) on loopback, to an IP literal. TLS and DNS are left out, though UltraTon resolves and validates DNS on every new connection, with no cache. Without network latency, per-request overhead looks much larger than it is: against a real server, the gap to <code>http.request</code> is a small fraction of a request's time.</li>
-                    <li><strong>HTTP/2 is a different setup:</strong> its own server (<code>node:http2</code>) and one multiplexed connection. Compare it with the HTTP/1.1 bars with care.</li>
+                    <li><strong>HTTP/2 is shown apart on purpose:</strong> it runs against its own server (<code>node:http2</code>) over one multiplexed connection, so its number measures the protocol as much as the client. The chart compares clients over HTTP/1.1 only.</li>
                     <li><strong>Runners are noisy</strong> and land on different CPUs from run to run: compare bars within one chart, not across runs or with your own machine. On other runs, <code>fetch</code> and UltraTon over HTTP/1.1 have been closer.</li>
                     <li><strong>Reproduce it:</strong> the <a href="https://github.com/AbeOrigin/UltraTon/tree/main/compat/bench" target="_blank" rel="noopener noreferrer">harness</a> and its <a href="https://github.com/AbeOrigin/UltraTon/blob/main/compat/bench/RESULTS.md" target="_blank" rel="noopener noreferrer">full results</a> (latency, CPU and memory too) are in the repository, and the <a href="https://github.com/AbeOrigin/UltraTon/actions/workflows/bench.yml" target="_blank" rel="noopener noreferrer">Benchmarks workflow</a> runs it in CI on every pull request that touches the code.</li>
                 </ul>

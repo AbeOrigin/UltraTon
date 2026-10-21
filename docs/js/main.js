@@ -368,11 +368,10 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
 (function () {
     const chart = document.getElementById('perf-chart');
     if (!chart) return;
-    // [name, note, ours, req/s, p50 ms, p99 ms, CPU ms per 1,000 requests]
+    // HTTP/1.1 only: every client against the same server. [name, note, ours, req/s, p50 ms, p99 ms, CPU ms per 1,000 requests]
     const RESULTS = {
         '1 KiB body': [
-            ['UltraTon (HTTP/2)', 'h2c server, one connection', true, 12354, 1.18, 5.14, 79.7],
-            ['UltraTon (HTTP/1.1)', '', true, 6907, 1.91, 5.33, 146.1],
+            ['UltraTon', '', true, 6907, 1.91, 5.33, 146.1],
             ['fetch (undici)', "Node's built-in", false, 9458, 1.50, 10.52, 135.9],
             ['http.request', 'baseline, no checks', false, 8989, 1.61, 4.32, 113.0],
             ['node-fetch', '', false, 4787, 2.84, 7.29, 212.3],
@@ -381,8 +380,7 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             ['got', '', false, 3702, 3.60, 11.49, 309.1],
         ],
         '64 KiB body': [
-            ['UltraTon (HTTP/2)', 'h2c server, one connection', true, 5584, 2.55, 6.26, 223.0],
-            ['UltraTon (HTTP/1.1)', '', true, 5661, 2.33, 6.86, 223.4],
+            ['UltraTon', '', true, 5661, 2.33, 6.86, 223.4],
             ['fetch (undici)', "Node's built-in", false, 4890, 2.77, 7.04, 316.4],
             ['http.request', 'baseline, no checks', false, 7568, 1.72, 5.37, 167.3],
             ['node-fetch', '', false, 3449, 3.85, 11.41, 355.0],
@@ -390,6 +388,17 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             ['axios + secure agents', 'createSecureAgents()', false, 3530, 3.73, 10.05, 395.4],
             ['got', '', false, 2984, 4.39, 11.26, 449.7],
         ],
+    };
+    // UltraTon with http2: true, shown apart: another protocol and another server (node:http2, h2c), one connection.
+    const HTTP2 = {
+        '1 KiB body': {
+            rps: 12354,
+            why: 'Almost twice its HTTP/1.1 result. The gain is HTTP/2 itself: all 16 requests share one connection, and headers repeated on every request are compressed. With small bodies, those savings are most of the work.',
+        },
+        '64 KiB body': {
+            rps: 5584,
+            why: 'About the same as its HTTP/1.1 result. With large bodies the bytes dominate, and they all travel over that one connection: sharing it stops helping. HTTP/2 pays off most with many small requests.',
+        },
     };
     const fmt = n => n.toLocaleString('en-US');
     const el = (tag, className, text) => {
@@ -416,7 +425,16 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     }
     const hideTooltip = () => { tooltip.hidden = true; };
 
+    function renderHttp2(scenario) {
+        const { rps, why } = HTTP2[scenario];
+        const http1 = RESULTS[scenario].find(r => r[2])[3];
+        const figure = document.getElementById('perf-h2-figure');
+        figure.replaceChildren(el('strong', '', `${fmt(rps)} req/s`), ` with ${scenario === '1 KiB body' ? '1 KiB' : '64 KiB'} bodies, against ${fmt(http1)} over HTTP/1.1 (${(rps / http1).toFixed(2)}×).`);
+        document.getElementById('perf-h2-why').textContent = why;
+    }
+
     function render(scenario) {
+        renderHttp2(scenario);
         const rows = [...RESULTS[scenario]].sort((a, b) => b[3] - a[3]);
         const max = Math.max(...rows.map(r => r[3]));
         chart.replaceChildren(...rows.map(entry => {

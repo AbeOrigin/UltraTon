@@ -853,6 +853,20 @@ footer {
 .perf-table th:first-child, .perf-table td:first-child { text-align: left; }
 .perf-table th { color: var(--text-primary); font-weight: 600; }
 
+.perf-h2 {
+    margin-top: 1.75rem;
+    padding: 1.25rem 1.5rem;
+    border-radius: 12px;
+    border: 1px solid var(--border-glass);
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.perf-h2 h4 { font-size: 1rem; margin-bottom: 0.5rem; }
+.perf-h2 p { color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.45rem; }
+.perf-h2 .perf-h2-figure { color: var(--text-primary); font-size: 0.95rem; }
+.perf-h2 .perf-h2-figure strong { font-size: 1.15rem; }
+.perf-h2 .perf-h2-note { font-size: 0.82rem; opacity: 0.9; }
+
 .perf-stats {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
