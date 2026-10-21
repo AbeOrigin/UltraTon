@@ -363,3 +363,99 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     // With reduced motion the first scenario is shown already finished; otherwise it plays once the section is visible.
     if (reduce) play(0); else reset(0);
 })();
+
+// Benchmark chart: compat/bench/results.json from the CI run named in the section's disclosure (main at 9ccf8ac).
+(function () {
+    const chart = document.getElementById('perf-chart');
+    if (!chart) return;
+    // [name, note, ours, req/s, p50 ms, p99 ms, CPU ms per 1,000 requests]
+    const RESULTS = {
+        '1 KiB body': [
+            ['UltraTon (HTTP/2)', 'h2c server, one connection', true, 12354, 1.18, 5.14, 79.7],
+            ['UltraTon (HTTP/1.1)', '', true, 6907, 1.91, 5.33, 146.1],
+            ['fetch (undici)', "Node's built-in", false, 9458, 1.50, 10.52, 135.9],
+            ['http.request', 'baseline, no checks', false, 8989, 1.61, 4.32, 113.0],
+            ['node-fetch', '', false, 4787, 2.84, 7.29, 212.3],
+            ['axios', '', false, 4385, 3.80, 7.73, 229.4],
+            ['axios + secure agents', 'createSecureAgents()', false, 4299, 3.20, 9.51, 275.9],
+            ['got', '', false, 3702, 3.60, 11.49, 309.1],
+        ],
+        '64 KiB body': [
+            ['UltraTon (HTTP/2)', 'h2c server, one connection', true, 5584, 2.55, 6.26, 223.0],
+            ['UltraTon (HTTP/1.1)', '', true, 5661, 2.33, 6.86, 223.4],
+            ['fetch (undici)', "Node's built-in", false, 4890, 2.77, 7.04, 316.4],
+            ['http.request', 'baseline, no checks', false, 7568, 1.72, 5.37, 167.3],
+            ['node-fetch', '', false, 3449, 3.85, 11.41, 355.0],
+            ['axios', '', false, 3502, 3.67, 10.40, 388.8],
+            ['axios + secure agents', 'createSecureAgents()', false, 3530, 3.73, 10.05, 395.4],
+            ['got', '', false, 2984, 4.39, 11.26, 449.7],
+        ],
+    };
+    const fmt = n => n.toLocaleString('en-US');
+    const el = (tag, className, text) => {
+        const e = document.createElement(tag);
+        if (className) e.className = className;
+        if (text !== undefined) e.textContent = text;
+        return e;
+    };
+    const tabs = document.getElementById('perf-tabs');
+    const tooltip = document.getElementById('perf-tooltip');
+    const table = document.getElementById('perf-table');
+
+    function showTooltip(row, [name, , , rps, p50, p99, cpu]) {
+        tooltip.replaceChildren(
+            el('strong', 'perf-tip-value', `${fmt(rps)} req/s`),
+            el('span', 'perf-tip-name', name),
+            el('span', 'perf-tip-detail', `p50 ${p50.toFixed(2)} ms · p99 ${p99.toFixed(2)} ms · ${cpu.toFixed(1)} ms CPU per 1,000 requests`),
+        );
+        tooltip.hidden = false;
+        const box = chart.parentElement.getBoundingClientRect();
+        const r = row.getBoundingClientRect();
+        tooltip.style.top = `${r.bottom - box.top + 6}px`;
+        tooltip.style.left = `${Math.max(0, Math.min(r.left - box.left + 140, box.width - tooltip.offsetWidth - 16))}px`;
+    }
+    const hideTooltip = () => { tooltip.hidden = true; };
+
+    function render(scenario) {
+        const rows = [...RESULTS[scenario]].sort((a, b) => b[3] - a[3]);
+        const max = Math.max(...rows.map(r => r[3]));
+        chart.replaceChildren(...rows.map(entry => {
+            const [name, note, ours, rps] = entry;
+            const row = el('div', ours ? 'perf-row is-ours' : 'perf-row');
+            row.setAttribute('role', 'listitem');
+            row.tabIndex = 0;
+            row.setAttribute('aria-label', `${name}${note ? `, ${note}` : ''}: ${fmt(rps)} requests per second`);
+            const label = el('div', 'perf-label');
+            label.append(el('span', 'perf-name', name));
+            if (note) label.append(el('span', 'perf-note', note));
+            const track = el('div', 'perf-track');
+            const bar = el('div', 'perf-bar');
+            bar.style.width = `${(rps / max) * 100}%`;
+            track.append(bar, el('span', 'perf-value', fmt(rps)));
+            row.append(label, track);
+            for (const [on, off] of [['pointerenter', 'pointerleave'], ['focus', 'blur']]) {
+                row.addEventListener(on, () => showTooltip(row, entry));
+                row.addEventListener(off, hideTooltip);
+            }
+            return row;
+        }));
+
+        const head = el('tr');
+        for (const h of ['Client', 'req/s', 'p50 (ms)', 'p99 (ms)', 'CPU (ms / 1k req)']) head.append(el('th', '', h));
+        const caption = el('caption', '', `Requests per second, ${scenario}`);
+        table.replaceChildren(caption, head, ...rows.map(([name, note, , rps, p50, p99, cpu]) => {
+            const tr = el('tr');
+            tr.append(el('td', '', note ? `${name} (${note})` : name), el('td', '', fmt(rps)), el('td', '', p50.toFixed(2)), el('td', '', p99.toFixed(2)), el('td', '', cpu.toFixed(1)));
+            return tr;
+        }));
+    }
+
+    tabs.addEventListener('click', e => {
+        const button = e.target.closest('button[data-scenario]');
+        if (!button) return;
+        for (const b of tabs.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b === button));
+        hideTooltip();
+        render(button.dataset.scenario);
+    });
+    render('1 KiB body');
+})();

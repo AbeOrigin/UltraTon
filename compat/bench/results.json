@@ -1,14 +1,14 @@
 {
   "environment": {
-    "node": "v24.22.0",
+    "node": "v24.21.0",
     "undici": "7.29.1",
-    "ultraton": "2.3.0",
+    "ultraton": "2.4.0",
     "axios": "1.20.0",
     "got": "16.1.0",
     "node-fetch": "3.3.2",
-    "os": "Linux 7.0.0-1017-azure",
-    "cpu": "AMD EPYC 9V45 96-Core Processor × 4",
-    "commit": "af8e9baada48f4a4d3f5ea31fb1316625f4c8cd4",
+    "os": "Linux 6.17.0-1022-azure",
+    "cpu": "AMD EPYC 7763 64-Core Processor × 4",
+    "commit": "9ccf8ace168a8b822a00879e2ea45c778a103776",
     "date": "2026-10-21",
     "settings": {
       "concurrency": 16,
@@ -21,134 +21,134 @@
   "results": {
     "1 KiB body": {
       "node:http (baseline)": {
-        "requestsPerSecond": 32496.017274943177,
-        "p50Ms": 0.40546299999959956,
-        "p99Ms": 1.3525600000002669,
-        "cpuMsPer1k": 31.16394744130227,
-        "rssMb": 144.85546875,
-        "serverCpuPercent": 62.59269042616504
+        "requestsPerSecond": 8988.725836573532,
+        "p50Ms": 1.6061470000004192,
+        "p99Ms": 4.321390999999494,
+        "cpuMsPer1k": 112.97323514361358,
+        "rssMb": 119.23046875,
+        "serverCpuPercent": 62.06317339275683
       },
       "fetch (Node built-in, undici)": {
-        "requestsPerSecond": 21654.677585216115,
-        "p50Ms": 0.5848399999999856,
-        "p99Ms": 9.019752000000153,
-        "cpuMsPer1k": 73.34465880440705,
-        "rssMb": 292.87109375,
-        "serverCpuPercent": 36.95666676985777
+        "requestsPerSecond": 9458.023964068354,
+        "p50Ms": 1.4969270000001416,
+        "p99Ms": 10.52266900000177,
+        "cpuMsPer1k": 135.86303860628357,
+        "rssMb": 288.92578125,
+        "serverCpuPercent": 35.892903296576165
       },
       "axios": {
-        "requestsPerSecond": 11006.737247907555,
-        "p50Ms": 1.2543389999991632,
-        "p99Ms": 3.531827999999223,
-        "cpuMsPer1k": 94.43179257967223,
-        "rssMb": 274.5234375,
-        "serverCpuPercent": 24.02007655039957
+        "requestsPerSecond": 4384.655970359183,
+        "p50Ms": 3.7953830000005837,
+        "p99Ms": 7.731958999997005,
+        "cpuMsPer1k": 229.35540657636705,
+        "rssMb": 287.7265625,
+        "serverCpuPercent": 31.056862407833506
       },
       "got": {
-        "requestsPerSecond": 8204.571272664893,
-        "p50Ms": 1.4973259999987931,
-        "p99Ms": 8.051195000000007,
-        "cpuMsPer1k": 156.23031174592342,
-        "rssMb": 311.56640625,
-        "serverCpuPercent": 19.418867487294538
+        "requestsPerSecond": 3701.6874873930956,
+        "p50Ms": 3.603402000000642,
+        "p99Ms": 11.493545000001177,
+        "cpuMsPer1k": 309.12213039485766,
+        "rssMb": 307.0234375,
+        "serverCpuPercent": 25.057606285547667
       },
       "node-fetch": {
-        "requestsPerSecond": 13340.79027869125,
-        "p50Ms": 0.995785999999498,
-        "p99Ms": 3.1913260000001173,
-        "cpuMsPer1k": 79.96981007629927,
-        "rssMb": 328.53125,
-        "serverCpuPercent": 28.755156444450435
+        "requestsPerSecond": 4787.114658756701,
+        "p50Ms": 2.8431919999993625,
+        "p99Ms": 7.290933000000223,
+        "cpuMsPer1k": 212.34913541057557,
+        "rssMb": 257.078125,
+        "serverCpuPercent": 32.33967890911715
       },
       "UltraTonClient (HTTP/1.1)": {
-        "requestsPerSecond": 20351.623386648545,
-        "p50Ms": 0.6924660000004224,
-        "p99Ms": 1.4651260000000548,
-        "cpuMsPer1k": 50.045478218999044,
-        "rssMb": 166.578125,
-        "serverCpuPercent": 39.551125956008946
+        "requestsPerSecond": 6907.228284394144,
+        "p50Ms": 1.9136379999999917,
+        "p99Ms": 5.329918000001271,
+        "cpuMsPer1k": 146.12912565141866,
+        "rssMb": 134.05859375,
+        "serverCpuPercent": 47.19101775218619
       },
       "UltraTonClient (HTTP/2)": {
-        "requestsPerSecond": 26047.81549676548,
-        "p50Ms": 0.5004260000005161,
-        "p99Ms": 6.038378000001103,
-        "cpuMsPer1k": 43.61738736525291,
-        "rssMb": 262.6484375,
-        "serverCpuPercent": 35.070748046615556
+        "requestsPerSecond": 12353.613929526624,
+        "p50Ms": 1.184744000000137,
+        "p99Ms": 5.1433410000008735,
+        "cpuMsPer1k": 79.72072392916112,
+        "rssMb": 263.7578125,
+        "serverCpuPercent": 30.271969354523826
       },
       "axios + createSecureAgents": {
-        "requestsPerSecond": 10474.004874299168,
-        "p50Ms": 1.3627209999995102,
-        "p99Ms": 3.6748380000008183,
-        "cpuMsPer1k": 96.43162637950128,
-        "rssMb": 280.0703125,
-        "serverCpuPercent": 22.797591405260334
+        "requestsPerSecond": 4299.0299357334325,
+        "p50Ms": 3.200138000000152,
+        "p99Ms": 9.51258000000007,
+        "cpuMsPer1k": 275.8794771606661,
+        "rssMb": 278.6171875,
+        "serverCpuPercent": 31.41923530083986
       }
     },
     "64 KiB body": {
       "node:http (baseline)": {
-        "requestsPerSecond": 17896.418292708575,
-        "p50Ms": 0.6495920000002116,
-        "p99Ms": 3.4994800000004034,
-        "cpuMsPer1k": 82.18427963213355,
-        "rssMb": 225.06640625,
-        "serverCpuPercent": 50.60707919082328
+        "requestsPerSecond": 7568.43931433413,
+        "p50Ms": 1.7182020000000193,
+        "p99Ms": 5.372965000000477,
+        "cpuMsPer1k": 167.30422378952375,
+        "rssMb": 239.2734375,
+        "serverCpuPercent": 55.18781028690365
       },
       "fetch (Node built-in, undici)": {
-        "requestsPerSecond": 11166.795548115568,
-        "p50Ms": 1.0302679999995235,
-        "p99Ms": 5.01027300000078,
-        "cpuMsPer1k": 162.07687761899646,
-        "rssMb": 292.671875,
-        "serverCpuPercent": 30.158993632257815
+        "requestsPerSecond": 4890.297265456666,
+        "p50Ms": 2.765118000000257,
+        "p99Ms": 7.038054999999986,
+        "cpuMsPer1k": 316.4288516550879,
+        "rssMb": 309.3671875,
+        "serverCpuPercent": 28.285581113469537
       },
       "axios": {
-        "requestsPerSecond": 7384.296817223801,
-        "p50Ms": 1.7460210000008374,
-        "p99Ms": 6.35460299999977,
-        "cpuMsPer1k": 203.04120306451176,
-        "rssMb": 252.65234375,
-        "serverCpuPercent": 27.14858254155074
+        "requestsPerSecond": 3502.3451747256618,
+        "p50Ms": 3.6659400000007736,
+        "p99Ms": 10.40288800000053,
+        "cpuMsPer1k": 388.8227104136948,
+        "rssMb": 241.17578125,
+        "serverCpuPercent": 28.377069756587016
       },
       "got": {
-        "requestsPerSecond": 5683.596882982176,
-        "p50Ms": 2.0374269999992975,
-        "p99Ms": 7.57117400000061,
-        "cpuMsPer1k": 255.42747608328645,
-        "rssMb": 361.30859375,
-        "serverCpuPercent": 20.17589917815696
+        "requestsPerSecond": 2984.4529796823226,
+        "p50Ms": 4.392777000000933,
+        "p99Ms": 11.260479000000487,
+        "cpuMsPer1k": 449.6804206577802,
+        "rssMb": 339.58203125,
+        "serverCpuPercent": 22.953652027119222
       },
       "node-fetch": {
-        "requestsPerSecond": 7965.405904542814,
-        "p50Ms": 1.4017579999999725,
-        "p99Ms": 6.25622199999998,
-        "cpuMsPer1k": 181.634721072047,
-        "rssMb": 307.3125,
-        "serverCpuPercent": 26.925259596269267
+        "requestsPerSecond": 3449.204781349996,
+        "p50Ms": 3.847410000000309,
+        "p99Ms": 11.40882099999908,
+        "cpuMsPer1k": 354.9815705592582,
+        "rssMb": 309.27734375,
+        "serverCpuPercent": 26.989344298620804
       },
       "UltraTonClient (HTTP/1.1)": {
-        "requestsPerSecond": 11326.985986051286,
-        "p50Ms": 0.9981479999996736,
-        "p99Ms": 5.005763999999999,
-        "cpuMsPer1k": 127.83102942993838,
-        "rssMb": 211.4140625,
-        "serverCpuPercent": 38.29738548715983
+        "requestsPerSecond": 5661.2683575891815,
+        "p50Ms": 2.3309250000002066,
+        "p99Ms": 6.86113800000021,
+        "cpuMsPer1k": 223.3814855366793,
+        "rssMb": 271.85546875,
+        "serverCpuPercent": 42.985361487251815
       },
       "UltraTonClient (HTTP/2)": {
-        "requestsPerSecond": 8457.04404385057,
-        "p50Ms": 1.2730019999999058,
-        "p99Ms": 6.802511999999297,
-        "cpuMsPer1k": 167.99423481322214,
-        "rssMb": 159.21484375,
-        "serverCpuPercent": 47.08463868129631
+        "requestsPerSecond": 5584.371615827536,
+        "p50Ms": 2.5464479999991454,
+        "p99Ms": 6.2558849999986705,
+        "cpuMsPer1k": 222.9745058722429,
+        "rssMb": 286.20703125,
+        "serverCpuPercent": 46.828305713834844
       },
       "axios + createSecureAgents": {
-        "requestsPerSecond": 6891.7341905507365,
-        "p50Ms": 1.7656650000008085,
-        "p99Ms": 7.114448999998785,
-        "cpuMsPer1k": 220.29726671309191,
-        "rssMb": 249.71875,
-        "serverCpuPercent": 27.665861678944133
+        "requestsPerSecond": 3530.4970485480553,
+        "p50Ms": 3.731402999999773,
+        "p99Ms": 10.048072999999931,
+        "cpuMsPer1k": 395.36608710426464,
+        "rssMb": 238.39453125,
+        "serverCpuPercent": 30.327635621731723
       }
     }
   }

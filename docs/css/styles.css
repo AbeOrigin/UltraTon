@@ -729,3 +729,160 @@ footer {
     text-align: center;
     color: var(--text-secondary);
 }
+
+/* Benchmark chart (#performance). Emphasis: UltraTon in one in-band green, every other client in one gray. */
+.perf {
+    --perf-ours: #13a57f;
+    --perf-other: #5b6270;
+    position: relative;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+.perf-head {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.perf-head h3 { font-size: 1.15rem; }
+.perf-sub { color: var(--text-secondary); font-size: 0.9rem; }
+.perf-tabs { margin-bottom: 0; }
+
+.perf-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 1.2rem;
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-bottom: 1.25rem;
+}
+
+.perf-legend-item { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+
+.perf-key {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: var(--perf-other);
+}
+
+.perf-key-ut { background: var(--perf-ours); }
+
+.perf-chart { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.perf-row {
+    display: grid;
+    grid-template-columns: 220px 1fr;
+    align-items: center;
+    gap: 1rem;
+    border-radius: 6px;
+    padding: 0.15rem 0.35rem;
+    outline: none;
+}
+
+.perf-row:hover, .perf-row:focus-visible { background: rgba(255, 255, 255, 0.04); }
+.perf-row:focus-visible { box-shadow: 0 0 0 2px var(--accent-cyan); }
+
+.perf-label { display: flex; flex-direction: column; line-height: 1.25; }
+.perf-name { font-size: 0.92rem; color: var(--text-secondary); }
+.perf-row.is-ours .perf-name { color: var(--text-primary); font-weight: 600; }
+.perf-note { font-size: 0.75rem; color: var(--text-secondary); opacity: 0.8; }
+
+.perf-track {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+}
+
+.perf-bar {
+    height: 18px;
+    min-width: 2px;
+    border-radius: 0 4px 4px 0;
+    background: var(--perf-other);
+    transition: width 0.4s ease;
+    flex: none;
+    max-width: calc(100% - 4.5rem);
+}
+
+.perf-row.is-ours .perf-bar { background: var(--perf-ours); }
+
+.perf-value {
+    font: 500 0.85rem var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.perf-row.is-ours .perf-value { color: var(--text-primary); }
+
+.perf-tooltip {
+    position: absolute;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    max-width: 320px;
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-glass);
+    background: #121219;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+}
+
+.perf-tooltip[hidden] { display: none; }
+.perf-tip-value { font-size: 1rem; color: var(--text-primary); }
+.perf-tip-name { font-size: 0.85rem; color: var(--text-secondary); }
+.perf-tip-detail { font-size: 0.78rem; color: var(--text-secondary); }
+
+.perf-table { margin-top: 1.5rem; color: var(--text-secondary); font-size: 0.85rem; }
+.perf-table summary { cursor: pointer; }
+.perf-table summary:focus-visible { outline: 2px solid var(--accent-cyan); outline-offset: 2px; }
+.perf-table-scroll { overflow-x: auto; margin-top: 0.75rem; }
+.perf-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.perf-table caption { text-align: left; margin-bottom: 0.4rem; }
+.perf-table th, .perf-table td { padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--border-glass); text-align: right; white-space: nowrap; }
+.perf-table th:first-child, .perf-table td:first-child { text-align: left; }
+.perf-table th { color: var(--text-primary); font-weight: 600; }
+
+.perf-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1.5rem;
+    max-width: 1000px;
+    margin: 2rem auto 0;
+}
+
+.perf-stat { padding: 1.5rem; }
+.perf-stat-label { color: var(--text-secondary); font-size: 0.85rem; }
+.perf-stat-value { font: 600 2.4rem var(--font-sans); color: var(--text-primary); line-height: 1.2; margin: 0.2rem 0 0.4rem; }
+.perf-stat-note { color: var(--text-secondary); font-size: 0.88rem; }
+
+.perf-disclosure {
+    max-width: 1000px;
+    margin: 2rem auto 0;
+    padding: 1.75rem 2rem;
+}
+
+.perf-disclosure h3 { font-size: 1.05rem; margin-bottom: 0.9rem; }
+.perf-disclosure ul { list-style: none; display: flex; flex-direction: column; gap: 0.7rem; }
+.perf-disclosure li { color: var(--text-secondary); font-size: 0.9rem; }
+.perf-disclosure strong { color: var(--text-primary); }
+.perf-disclosure a { color: var(--accent-cyan); }
+
+@media (max-width: 640px) {
+    .perf, .perf-disclosure { padding: 1.25rem; }
+    .perf-row { grid-template-columns: 1fr; gap: 0.3rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .perf-bar { transition: none; }
+}
