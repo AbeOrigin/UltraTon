@@ -219,7 +219,8 @@
                 </details>
 
                 <div class="perf-h2">
-                    <h4>And with <code>http2: true</code>?</h4>
+                    <h4 id="perf-h2-title">And with HTTP/2? UltraTon against itself, <code>http2: true</code> on and off</h4>
+                    <div class="perf-chart perf-h2-chart" id="perf-h2-chart" role="list" aria-labelledby="perf-h2-title"></div>
                     <p class="perf-h2-figure" id="perf-h2-figure"></p>
                     <p id="perf-h2-why"></p>
                     <p class="perf-h2-note">Not comparable with the bars above: here HTTP/2 also runs against a different test server (<code>node:http2</code>), and <code>fetch</code> and the other clients use HTTP/1.1, which is what Node's <code>fetch</code> does by default. Turn it on when the server you call speaks HTTP/2.</p>

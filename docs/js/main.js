@@ -428,6 +428,22 @@ document.querySelectorAll('a[href^="#"]').forEach(anchor => {
     function renderHttp2(scenario) {
         const { rps, why } = HTTP2[scenario];
         const http1 = RESULTS[scenario].find(r => r[2])[3];
+        // Same client, two protocols, on its own scale: the bars above are not on this one.
+        const max = Math.max(rps, http1);
+        document.getElementById('perf-h2-chart').replaceChildren(...[['HTTP/2', 'http2: true', rps], ['HTTP/1.1', 'the default', http1]].map(([name, note, value]) => {
+            // Both are UltraTon, so both wear its color; the label tells the protocols apart.
+            const row = el('div', 'perf-row is-ours');
+            row.setAttribute('role', 'listitem');
+            row.setAttribute('aria-label', `UltraTon over ${name}: ${fmt(value)} requests per second`);
+            const label = el('div', 'perf-label');
+            label.append(el('span', 'perf-name', `UltraTon over ${name}`), el('span', 'perf-note', note));
+            const track = el('div', 'perf-track');
+            const bar = el('div', 'perf-bar');
+            bar.style.width = `${(value / max) * 100}%`;
+            track.append(bar, el('span', 'perf-value', fmt(value)));
+            row.append(label, track);
+            return row;
+        }));
         const figure = document.getElementById('perf-h2-figure');
         figure.replaceChildren(el('strong', '', `${fmt(rps)} req/s`), ` with ${scenario === '1 KiB body' ? '1 KiB' : '64 KiB'} bodies, against ${fmt(http1)} over HTTP/1.1 (${(rps / http1).toFixed(2)}×).`);
         document.getElementById('perf-h2-why').textContent = why;

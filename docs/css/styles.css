@@ -861,7 +861,8 @@ footer {
     background: rgba(255, 255, 255, 0.03);
 }
 
-.perf-h2 h4 { font-size: 1rem; margin-bottom: 0.5rem; }
+.perf-h2 h4 { font-size: 1rem; margin-bottom: 1rem; }
+.perf-h2-chart { margin-bottom: 0.9rem; }
 .perf-h2 p { color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.45rem; }
 .perf-h2 .perf-h2-figure { color: var(--text-primary); font-size: 0.95rem; }
 .perf-h2 .perf-h2-figure strong { font-size: 1.15rem; }
