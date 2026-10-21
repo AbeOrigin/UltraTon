@@ -131,6 +131,9 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
             } else if (req.url === '/truncated') {
                 res.writeHead(200, { 'content-length': '100' });
                 res.write(Buffer.alloc(10), () => res.socket!.destroy());
+            } else if (req.url === '/chunked-cut') {
+                // No content-length: only the missing last chunk tells the body was cut.
+                res.write(Buffer.alloc(10), () => res.socket!.destroy());
             }
         });
         await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
@@ -156,6 +159,13 @@ describe('UltraTonClient - response body consumption (real sockets)', () => {
             new UltraTonClient().get(`${base}/truncated`, { permitReservedIps: true }),
             // Not a timeout either: since 2.0 UltraTonNetworkTimeoutError is an UltraTonNetworkError too.
             (err: unknown) => err instanceof UltraTonNetworkError && !(err instanceof UltraTonNetworkTimeoutError) && !(err instanceof UltraTonMemoryError)
+        );
+    });
+
+    it('Rejects with UltraTonNetworkError when a chunked body is cut before its last chunk', async () => {
+        await assert.rejects(
+            new UltraTonClient().get(`${base}/chunked-cut`, { permitReservedIps: true }),
+            (err: unknown) => err instanceof UltraTonNetworkError && !(err instanceof UltraTonNetworkTimeoutError)
         );
     });
 });

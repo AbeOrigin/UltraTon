@@ -16,7 +16,7 @@ import { isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request
 import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
 import { isIP } from 'node:net';
 import tls from 'node:tls';
-import type { Duplex } from 'node:stream';
+import { finished, type Duplex } from 'node:stream';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -138,8 +138,19 @@ export class Http1Engine {
         });
 
         try {
-            // Leaving the loop early (throw) destroys `res`; a premature close or socket error throws here.
-            for await (const chunk of res) reader.write(chunk);
+            // Events, not `for await`: the async iterator costs a promise and a microtask turn per chunk. finished()
+            // rejects as the iterator did: a socket error, or a close before 'end' (ERR_STREAM_PREMATURE_CLOSE).
+            // A write that throws (maxBodySize, a decoding error) destroys `res` with it, as leaving the loop did.
+            await new Promise<void>((resolve, reject) => {
+                res.on('data', (chunk: Buffer) => {
+                    try {
+                        reader.write(chunk);
+                    } catch (err: unknown) {
+                        res.destroy(err as Error);
+                    }
+                });
+                finished(res, err => (err ? reject(err) : resolve()));
+            });
         } catch (err: unknown) {
             clearTimeout(executionTimer);
             if (reader.error) {
