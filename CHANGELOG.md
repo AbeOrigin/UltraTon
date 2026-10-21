@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TSDoc on every public symbol and member,** which is what editors show on hover. A dependency-free CI check (`npm run check:tsdoc`) scans the built `.d.ts` files and fails if a public export, or a member of one, has none. It filled the gaps in the diagnostics payloads, `UltraTonRetryInfo` and `UltraTonSecureAgents`.
 - **"Choosing a client" in the README and on the site:** when to use UltraTon, Node's `fetch`, or `createSecureAgents()` with the client you already have, plus a table of each library's defaults (SSRF, redirects, size limits, timeouts, retries, proxies, HTTP/2, dependencies, maturity) that also lists where UltraTon falls short.
 - **Reproducible benchmarks** in `compat/bench/`: UltraTon (HTTP/1.1 and HTTP/2, and axios through `createSecureAgents()`) next to Node's `http.request`, Node's `fetch` (undici), axios, got and node-fetch.
   - It reports requests per second, p50/p99 latency, CPU per 1 000 requests and memory, with a 1 KiB and a 64 KiB body.
