@@ -24,4 +24,4 @@ export const IDLE_TIMEOUT = 10000;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;
 
 /** The package version, sent in the default `user-agent`. A test keeps it equal to `package.json` `version`. */
-export const VERSION = '2.4.0';
+export const VERSION = '2.4.1';

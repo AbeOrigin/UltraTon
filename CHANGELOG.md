@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-10-21
+
+A performance release, with no change to the API: HTTP/2 moves large bodies 1.5× faster, and every request does less work around the same checks. On the CI benchmark, UltraTon over HTTP/1.1 reaches 77% of `node:http`'s throughput (from 62–67%). The site now shows those benchmarks, and how they were measured.
+
 ### Changed
 
 - **Faster HTTP/2 bodies.** The receive window is 1 MiB per stream (was Node's 64 KiB) and 16 MiB per connection (was 64 KiB, shared by every stream), so a body no longer waits on WINDOW_UPDATE round trips. The stream window is also the most a `stream()` body left unread can hold; the connection window bounds no memory, because Node acknowledges it as data arrives.
