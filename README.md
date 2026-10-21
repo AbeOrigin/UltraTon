@@ -89,7 +89,8 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | Proxies | CONNECT and SOCKS5, opt-in, target pinned | `NODE_USE_ENV_PROXY` (recent Node) | from `HTTP_PROXY` by default | through an agent | through an agent |
 | HTTP/2 | `http2: true` | not by default | `httpVersion: 2` | `http2: true` | — |
 | Hooks / interceptors | `diagnostics_channel` (hooks planned) | — | interceptors | hooks | — |
-| Cookies, HTTP cache, pagination | — | — | — | Yes | — |
+| Pagination | `paginate()`, same origin only | — | — | Yes | — |
+| Cookies, HTTP cache | — | — | — | Yes | — |
 | Upload streaming | Yes, with an optional size limit | Yes | Yes | Yes | Yes |
 | Runs in browsers, Bun, Deno | — (Node only) | Yes | Yes | — | — |
 | Runtime dependencies | 0 | built in | 4 | 10 | 3 |
@@ -140,6 +141,8 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `statusCode` | `number` | — |
 | `ok` | `boolean` | `true` for 200–299. |
 | `headers` | `IncomingHttpHeaders` | Never contains HTTP/2 pseudo-headers. |
+| `url` | `string` | The final URL, after any redirect that was followed. |
+| `redirected` | `boolean` | `true` when at least one redirect was followed. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. |
 | `text()` | `string` | Decodes the body as UTF-8. |
@@ -165,6 +168,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `UltraTonMemoryError` | The request body exceeded `maxRequestBodySize` | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` |
 | `SecureHttpError` | A streamed request body yielded more or fewer bytes than its `content-length` | `ERR_ULTRATON_REQUEST_BODY_LENGTH` |
 | `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
+| `SecureHttpError` | `paginate()`: a next page on another origin, or outside `baseUrl` | `ERR_ULTRATON_PAGE_OUT_OF_SCOPE` |
+| `SecureHttpError` | `paginate()`: a next page is left after `maxPages` | `ERR_ULTRATON_MAX_PAGES` |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
 
 `UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, so test for the timeout first:
@@ -290,6 +295,25 @@ else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'))
 ```
 
 `stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+
+**Walk a paginated API.** `paginate()` yields one complete response per page, each a full `get()` with every check. By default the next page is the `rel="next"` link of the `Link` header (RFC 8288), as GitHub and many other APIs send it; `next(page)` reads it from somewhere else:
+
+```ts
+for await (const page of client.paginate('https://api.example.com/items', { query: { per_page: 100 } })) {
+  if (!page.ok) throw new Error(`page failed: ${page.statusCode}`);
+  for (const item of page.json<Item[]>()) handle(item);
+}
+
+// A cursor in the body: return the next URL, or undefined on the last page.
+const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
+  next: page => { const { cursor } = page.json(); return cursor ? `items?cursor=${encodeURIComponent(cursor)}` : undefined; },
+});
+```
+
+- **Scope:** the next page must be on the first page's origin and, with `baseUrl`, inside it (its path checks apply). A server cannot steer the walk to another host: that rejects with `ERR_ULTRATON_PAGE_OUT_OF_SCOPE`, and so does a `next()` result. So does a page that a followed redirect served from outside that scope (it is yielded, then the walk rejects before its link is read): otherwise another server would choose the next request on your origin, with your credentials.
+- **Bounded:** `maxPages` (default 100). A next page left after it rejects with `ERR_ULTRATON_MAX_PAGES`, after the pages already yielded: a collection is never cut short in silence.
+- **Errors:** a non-2xx page is yielded and ends the walk. A relative link, or a `next()` result, resolves against the page's final `url` (under `baseUrl`, return `items?cursor=x`, not `/items?cursor=x`, which is from the origin root).
+- **Options:** `query` applies to the first page only, since a next link carries its own; every other option (headers, `signal`, `retry`, …) to every page. There is no body: every page is a GET.
 
 ### Retries
 

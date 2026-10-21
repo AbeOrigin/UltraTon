@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import type { StreamedBody } from "../helpers/request-body.ts";
+import type { UltraTonResponse } from "./request-response.ts";
 
 export type { ReservedIpPolicy };
 
@@ -187,6 +188,22 @@ export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'max
      * the other methods (the client's `maxBodySize`, else 2MB).
      */
     readonly maxBodySize?: number;
+}
+
+/** The options of `client.paginate()`: the GET options (no body), plus how to find the next page and when to stop. */
+export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body'> {
+    /**
+     * Returns the next page's URL (absolute, or relative to the page's `url`), or `undefined` or `null` when this page is
+     * the last. Default: the `rel="next"` link of the `Link` header (RFC 8288). Throwing from it ends the iteration with
+     * that error. Its result is held to the same origin and `baseUrl` rule as a `Link` header: under `baseUrl`, return
+     * a path relative to the page ('items?cursor=x'), since one starting with '/' is from the origin root.
+     */
+    readonly next?: (page: UltraTonResponse<T>) => string | URL | null | undefined;
+    /**
+     * The most pages to fetch, an integer from 1 to Number.MAX_SAFE_INTEGER. Default 100. A next page left after it
+     * rejects with `ERR_ULTRATON_MAX_PAGES`: a collection is never cut short in silence.
+     */
+    readonly maxPages?: number;
 }
 
 /** What the client methods hand to the engines: the caller's options plus the HTTP method they set. Not public. */

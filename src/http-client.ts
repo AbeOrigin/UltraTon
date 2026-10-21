@@ -5,14 +5,15 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
 import { observeRequest } from './helpers/diagnostics.ts';
-import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
+import { nextLink } from './helpers/link-header.ts';
+import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
@@ -207,6 +208,59 @@ export class UltraTonClient {
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);
         return this.#request(method, url, rest, { maxBodySize }) as Promise<UltraTonStreamResponse>;
+    }
+
+    /**
+     * Walks a paginated collection with GET requests, yielding each page as a complete response once it arrives: every
+     * page is a full `get()`, with all its checks. The next page is the `rel="next"` link of the `Link` header (RFC 8288)
+     * or what `next(page)` returns, resolved against the page's final `url`. The walk stays on the first page's origin
+     * and, with `baseUrl`, inside it: a next page outside rejects, and so does a page a redirect served from outside it
+     * (that server would otherwise pick the next request, with your credentials, on your origin). A non-2xx page is
+     * yielded and ends the walk. `query` applies to the first page only (a next link carries its own); every other
+     * option to every page.
+     * @param url - As for `get()`.
+     * @param options - The `get()` options without a body, plus `next` and `maxPages`. See {@link UltraTonPaginateOptions}.
+     * @throws {TypeError} Now, for an invalid `next`, `maxPages` or a body; later, as `get()` does.
+     * @throws {SecureHttpError} With `code` `ERR_ULTRATON_PAGE_OUT_OF_SCOPE` for a next page, or a page it would be read
+     *   from, on another origin or outside `baseUrl`; `ERR_ULTRATON_MAX_PAGES` when a next page is left after
+     *   `maxPages`; and anything `get()` throws.
+     */
+    public paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined> {
+        // Validated here rather than on the first iteration, so a stream body is released even if nothing iterates.
+        return this.#paginate<T>(url, splitPaginateOptions(options));
+    }
+
+    async *#paginate<T>(url: string, split: ReturnType<typeof splitPaginateOptions>): AsyncGenerator<UltraTonResponse<T>, void, undefined> {
+        const next = (split.next ?? ((page: UltraTonResponse<T>) => nextLink(page.headers.link))) as NonNullable<UltraTonPaginateOptions<T>['next']>;
+        let page = await this.get<T>(url, split.rest as UltraTonRequestOptions);
+        // Taken once the first request succeeded, so a bad URL fails exactly as get() fails it.
+        const origin = new URL(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url).origin;
+        const base = this.#baseUrl;
+        const inScope = (target: URL) => target.origin === origin && (!base || target.href.startsWith(base.href));
+        const outOfScope = () => new SecureHttpError('UltraTon: The next page is outside the origin or baseUrl of the first one.', { code: 'ERR_ULTRATON_PAGE_OUT_OF_SCOPE' });
+        const later = { ...(split.rest as object), query: undefined };
+        for (let count = 1; ; count++) {
+            yield page;
+            if (!page.ok) return;
+            const ref = next(page);
+            if (ref === undefined || ref === null) return;
+            if (typeof ref !== 'string' && !(ref instanceof URL)) {
+                throw new TypeError(`UltraTon: Expected 'next' to return a string, a URL, null or undefined, received ${typeof ref}.`);
+            }
+            // A redirect may have served this page from elsewhere: then it does not get to choose a request on this origin.
+            const from = new URL(page.url);
+            if (!inScope(from)) throw outOfScope();
+            // ponytail: a link back to the same page loops until maxPages; detect it if a real API does that.
+            if (count === split.maxPages) {
+                throw new SecureHttpError(`UltraTon: More pages than maxPages (${split.maxPages}).`, { code: 'ERR_ULTRATON_MAX_PAGES' });
+            }
+            if (!URL.canParse(ref, from)) throw new SecureHttpError('UltraTon: Invalid next page URL.');
+            const target = new URL(ref, from);
+            if (!inScope(target)) throw outOfScope();
+            // Under baseUrl the part below it goes through get() as a path, so the traversal checks of a path apply too.
+            // './' keeps it relative and resolving to exactly `target` ('//x', 'users:search', '?q' included).
+            page = await this.get<T>(base ? `./${target.href.slice(base.href.length)}` : target.href, later);
+        }
     }
 
     /**

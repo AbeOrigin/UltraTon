@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Sent once:** a request with a streamed body is never retried, whatever `retry` says, and a 307/308 resolves as the 3xx response instead of being followed. 301/302/303 are followed as a GET without a body, as before.
   - **Ending early:** an abort, a timeout or a failure destroys the stream (a `ReadableStream` is cancelled), even while it waits for data. An error from the stream rejects the request as is.
 - **`maxRequestBodySize`** (request and client option, no default): a buffered body larger than it throws before connecting, a streamed one is aborted as soon as it goes past it. Both reject with `UltraTonMemoryError`, code `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE`.
+- **`url` and `redirected` on every response** (`get`, `post`, …), as `stream()` already had: the final URL after any followed redirect.
+- **`client.paginate(url, options)`** walks a paginated API as an async iterator of complete responses, each page a full `get()`. The next page is the `rel="next"` link of the `Link` header (RFC 8288, read without regex) or what a `next(page)` callback returns.
+  - **Scope:** it never leaves the first page's origin, nor `baseUrl` when set (whose path checks apply to each page): `SecureHttpError` code `ERR_ULTRATON_PAGE_OUT_OF_SCOPE`. A page that a followed redirect served from outside that scope rejects the same way before its link is read, so another server never picks the next request (credentials attached) on your origin. Links resolve against the page's final URL.
+  - **Bounded:** `maxPages` (default 100); a page left after it rejects with `ERR_ULTRATON_MAX_PAGES` instead of truncating in silence. A non-2xx page is yielded and ends the walk. `query` applies to the first page only.
 
 ## [2.3.0] - 2026-10-20
 

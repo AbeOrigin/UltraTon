@@ -14,6 +14,10 @@ export interface UltraTonResponse<T = unknown> {
      * HTTP/2 pseudo-headers (keys starting with ':') are not included.
      */
     readonly headers: IncomingHttpHeaders;
+    /** The final URL, after any redirect that was followed. */
+    readonly url: string;
+    /** True when at least one redirect was followed to get here. */
+    readonly redirected: boolean;
     /** The raw response payload. Never parsed automatically; empty for HEAD and bodiless responses. */
     readonly data: Buffer;
 
