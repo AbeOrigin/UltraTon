@@ -62,7 +62,7 @@ These are accepted and documented. Reports about them are not vulnerabilities (s
 - **DNS lookups cannot be cancelled.** A timeout rejects the request on time, but `getaddrinfo` keeps a threadpool thread until the resolver answers.
 - **`error.cause` keeps Node's original error**, which may contain addresses: do not send it to untrusted sinks.
 - **The secure agents protect the connection only.** Body limits, timeouts and header validation stay with the library using them. Some library modes skip any agent: axios with a proxy for `https:` URLs, axios with `httpVersion: 2`, got with `createConnection` or `h2session`. The README makes `proxy: false` mandatory and forbids those modes. A failure to reach an *allowed* address surfaces Node's own error, which may name it.
-- **Request bodies are buffered whole**, a large `File` included. There is no request-size limit: the caller controls what it sends.
+- **Request bodies have no size limit by default.** The caller controls what it sends: `maxRequestBodySize` caps it when the body comes from somewhere else (a stream that might not end). A `File` or `Blob` body is read whole into memory; a stream body is not. A stream body is never retried and never replayed on a 307/308, because it can only be read once.
 - **`json()` drops legitimate fields** named `__proto__`, `constructor` or `prototype`.
 - **Environment proxies (`HTTP_PROXY`) are never used.** That is a choice, not a gap: a shared, environment-driven proxy could bypass the per-client policy.
 

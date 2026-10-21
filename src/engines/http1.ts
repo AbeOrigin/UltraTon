@@ -12,6 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
+import { isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
 import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
 import { isIP } from 'node:net';
 import tls from 'node:tls';
@@ -172,7 +173,7 @@ export class Http1Engine {
     private _executeSingleNetworkHop(
         urlObj: URL,
         reqOpts: SecureUltraTonRequestOptions,
-        body: Buffer | undefined,
+        body: Buffer | StreamedBody | undefined,
         currentTimeoutMs: number,
         followRedirects: boolean,
         stream?: { maxBodySize: number }
@@ -182,16 +183,33 @@ export class Http1Engine {
 
             const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
-            // The body always goes out with its exact length, never chunked: a caller-supplied content-length or
-            // transfer-encoding must not disagree with the bytes actually written. Without a body a caller
-            // content-length would promise bytes that never come and the server would wait for them: drop it.
+            // A buffered body always goes out with its exact length, never chunked: a caller-supplied content-length or
+            // transfer-encoding must not disagree with the bytes actually written. A streamed one keeps the caller's
+            // content-length (StreamedBody holds it to it), else goes chunked, set here so Node frames it that way for
+            // every method. Without a body a caller content-length would promise bytes that never come: drop it.
             const headers = { ...reqOpts.headers };
-            if (body !== undefined) {
+            delete headers['transfer-encoding'];
+            if (body instanceof StreamedBody) {
+                // Never both: a content-length left from the client defaults next to chunked would be a smuggling vector.
+                if (body.length !== undefined) headers['content-length'] = String(body.length);
+                else {
+                    delete headers['content-length'];
+                    headers['transfer-encoding'] = 'chunked';
+                }
+            } else if (body !== undefined) {
                 headers['content-length'] = String(body.length);
-                delete headers['transfer-encoding'];
             } else {
                 delete headers['content-length'];
             }
+            // A streamed body cannot be sent again: a 307/308 is returned to the caller instead of being followed.
+            const canFollow = (status: number) => followRedirects && !(body instanceof StreamedBody && (status === 307 || status === 308));
+            // The streamed body's own failure (its stream, a limit, the length): what the request reports, mid-response too.
+            let bodyError: unknown;
+            // The response is complete while the upload is still open (the server answered early): the socket cannot be
+            // reused, and a stalled or endless source must not hold it, so the request is ended here.
+            const stopUpload = () => {
+                if (body instanceof StreamedBody && !req.writableFinished) req.destroy();
+            };
 
             // Ends a proxy tunnel still being set up for this hop when the hop gives up: abort, timeout (see TunnelAgent).
             const hop = new AbortController();
@@ -235,7 +253,7 @@ export class Http1Engine {
 
                 // Only a redirect that will be followed skips its body (never buffered, so never held to maxBodySize);
                 // one that will not be followed is an ordinary response, body included, as on HTTP/2.
-                if (isRedirect && location && followRedirects) {
+                if (isRedirect && location && canFollow(res.statusCode as number)) {
                     res.destroy(); // Dump incoming V8 buffers natively before recurse
                     req.destroy(); // Kill socket cleanly
                     clearTimeout(executionTimer);
@@ -269,7 +287,8 @@ export class Http1Engine {
                             signal: reqOpts.signal,
                             tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${stream.maxBodySize} bytes`),
                             idle: () => idleTimeout(reqOpts.socketTimeoutMs),
-                            mapError: err => this.#closed ? clientClosed() : toNetworkError(err),
+                            mapError: err => bodyError ?? (this.#closed ? clientClosed() : toNetworkError(err)),
+                            onSourceEnd: stopUpload,
                         }),
                     });
                 }
@@ -287,6 +306,7 @@ export class Http1Engine {
                             data,
                             isRedirect: false
                         });
+                        stopUpload();
                     })
                     .catch(reject);
             });
@@ -305,10 +325,25 @@ export class Http1Engine {
                 // close() destroyed the socket: that is the reason, not the reset it causes.
                 // Node's socket/TLS messages embed the resolved IP and port: map them to a code-only error.
                 // A caller abort is reported as the signal's reason (Node's own AbortError only wraps it).
-                reject(reqOpts.signal?.aborted ? reqOpts.signal.reason : this.#closed ? clientClosed() : toNetworkError(err));
+                reject(bodyError ?? (reqOpts.signal?.aborted ? reqOpts.signal.reason : this.#closed ? clientClosed() : toNetworkError(err)));
             });
 
-            req.end(body);
+            if (!(body instanceof StreamedBody)) {
+                req.end(body);
+                return;
+            }
+            // Each chunk is read only once the previous one reached the socket. The request ending first (answered,
+            // aborted, timed out) reports its own outcome. The body's own failure ends the exchange with that error, even
+            // once the server started answering: the response cannot complete without the body. A response already read
+            // in full has resolved and keeps its result.
+            body.pump(req).then(() => req.end(), (err: unknown) => {
+                if (isSinkClosed(err)) return;
+                bodyError = err;
+                clearTimeout(executionTimer);
+                hop.abort();
+                reject(err);
+                req.destroy();
+            });
         });
     }
 
@@ -324,6 +359,8 @@ export class Http1Engine {
         let currentOptions: ResolvedRequestOptions = options;
 
         let reqOpts: SecureUltraTonRequestOptions = buildSafeRequestOptions(currentOptions);
+        // Before connecting: a buffered body over maxRequestBodySize throws here, a streamed one as it is read.
+        limitRequestBody(currentOptions.body, reqOpts.maxRequestBodySize);
 
         while (true) {
             if (this.#closed) throw clientClosed();

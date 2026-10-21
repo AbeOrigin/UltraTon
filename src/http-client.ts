@@ -9,6 +9,7 @@ import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOpt
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
+import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
 import { observeRequest } from './helpers/diagnostics.ts';
 import type { UltraTonClientOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
@@ -127,7 +128,7 @@ export class UltraTonClient {
      * (SSRF, redirects up to the client's `maxRedirects`, limits, decoding) and `json()` stripping `__proto__` keys.
      * Bound to the client, so it can be handed to any library that accepts a fetch implementation.
      * Network and policy failures reject as `TypeError('fetch failed')` with the UltraTon error as `cause`; an abort
-     * with the signal's reason. Request bodies are buffered (a ReadableStream body throws).
+     * with the signal's reason. A `ReadableStream` or async iterable body is streamed, as `body` is for the other methods.
      */
     public readonly fetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
         fetchWith((url, options) => this.stream(url, options), input, init);
@@ -219,6 +220,19 @@ export class UltraTonClient {
     }
 
     async #request<T>(method: string, url: string, options: unknown, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
+        try {
+            return await this.#send<T>(method, url, options, stream);
+        } catch (err: unknown) {
+            // A stream body the request never got to read (bad input, a policy rejection, an abort, a closed client)
+            // is released, as one cut short mid-upload is: a file stream must not keep its descriptor open. Only an own
+            // property counts, as for every option.
+            const own = typeof options === 'object' && options !== null && Object.hasOwn(options, 'body');
+            discardBody(own ? (options as { body?: unknown }).body : undefined);
+            throw err;
+        }
+    }
+
+    async #send<T>(method: string, url: string, options: unknown, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         if (this.#closed) throw new SecureHttpError('UltraTon: Client is closed.');
         const resolved = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
         // The caller's own options are validated (unknown keys, json/form/body, body type) and the body encoded before any
@@ -228,10 +242,12 @@ export class UltraTonClient {
         // withMethod returns a null-prototype object: both are deleted from it, never destructured into a plain one.
         const requested = withMethod(method, options);
         const target = withQuery(resolved, requested.query);
-        const retry = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
+        const retryPolicy = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
         Reflect.deleteProperty(requested, 'query');
         Reflect.deleteProperty(requested, 'retry');
         const body = await resolveRequestBody(requested);
+        // A stream can only be read once: a request with one is sent once, whatever the retry option says.
+        const retry = body.options.body instanceof StreamedBody ? undefined : retryPolicy;
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, this.#defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
         const send = (timeoutMs?: number): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {

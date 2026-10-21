@@ -247,10 +247,10 @@ describe('form body validation', () => {
     });
 
     it('still rejects a body of any other type, naming the accepted ones', async () => {
-        for (const body of [{ a: 1 }, 42, new ArrayBuffer(2), new ReadableStream(), null]) {
+        for (const body of [{ a: 1 }, 42, new ArrayBuffer(2), null]) {
             await assert.rejects(client.post(url, { body } as any), {
                 name: 'TypeError',
-                message: /^UltraTon: Expected 'body' to be a string, Buffer, Uint8Array, Blob, FormData or URLSearchParams, received /,
+                message: /^UltraTon: Expected 'body' to be a string, Buffer, Uint8Array, Blob, FormData, URLSearchParams or a stream \(Readable, ReadableStream, async iterable\), received /,
             });
         }
     });
