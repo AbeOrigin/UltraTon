@@ -35,11 +35,16 @@ npm run check:tsdoc
 ```
 
 ```bash
+npm run check:api
+```
+
+```bash
 npm run test:package
 ```
 
 - **`build:strict`** type-checks with `--strict`.
 - **`check:tsdoc`** fails if a public symbol or member has no TSDoc; editors show those comments on hover, so they are the API reference.
+- **`check:api`** fails if the public API (the declarations `dist/index.d.ts` exports, without their comments) or the set of `ERR_ULTRATON_*` codes differs from `scripts/public-api.txt`. A change there is an API change, under the semver rules in [SUPPORT.md](SUPPORT.md): if it is intended, run `node scripts/check-api.mjs --update` and commit the snapshot, so reviewers see the change as a diff.
 - **`test:package`** packs the tarball and imports it from ESM, CommonJS and TypeScript, as npm users would.
 
 Before Node 22.18, `npm test` needs `NODE_OPTIONS=--experimental-strip-types`.

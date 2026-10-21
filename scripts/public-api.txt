@@ -1,0 +1,230 @@
+## createSecureAgents (agents.d.ts)
+export declare function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraTonSecureAgents;
+
+## QueryValue (types/request-options.types.d.ts)
+export type QueryValue = string | number | boolean;
+
+## ReservedIpPolicy (security/dns-pinner.d.ts)
+export type ReservedIpPolicy = boolean | readonly string[];
+
+## SecureHttpError (errors.d.ts)
+export declare class SecureHttpError extends Error {
+    readonly code?: string;
+    constructor(message: string, options?: {
+        cause?: unknown;
+        code?: string;
+    });
+}
+
+## UltraTonClient (http-client.d.ts)
+export declare class UltraTonClient {
+    #private;
+    readonly fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+    constructor(options?: UltraTonClientOptions);
+    get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    patch<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
+    paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
+    close(): Promise<void>;
+}
+
+## UltraTonClientOptions (types/request-options.types.d.ts)
+export interface UltraTonClientOptions {
+    readonly baseUrl?: string;
+    readonly headers?: Record<string, string | string[] | undefined>;
+    readonly timeoutMs?: number;
+    readonly socketTimeoutMs?: number;
+    readonly decompress?: boolean;
+    readonly maxBodySize?: number;
+    readonly maxRequestBodySize?: number;
+    readonly maxRedirects?: number;
+    readonly permitReservedIps?: ReservedIpPolicy;
+    readonly retry?: number | UltraTonRetryOptions;
+    readonly http2?: boolean;
+    readonly tls?: {
+        readonly ca?: TlsMaterial;
+        readonly cert?: TlsMaterial;
+        readonly key?: TlsMaterial;
+    };
+    readonly userAgent?: string;
+    readonly proxy?: string | UltraTonProxyOptions;
+}
+
+## UltraTonDiagnosticsError (helpers/diagnostics.d.ts)
+export interface UltraTonDiagnosticsError {
+    readonly name: string;
+    readonly code: string | undefined;
+}
+
+## UltraTonDiagnosticsRequest (helpers/diagnostics.d.ts)
+export interface UltraTonDiagnosticsRequest {
+    readonly method: string;
+    readonly origin: string;
+    readonly path: string;
+}
+
+## UltraTonMemoryError (errors.d.ts)
+export declare class UltraTonMemoryError extends SecureHttpError {
+}
+
+## UltraTonNetworkError (errors.d.ts)
+export declare class UltraTonNetworkError extends SecureHttpError {
+}
+
+## UltraTonNetworkTimeoutError (errors.d.ts)
+export declare class UltraTonNetworkTimeoutError extends UltraTonNetworkError {
+}
+
+## UltraTonPaginateOptions (types/request-options.types.d.ts)
+export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body'> {
+    readonly next?: (page: UltraTonResponse<T>) => string | URL | null | undefined;
+    readonly maxPages?: number;
+}
+
+## UltraTonParseError (errors.d.ts)
+export declare class UltraTonParseError extends SecureHttpError {
+}
+
+## UltraTonProxyOptions (types/request-options.types.d.ts)
+export interface UltraTonProxyOptions {
+    readonly url: string;
+    readonly auth?: string;
+    readonly ca?: TlsMaterial;
+    readonly resolve?: 'local' | 'proxy';
+}
+
+## UltraTonRedirectError (errors.d.ts)
+export declare class UltraTonRedirectError extends SecureHttpError {
+}
+
+## UltraTonRequestErrorMessage (helpers/diagnostics.d.ts)
+export interface UltraTonRequestErrorMessage {
+    readonly request: UltraTonDiagnosticsRequest;
+    readonly error: UltraTonDiagnosticsError;
+    readonly durationMs: number;
+}
+
+## UltraTonRequestOptions (types/request-options.types.d.ts)
+export interface UltraTonRequestOptions {
+    readonly headers?: Record<string, string | string[] | undefined>;
+    readonly query?: Readonly<Record<string, QueryValue | readonly QueryValue[] | undefined>> | URLSearchParams;
+    readonly json?: unknown;
+    readonly form?: Readonly<Record<string, QueryValue | readonly QueryValue[] | undefined>> | URLSearchParams;
+    readonly body?: string | Buffer | Uint8Array | Blob | FormData | URLSearchParams | Readable | ReadableStream<Uint8Array> | AsyncIterable<Uint8Array | string>;
+    readonly auth?: string;
+    readonly signal?: AbortSignal;
+    readonly decompress?: boolean;
+    readonly maxBodySize?: number;
+    readonly maxRequestBodySize?: number;
+    readonly socketTimeoutMs?: number;
+    readonly timeoutMs?: number;
+    readonly maxRedirects?: number;
+    readonly permitReservedIps?: ReservedIpPolicy;
+    readonly retry?: number | UltraTonRetryOptions;
+}
+
+## UltraTonRequestResponseMessage (helpers/diagnostics.d.ts)
+export interface UltraTonRequestResponseMessage {
+    readonly request: UltraTonDiagnosticsRequest;
+    readonly statusCode: number;
+    readonly durationMs: number;
+}
+
+## UltraTonRequestRetryMessage (helpers/diagnostics.d.ts)
+export interface UltraTonRequestRetryMessage {
+    readonly request: UltraTonDiagnosticsRequest;
+    readonly attempt: number;
+    readonly delayMs: number;
+    readonly statusCode?: number;
+    readonly error?: UltraTonDiagnosticsError;
+}
+
+## UltraTonRequestStartMessage (helpers/diagnostics.d.ts)
+export interface UltraTonRequestStartMessage {
+    readonly request: UltraTonDiagnosticsRequest;
+}
+
+## UltraTonResponse (types/request-response.d.ts)
+export interface UltraTonResponse<T = unknown> {
+    readonly statusCode: number;
+    readonly ok: boolean;
+    readonly headers: IncomingHttpHeaders;
+    readonly url: string;
+    readonly redirected: boolean;
+    readonly data: Buffer;
+    json<R = T>(): R;
+    text(): string;
+}
+
+## UltraTonRetryInfo (types/request-options.types.d.ts)
+export interface UltraTonRetryInfo {
+    readonly attempt: number;
+    readonly delayMs: number;
+    readonly statusCode?: number;
+    readonly error?: unknown;
+}
+
+## UltraTonRetryOptions (types/request-options.types.d.ts)
+export interface UltraTonRetryOptions {
+    readonly limit?: number;
+    readonly methods?: readonly UltraTonStreamMethod[];
+    readonly statusCodes?: readonly number[];
+    readonly maxDelayMs?: number;
+    readonly onRetry?: (info: UltraTonRetryInfo) => void;
+}
+
+## UltraTonSecureAgentOptions (agents.d.ts)
+export interface UltraTonSecureAgentOptions {
+    readonly permitReservedIps?: ReservedIpPolicy;
+    readonly tls?: {
+        readonly ca?: TlsMaterial;
+        readonly cert?: TlsMaterial;
+        readonly key?: TlsMaterial;
+    };
+    readonly allowPlainHttp?: boolean;
+}
+
+## UltraTonSecureAgents (agents.d.ts)
+export interface UltraTonSecureAgents {
+    readonly http: http.Agent;
+    readonly https: https.Agent;
+}
+
+## UltraTonStreamMethod (types/request-options.types.d.ts)
+export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
+
+## UltraTonStreamOptions (types/request-options.types.d.ts)
+export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
+    readonly method?: UltraTonStreamMethod;
+    readonly maxBodySize?: number;
+}
+
+## UltraTonStreamResponse (types/request-response.d.ts)
+export interface UltraTonStreamResponse {
+    readonly statusCode: number;
+    readonly ok: boolean;
+    readonly headers: IncomingHttpHeaders;
+    readonly url: string;
+    readonly redirected: boolean;
+    readonly body: ReadableStream<Uint8Array>;
+}
+
+## error codes
+ERR_ULTRATON_AGENT_PROXY
+ERR_ULTRATON_CONTENT_ENCODING
+ERR_ULTRATON_DOWNGRADE
+ERR_ULTRATON_MAX_PAGES
+ERR_ULTRATON_NON_CANONICAL_IP
+ERR_ULTRATON_PAGE_OUT_OF_SCOPE
+ERR_ULTRATON_PLAIN_HTTP
+ERR_ULTRATON_PROXY
+ERR_ULTRATON_REQUEST_BODY_LENGTH
+ERR_ULTRATON_REQUEST_BODY_TOO_LARGE
+ERR_ULTRATON_RESERVED_IP
+ERR_ULTRATON_SOCKET_TIMEOUT
+ERR_ULTRATON_TIMEOUT
