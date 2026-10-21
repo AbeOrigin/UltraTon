@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-10-21
+
+Uploads that stream and APIs that paginate: request bodies can be streams, with an optional size limit, `client.paginate()` walks paginated APIs without ever leaving their origin, and every response now says where it came from. All additive.
+
 ### Added
 
 - **Streamed uploads.** `body` accepts a `Readable`, a `ReadableStream` or any async iterable of `Uint8Array` or string chunks, on both engines and in `client.fetch` (which no longer rejects them, and also streams a `Request` input's body). The body is sent as it is read, never buffered.

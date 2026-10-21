@@ -71,10 +71,10 @@ await api.close(); // when the client is no longer needed
 
 ## Choosing a client
 
-UltraTon does not try to be the fastest HTTP client: Node's built-in `fetch` (undici) is faster, and it should be. UltraTon is the client for code that sends requests to URLs it does not fully control, and for teams that want safe defaults without writing them by hand.
+UltraTon does not try to be the fastest HTTP client: Node's own `http.request` is about 1.6× faster on small bodies, and it should be, with no checks to run. UltraTon is the client for code that sends requests to URLs it does not fully control, and for teams that want safe defaults without writing them by hand.
 
 - **The URL is yours and you want maximum throughput:** use `fetch`.
-- **The URL comes from outside (webhooks, link previews, integrations, user input), or you want safe defaults:** use UltraTon. It is also 1.3–1.8× faster than axios, got and node-fetch in [our benchmarks](compat/bench/RESULTS.md).
+- **The URL comes from outside (webhooks, link previews, integrations, user input), or you want safe defaults:** use UltraTon. It is also 1.4–2.5× faster than axios, got and node-fetch, and about as fast as `fetch` over HTTP/1.1, in [our benchmarks](compat/bench/RESULTS.md).
 - **You already use axios, got or node-fetch:** keep them and add [`createSecureAgents()`](#protect-the-client-you-already-use). It costs nothing measurable.
 
 How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`, axios 1.20, got 16.1, node-fetch 3.3):
@@ -97,7 +97,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | Maturity | new (2.x in 2026), one maintainer | Node core team | many years, large community | many years | many years |
 
 **Where UltraTon is not the right choice:**
-- **Raw throughput against an API you trust:** `fetch` and Node's own `http.request` are about 1.5× faster on small bodies.
+- **Raw throughput against an API you trust:** Node's own `http.request` is about 1.6× faster on small bodies. `fetch` is about as fast as UltraTon over HTTP/1.1 and needs nothing installed.
 - **Other runtimes:** browsers, Bun or Deno.
 - **Features it does not have:** request-rewriting interceptors, a cookie jar or HTTP caching. Hooks are planned.
 
