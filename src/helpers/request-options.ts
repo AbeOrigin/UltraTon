@@ -304,45 +304,55 @@ export interface ResolvedBody {
     readonly contentType?: string;
 }
 
+/** The options with `body` set to the resolved bytes and `json`/`form` dropped, on a null-prototype object. */
+function withResolvedBody(options: InternalRequestOptions, body: Buffer | StreamedBody): ResolvedRequestOptions {
+    const resolved: Record<string, unknown> = Object.assign(Object.create(null) as Record<string, unknown>, options, { body });
+    delete resolved.json;
+    delete resolved.form;
+    return resolved as ResolvedRequestOptions;
+}
+
 /**
  * Validates the caller's body options and resolves them into the bytes that go on the wire: `json` is serialized,
  * `form` urlencoded, a string/Uint8Array `body` becomes a Buffer and a Blob, FormData or URLSearchParams is encoded by
- * the platform's Response (a FormData's multipart boundary included), all of it buffered. Run it on the user-supplied
- * options, before any internal enrichment; the content-type is added after the client defaults are merged (see
- * withJsonContentType and withBodyContentType).
+ * the platform's Response (a FormData's multipart boundary included), all of it buffered. Run it on withMethod's
+ * result (the caller's own options, copied onto a null-prototype object), before any internal enrichment; the
+ * content-type is added after the client defaults are merged (see withJsonContentType and withBodyContentType).
+ * The options it returns are null-prototype as well. Synchronous except for a body the platform has to read (Blob,
+ * FormData, URLSearchParams): a request without a body costs no promise.
  * @throws {TypeError} On an unknown option, more than one of `json`/`form`/`body`, a body on GET or HEAD, a `body` or
  *   `form` of the wrong type, a `json` that cannot be serialized, or a FormData sent with a content-type of its own.
  */
-export async function resolveRequestBody(options: InternalRequestOptions): Promise<ResolvedBody> {
-    options = ownOptions(options);
+export function resolveRequestBody(options: InternalRequestOptions): ResolvedBody | Promise<ResolvedBody> {
     assertKnownOptions(options);
     assertBodyOptions(options);
-    const { json, form, body, ...rest } = options;
-    if (json === undefined && form === undefined && body === undefined) return { options: rest };
+    const { json, form, body } = options;
+    // withMethod's copy, as it is: json, form and body are undefined, the rest is what the caller set.
+    if (json === undefined && form === undefined && body === undefined) return { options: options as ResolvedRequestOptions };
     if (options.method === 'GET' || options.method === 'HEAD') {
         throw new TypeError('UltraTon: GET and HEAD requests cannot have a body.');
     }
 
     if (form !== undefined) {
         const encoded = Buffer.from(searchParams('form', 'form field', form).toString());
-        return { options: { ...rest, body: encoded }, contentType: hasContentType(rest.headers) ? undefined : FORM_CONTENT_TYPE };
+        return { options: withResolvedBody(options, encoded), contentType: hasContentType(options.headers) ? undefined : FORM_CONTENT_TYPE };
     }
     if (typeof body === 'string' || body instanceof Uint8Array) {
-        return { options: { ...rest, body: Buffer.isBuffer(body) ? body : Buffer.from(body) } };
+        return { options: withResolvedBody(options, Buffer.isBuffer(body) ? body : Buffer.from(body)) };
     }
     if (isStreamBody(body)) {
-        return { options: { ...rest, body: new StreamedBody(body, declaredContentLength(rest.headers)) } };
+        return { options: withResolvedBody(options, new StreamedBody(body, declaredContentLength(options.headers))) };
     }
     if (body !== undefined) {
-        if (body instanceof FormData && hasContentType(rest.headers)) {
+        if (body instanceof FormData && hasContentType(options.headers)) {
             throw new TypeError("UltraTon: A FormData body sets its own content-type (with the multipart boundary); remove the 'content-type' header.");
         }
         // A Blob may be a whole file: an already aborted request must not read it into memory first.
         if (options.signal instanceof AbortSignal) options.signal.throwIfAborted();
         // ponytail: a subclass that overrides iteration or toString shapes its own bytes; it is the caller's body anyway.
         const encoded = new Response(body);
-        const contentType = hasContentType(rest.headers) ? undefined : encoded.headers.get('content-type') ?? undefined;
-        return { options: { ...rest, body: Buffer.from(await encoded.arrayBuffer()) }, contentType };
+        const contentType = hasContentType(options.headers) ? undefined : encoded.headers.get('content-type') ?? undefined;
+        return encoded.arrayBuffer().then(bytes => ({ options: withResolvedBody(options, Buffer.from(bytes)), contentType }));
     }
 
     let serialized: string | undefined;
@@ -355,7 +365,7 @@ export async function resolveRequestBody(options: InternalRequestOptions): Promi
         throw new TypeError("UltraTon: 'json' could not be serialized: functions and symbols have no JSON representation.");
     }
 
-    return { options: { ...rest, body: Buffer.from(serialized) } };
+    return { options: withResolvedBody(options, Buffer.from(serialized)) };
 }
 
 const STREAM_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -856,7 +866,8 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
  * fall through to `Object.prototype`.
  */
 export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: ClientDefaults): ResolvedRequestOptions {
-    const own = ownOptions(options);
+    // resolveRequestBody's result has no prototype, so nothing can be inherited: read as is. Anything else is copied.
+    const own = Object.getPrototypeOf(options) === null ? options : ownOptions(options);
     const or = <V>(value: V | undefined, fallback: V | undefined) => (value === undefined ? fallback : value);
     return {
         method: own.method,

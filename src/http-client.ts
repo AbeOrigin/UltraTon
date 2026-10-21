@@ -307,7 +307,8 @@ export class UltraTonClient {
         const retryPolicy = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
         Reflect.deleteProperty(requested, 'query');
         Reflect.deleteProperty(requested, 'retry');
-        const body = await resolveRequestBody(requested);
+        const pending = resolveRequestBody(requested);
+        const body = pending instanceof Promise ? await pending : pending;
         // A stream can only be read once: a request with one is sent once, whatever the retry option says.
         const retry = body.options.body instanceof StreamedBody ? undefined : retryPolicy;
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, this.#defaults));
