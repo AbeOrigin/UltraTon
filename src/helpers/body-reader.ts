@@ -189,6 +189,46 @@ export class BodyReader {
     }
 }
 
+/** The decoding stages of a body, shared by both readers. See decodingChain. */
+export interface DecodingChain {
+    /** The decoders (decoding order), then a stage holding the decoded bytes to maxBodySize: pipe the wire bytes in. */
+    readonly stages: Transform[];
+    /** Records an error that happened before the chain (the source, the wire stage): it is never a decoding failure. */
+    readonly upstreamFailed: (err: unknown) => void;
+    /** Whether `err` is a decoder's own failure (map it with decodeError), not an error a decoder only passed on. */
+    readonly isDecodeError: (err: unknown) => boolean;
+}
+
+/**
+ * The decoders for `codings` and a last stage bounding the decoded bytes. When one stage of a pipeline fails, the
+ * pipeline destroys every other stage with that same error and a decoder re-emits it: so only the first error seen, if
+ * a decoder raised it, is a decoding failure. A body limit or a lost connection keeps its own class and code.
+ */
+export function decodingChain(codings: readonly string[], o: { readonly maxBodySize: number; readonly tooLarge: () => Error }): DecodingChain {
+    let first: { err: unknown; fromDecoder: boolean } | undefined;
+    const note = (err: unknown, fromDecoder: boolean) => { first ??= { err, fromDecoder }; };
+    const decoders = codings.map(coding => {
+        const decoder = createDecoder(coding);
+        decoder.on('error', err => note(err, true));
+        return decoder;
+    });
+    let size = 0;
+    const bounded = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+            size += chunk.length;
+            if (size <= o.maxBodySize) return callback(null, chunk);
+            const err = o.tooLarge();
+            note(err, false);
+            callback(err);
+        },
+    });
+    return {
+        stages: [...decoders, bounded],
+        upstreamFailed: err => note(err, false),
+        isDecodeError: err => first !== undefined && first.fromDecoder && first.err === err,
+    };
+}
+
 export interface BodyStreamOptions {
     /** The response as it comes off the wire: an IncomingMessage (HTTP/1) or a ClientHttp2Stream (HTTP/2). */
     readonly source: Readable;
@@ -226,41 +266,35 @@ export interface BodyStreamOptions {
 export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Array> {
     const codings = o.decompress ? codingsFor(o.contentEncoding) : [];
     const codingError = codings instanceof Error ? codings : undefined;
+    const chain = decodingChain(codingError ? [] : (codings as string[]), o);
     let wireBytes = 0;
-    let size = 0;
-    let decodeFailure: unknown;
-    // Registered before the pipeline's own listeners, so the verdict exists by the time the wire stage flushes.
+    // Registered before the pipeline's own listeners, so the verdict exists by the time the wire stage flushes, and a
+    // source error is known not to be a decoding failure before the pipeline hands it to the decoders.
     let endVerdict: Error | undefined;
     o.source.once('end', () => {
         endVerdict = o.verifyEnd?.();
         o.onSourceEnd?.(endVerdict);
     });
+    o.source.on('error', chain.upstreamFailed);
+    const fail = (callback: (err: Error) => void, err: Error) => {
+        chain.upstreamFailed(err);
+        callback(err);
+    };
     const wire = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
-            if (codingError) return callback(codingError);
+            if (codingError) return fail(callback, codingError);
             wireBytes += chunk.length;
-            if (wireBytes > o.maxBodySize) return callback(o.tooLarge());
+            if (wireBytes > o.maxBodySize) return fail(callback, o.tooLarge());
             callback(null, chunk);
         },
         flush(callback) {
-            if (endVerdict) return callback(endVerdict);
-            callback(o.declaredLength !== undefined && wireBytes !== o.declaredLength ? incompleteResponse() : null);
-        },
-    });
-    const decoders = (codingError ? [] : (codings as string[])).map(coding => {
-        const decoder = createDecoder(coding);
-        decoder.once('error', err => { decodeFailure ??= err; });
-        return decoder;
-    });
-    const bounded = new Transform({
-        transform(chunk: Buffer, _encoding, callback) {
-            size += chunk.length;
-            if (size > o.maxBodySize) return callback(o.tooLarge());
-            callback(null, chunk);
+            if (endVerdict) return fail(callback, endVerdict);
+            if (o.declaredLength !== undefined && wireBytes !== o.declaredLength) return fail(callback, incompleteResponse());
+            callback();
         },
     });
     // Errors reach the consumer through the iterator; the callback only drops the abort listener once every stage is done.
-    const out = pipeline([o.source, wire, ...decoders, bounded], () => stopListening()) as unknown as Transform;
+    const out = pipeline([o.source, wire, ...chain.stages], () => stopListening()) as unknown as Transform;
     const iterator = out[Symbol.asyncIterator]() as AsyncIterator<Buffer>;
 
     let settled = false;
@@ -284,7 +318,7 @@ export function createBodyStream(o: BodyStreamOptions): ReadableStream<Uint8Arra
     const toCaller = (err: unknown) => {
         if (forced) return forced.error;
         // mapError keeps SecureHttpErrors as they are, unless the client was closed: then that is the reason.
-        return o.mapError(err === decodeFailure ? decodeError(err) : err);
+        return o.mapError(chain.isDecodeError(err) ? decodeError(err) : err);
     };
     const whileWaiting = <V>(next: Promise<V>): Promise<V> => {
         if (o.socketTimeoutMs <= 0) return next;
