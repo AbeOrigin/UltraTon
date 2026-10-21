@@ -39,12 +39,15 @@ export function createResponse<T = unknown>(
   url = "",
   redirected = false,
 ): UltraTonResponse<T> {
-  // Defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be ignored) instead
-  // of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as data.
+  // `__proto__` is defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be
+  // ignored) instead of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as
+  // data. Every other key is assigned: only `__proto__` has a setter on a plain object, and defineProperty per header
+  // was a measurable share of every response.
   const headers: IncomingHttpHeaders = {};
   for (const key of Object.keys(rawHeaders)) {
     if (key.startsWith(":")) continue;
-    Object.defineProperty(headers, key, { value: rawHeaders[key], enumerable: true, writable: true, configurable: true });
+    if (key === "__proto__") Object.defineProperty(headers, key, { value: rawHeaders[key], enumerable: true, writable: true, configurable: true });
+    else headers[key] = rawHeaders[key];
   }
 
   return {

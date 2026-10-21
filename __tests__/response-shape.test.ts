@@ -177,6 +177,17 @@ describe('response headers named __proto__ are kept as data', () => {
         assert.strictEqual(res.headers[':status'], undefined);
     });
 
+    it('headers named after other Object.prototype members are own data, prototype untouched', () => {
+        const raw = Object.assign(Object.create(null), { constructor: 'c', toString: 't', hasOwnProperty: 'h', 'x-ok': '1' });
+        const res = createResponse(200, raw, Buffer.alloc(0));
+        for (const key of ['constructor', 'toString', 'hasOwnProperty']) {
+            assert.ok(Object.hasOwn(res.headers, key), key);
+            assert.strictEqual((res.headers as Record<string, unknown>)[key], key[0]);
+        }
+        assert.strictEqual(Object.getPrototypeOf(res.headers), Object.prototype);
+        assert.strictEqual(Object.prototype.hasOwnProperty.call(res.headers, 'x-ok'), true);
+    });
+
     it('an object value (set-cookie style array) under __proto__ never becomes the prototype', () => {
         const raw = Object.create(null);
         Object.defineProperty(raw, '__proto__', { value: ['a', 'b'], enumerable: true, writable: true, configurable: true });
