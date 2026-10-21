@@ -1,10 +1,12 @@
 /**
  * Property tests (no dependencies, see fuzz.ts) for addresses that carry another address: 6to4 and Teredo IPv6 forms,
- * judged by the IPv4 they carry, in every spelling the IPv6 parser accepts.
+ * judged by the IPv4 they carry, in every spelling the IPv6 parser accepts; and IPv4 addresses written the loose ways a
+ * URL parser still reads as IPv4 (127.1, 0x7f.0.0.1, 2130706433), which the secure agents refuse.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { isReservedIp } from '../../src/security/dns-pinner.ts';
+import { isLooseIpv4 } from '../../src/agents.ts';
 import { forAll, type Rand } from './fuzz.ts';
 import { spellIpv6 } from './generators.ts';
 
@@ -40,6 +42,51 @@ describe('fuzz: 6to4 and Teredo', () => {
     it('a 6to4 or Teredo address is reserved exactly when an IPv4 it carries is', async () => {
         await forAll(tunnelled, ({ text, expected }) => {
             assert.equal(isReservedIp(text), expected, text);
+        });
+    });
+});
+
+/**
+ * An IPv4 written as a URL parser reads one: 1 to 4 parts, the last holding all the remaining bytes, each part in
+ * decimal, octal (leading 0) or hex (0x), sometimes with a trailing dot. Canonical: 4 decimal parts, no leading zero, no dot.
+ */
+function ipv4Spelling(r: Rand): { text: string; canonical: boolean } {
+    const value = r.int(2 ** 32);
+    const parts = 1 + r.int(4);
+    const bytes = [value >>> 24, (value >>> 16) & 255, (value >>> 8) & 255, value & 255];
+    // The first parts - 1 parts are one byte each; the last one takes the rest.
+    const numbers = [...bytes.slice(0, parts - 1), bytes.slice(parts - 1).reduce((n, b) => n * 256 + b, 0)];
+    let allDecimal = true;
+    const written = numbers.map(n => {
+        const base = r.int(3);
+        if (base === 0) return String(n);
+        allDecimal = false;
+        if (base === 1) return `0${n.toString(8)}`;
+        const digits = n.toString(16);
+        return `${r.pick(['0x', '0X'])}${r.chance(0.5) ? digits.toUpperCase() : digits}`;
+    });
+    const dot = r.chance(0.1);
+    return { text: written.join('.') + (dot ? '.' : ''), canonical: parts === 4 && allDecimal && !dot };
+}
+
+const LABELS = ['a', 'api', 'x1', '1a', 'nip', 'io', 'xn--bcher-kva', 'b-c'];
+
+/** A domain name: 1 to 4 labels, sometimes behind an IPv4-looking prefix, always ending in a non-numeric label. */
+function domain(r: Rand): string {
+    const name = r.array(1, 4, () => r.pick(LABELS)).join('.');
+    return r.chance(0.3) ? `1.2.3.4.${name}` : name;
+}
+
+describe('fuzz: loose IPv4 hosts', () => {
+    it('every non-canonical spelling of an IPv4 is loose, the canonical one is not', async () => {
+        await forAll(ipv4Spelling, ({ text, canonical }) => {
+            assert.equal(isLooseIpv4(text), !canonical, text);
+        });
+    });
+
+    it('a domain name is never loose', async () => {
+        await forAll(domain, name => {
+            assert.equal(isLooseIpv4(name), false, name);
         });
     });
 });
