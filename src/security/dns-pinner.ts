@@ -82,11 +82,21 @@ export function assertLoopbackIp(ip: string): void {
  */
 export type ReservedIpPolicy = boolean | readonly string[];
 
+// The key of each frozen list, by identity: a frozen array never changes, so neither does its key. The client's
+// validated allowlist is one such list, used by every request (agent lookup, IP checks, the HTTP/2 pool key).
+const keysOfFrozenLists = new WeakMap<readonly string[], string>();
+
 /** Stable identity of a policy: equal for lists that differ only in order or case. Also keys the compiled cache and the HTTP/2 pool. */
 export function policyKey(policy: ReservedIpPolicy): string {
     if (typeof policy === 'boolean') return policy ? 'all' : 'deny';
     if (policy.length === 0) return 'deny';
-    return 'list:' + policy.map(entry => entry.toLowerCase()).sort().join(',');
+    const frozen = Object.isFrozen(policy);
+    let key = frozen ? keysOfFrozenLists.get(policy) : undefined;
+    if (key === undefined) {
+        key = 'list:' + policy.map(entry => entry.toLowerCase()).sort().join(',');
+        if (frozen) keysOfFrozenLists.set(policy, key);
+    }
+    return key;
 }
 
 // IPv4 and IPv6 rules live in separate lists on purpose, and no address is ever judged by both. BlockList checks a

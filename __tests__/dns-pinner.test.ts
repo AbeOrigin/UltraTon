@@ -281,6 +281,16 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
         assert.notEqual(policyKey(['10.0.0.0/8']), policyKey(['10.0.0.0/9']));
     });
 
+    it('policyKey: a mutable list is keyed afresh on every call, a frozen one once', () => {
+        const mutable = ['10.0.0.0/8'];
+        assert.equal(policyKey(mutable), 'list:10.0.0.0/8');
+        mutable.push('192.168.0.0/16');
+        assert.equal(policyKey(mutable), 'list:10.0.0.0/8,192.168.0.0/16');
+        const frozen = Object.freeze(['B.example', '10.0.0.0/8']);
+        assert.equal(policyKey(frozen), 'list:10.0.0.0/8,b.example');
+        assert.equal(policyKey(frozen), policyKey(frozen));
+    });
+
     it('resolveAndPinAll hands the looked-up hostname to the policy', async (t) => {
         t.mock.method(dnsPromises, 'lookup', async () => [{ address: '10.1.2.3', family: 4 }]);
         const pinned = [{ address: '10.1.2.3', family: 4 }];
