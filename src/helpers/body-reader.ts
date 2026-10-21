@@ -8,10 +8,11 @@ const BROTLI_FIXED: Readonly<Record<number, readonly [minor: number, patch: numb
 
 /**
  * Whether this Node's Brotli decoder is safe to feed a server's bytes. Lines after 26 carry the fix; 23 and 25 are
- * end-of-life and never got it. On an unsafe one, br is neither requested nor decoded (see CODINGS): a body a server
+ * end-of-life and never got it; a prerelease (`27.0.0-rc.1`, a nightly) may predate it, so it counts as unsafe. On an unsafe one, br is neither requested nor decoded (see CODINGS): a body a server
  * sends as br anyway comes back raw, as any coding this runtime cannot decode does.
  */
 export function hasSafeBrotli(version: string = process.versions.node): boolean {
+    if (version.includes('-')) return false;
     const [major, minor, patch] = version.split('.').map(Number);
     if (major > 26) return true;
     const fixed = BROTLI_FIXED[major];

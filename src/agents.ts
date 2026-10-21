@@ -82,7 +82,9 @@ function secureConnect(connect: Connect, options: any, callback: Callback, polic
     }
     // Node hands the agent the bare host (no brackets around an IPv6 literal); the loopback name check expects them.
     const host = String(options.host ?? 'localhost').replace(/^\[|\]$/g, '').toLowerCase();
-    if (isLooseIpv4(host)) {
+    // Node's agent fills in servername from the request's Host header when the library sets none: judged too.
+    const servername = typeof options.servername === 'string' ? options.servername.toLowerCase() : '';
+    if (isLooseIpv4(host) || isLooseIpv4(servername)) {
         return callback(new SecureHttpError('UltraTon: A secure agent refuses an IP address in a non-canonical form; write it as a dotted-decimal IPv4.', { code: 'ERR_ULTRATON_NON_CANONICAL_IP' }), noSocket);
     }
     if (plainHttp && !isLoopbackHost(isIP(host) === 6 ? `[${host}]` : host)) {

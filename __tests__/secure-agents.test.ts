@@ -86,6 +86,12 @@ describe('createSecureAgents', () => {
                 }), (err: Error & { code?: string }) => err.code === 'ERR_ULTRATON_NON_CANONICAL_IP', host);
             }
         }
+        // The TLS name: Node's agent takes it from servername, else from the Host header, before asking for a socket.
+        for (const extra of [{ servername: '127.1' }, { headers: { host: '0x7f.0.0.1' } }]) {
+            await assert.rejects(new Promise((resolve, reject) => {
+                https.request({ host: 'localhost', port: 9, path: '/', agent: agents.https, ...extra }, resolve).on('error', reject).end();
+            }), (err: Error & { code?: string }) => err.code === 'ERR_ULTRATON_NON_CANONICAL_IP', JSON.stringify(extra));
+        }
     });
 
     it("ignores the caller's own lookup: the agent resolves and validates itself", async (t) => {

@@ -179,6 +179,6 @@ describe('hasSafeBrotli (CVE-2026-111497)', () => {
     });
 
     it('is false before the fix, on end-of-life lines and on anything it cannot read', () => {
-        for (const v of ['22.12.0', '22.23.3', '24.14.1', '24.22.0', '26.12.0', '23.11.0', '25.9.0', '20.19.0', 'x', '26.12.1-pre']) assert.equal(hasSafeBrotli(v), false, v);
+        for (const v of ['22.12.0', '22.23.3', '24.14.1', '24.22.0', '26.12.0', '23.11.0', '25.9.0', '20.19.0', 'x', '26.12.1-pre', '27.0.0-rc.1', '28.0.0-nightly20261020abc']) assert.equal(hasSafeBrotli(v), false, v);
     });
 });

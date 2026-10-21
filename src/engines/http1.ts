@@ -226,9 +226,14 @@ export class Http1Engine {
             const hop = new AbortController();
             const tunnelSignal = this.#proxy && reqOpts.signal ? AbortSignal.any([hop.signal, reqOpts.signal]) : hop.signal;
 
+            // The TLS name comes from the URL, which WHATWG canonicalized, never from a caller's Host header: Node's agent
+            // would otherwise take it from there, and a non-canonical IP (`127.1`) checked as a DNS name is the confusion
+            // behind CVE-2026-106069/-106072. An IP literal gets '': no SNI, and the certificate is checked against the IP.
+            const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
             const req = transport(urlObj, {
                 ...reqOpts,
                 ...(this.#proxy ? { [kTunnelSignal]: tunnelSignal } : {}),
+                servername: isIP(bareHostname) === 0 ? bareHostname : '',
                 headers,
                 timeout: reqOpts.socketTimeoutMs,
                 agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
