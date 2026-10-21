@@ -4,6 +4,8 @@ import {
   type SecureClientSessionOptions,
 } from "node:http2";
 import {
+  H2_CONNECTION_WINDOW,
+  H2_STREAM_WINDOW,
   IDLE_TIMEOUT,
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
@@ -352,6 +354,7 @@ export class Http2SessionManager {
       ...baseOptions,
       settings: {
         maxHeaderListSize: MAX_HEADER_LIST_SIZE,
+        initialWindowSize: H2_STREAM_WINDOW,
         ...this.#tlsConfig?.settings,
         ...overrideOptions?.settings,
       },
@@ -401,6 +404,10 @@ export class Http2SessionManager {
     // Attach 'error' FIRST — before setTimeout or any other logic — to eliminate
     // the synchronous gap between session creation and error handler registration.
     newSession.on("error", () => this.#destroySession(key, newSession));
+    // The connection window has no setting of its own: it is raised by a WINDOW_UPDATE once the session is up.
+    newSession.on("connect", () => {
+      if (!newSession.destroyed) newSession.setLocalWindowSize(H2_CONNECTION_WINDOW);
+    });
 
     newSession.setTimeout(this.#idleTimeoutMs);
     // Idle until a request holds it (holdSession): a pooled session must not keep the process alive by itself.
