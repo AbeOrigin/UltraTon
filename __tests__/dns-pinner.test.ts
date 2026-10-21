@@ -406,3 +406,53 @@ describe('Reserved-IP policy (allowlist form of permitReservedIps)', () => {
     });
 
 });
+
+// 6to4 (RFC 3056) carries an IPv4 in bits 16-47; Teredo (RFC 4380) the server's in bits 32-63 and the client's,
+// inverted, in the low 32. A reserved IPv4 inside either makes the address reserved.
+describe('6to4 and Teredo addresses are judged by the IPv4 they carry', () => {
+    it('6to4 embedding a reserved IPv4 is reserved, in any spelling', () => {
+        for (const ip of ['2002:7f00:1::', '2002:a00:1::', '2002:a9fe:a9fe::', '2002:a9fe:a9fe:0:0:0:0:1', '2002:A9FE:A9FE::1', '2002:c0a8:101::',
+            '2002:a9fe:a9fe::1%eth0', '2002:a9fe:a9fe::1.2.3.4']) {
+            assert.equal(isReservedIp(ip), true, ip);
+        }
+    });
+
+    it('6to4 embedding a public IPv4 stays public', () => {
+        assert.equal(isReservedIp('2002:808:808::'), false);
+        assert.equal(isReservedIp('2002:808:808:1::1'), false);
+    });
+
+    it('Teredo with a reserved server or a reserved (inverted) client is reserved', () => {
+        // Server 169.254.169.254.
+        assert.equal(isReservedIp('2001:0:a9fe:a9fe::'), true);
+        // Server 8.8.8.8, client 127.0.0.1 stored inverted (80ff:fffe).
+        assert.equal(isReservedIp('2001:0:808:808:0:0:80ff:fffe'), true);
+        // Server 8.8.8.8, client 10.0.0.1 inverted (f5ff:fffe), with flags and port set.
+        assert.equal(isReservedIp('2001:0:808:808:8000:f227:f5ff:fffe'), true);
+        // The client 127.0.0.1 written as a dotted tail (128.255.255.254 is its inverse), and with a zone id.
+        assert.equal(isReservedIp('2001:0:808:808::128.255.255.254'), true);
+        assert.equal(isReservedIp('2001:0:808:808::80ff:fffe%1'), true);
+    });
+
+    it('Teredo with a public server and a public client stays public', () => {
+        // Server 8.8.8.8, client 1.1.1.1 inverted (fefe:fefe).
+        assert.equal(isReservedIp('2001:0:808:808::fefe:fefe'), false);
+    });
+
+    it('only 2001:0::/32 is Teredo, and 2001:db8::/32 stays documentation', () => {
+        assert.equal(isReservedIp('2001:1:a9fe:a9fe::'), false);
+        assert.equal(isReservedIp('2001:db8::1'), true);
+    });
+
+    it('an IPv4 allowlist entry does not cover the tunnelled form; an IPv6 entry does', () => {
+        assert.throws(() => assertAllowedIp('2002:a00:1::', ['10.0.0.0/8']), SecureHttpError);
+        assert.doesNotThrow(() => assertAllowedIp('2002:a00:1::', ['2002:a00::/24']));
+        assert.doesNotThrow(() => assertAllowedIp('2002:a00:1::', true));
+    });
+
+    it('a name resolving to a 6to4 address of a private IPv4 is blocked', async (t) => {
+        t.mock.method(dnsPromises, 'lookup', async () => [{ address: '2002:a9fe:a9fe::1', family: 6 }]);
+        await assert.rejects(() => resolveAndPinAll('rebind.example'), (err: unknown) =>
+            err instanceof SecureHttpError && err.code === 'ERR_ULTRATON_RESERVED_IP');
+    });
+});

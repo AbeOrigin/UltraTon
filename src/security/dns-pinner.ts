@@ -29,8 +29,8 @@ for (const [network, prefix] of reservedIpv4Ranges) {
     reservedIps.addSubnet(`64:ff9b::${network}`, 96 + prefix, 'ipv6');
 }
 
-// ponytail: 6to4 (2002::/16) and Teredo (2001::/32) are not blocked because they legitimately embed public IPv4
-// addresses and need host tunnel interfaces to be reachable. Upgrade path: decode the embedded IPv4 like NAT64 above.
+// 6to4 (2002::/16) and Teredo (2001:0::/32) embed an IPv4 elsewhere than the low 32 bits, so no prefix can express
+// "reserved IPv4 inside": isReservedIp decodes them instead (see tunnelledIpv4s).
 for (const [network, prefix] of [
     ['::', 96],            // Unspecified, loopback and IPv4-compatible (::7f00:1)
     ['64:ff9b:1::', 48],   // Local-use NAT64 (RFC 8215): targets non-global IPv4 by definition
@@ -47,8 +47,26 @@ for (const [network, prefix] of [
 export function isReservedIp(ip: string): boolean {
     const family = isIP(ip);
     if (family === 0) return false;
+    if (family === 4) return reservedIps.check(ip, 'ipv4');
+    return reservedIps.check(ip, 'ipv6') || tunnelledIpv4s(ip).some(v4 => reservedIps.check(v4, 'ipv4'));
+}
 
-    return reservedIps.check(ip, family === 4 ? 'ipv4' : 'ipv6');
+/**
+ * The IPv4 addresses a 6to4 or Teredo address carries, which a host with a tunnel interface (or a relay) delivers to.
+ * 6to4 (2002::/16, RFC 3056) holds one in bits 16-47. Teredo (2001:0::/32, RFC 4380) holds the server's in bits 32-63
+ * and the client's, every bit inverted, in the low 32. Packets go to the client, through a relay; the server's is
+ * returned too, so that a reserved one fails closed rather than relying on how the host's relay routes.
+ * Empty for any other address. The NAT64 and IPv4-mapped forms are covered by prefixes above.
+ */
+function tunnelledIpv4s(ip: string): string[] {
+    // Every spelling of these prefixes starts with the first group: a cheap filter before parsing.
+    if (!/^200[12]:/i.test(ip)) return [];
+    const groups = ipv6Groups(ip);
+    if (groups === undefined) return [];
+    const ipv4 = (high: number, low: number) => `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+    if (groups[0] === 0x2002) return [ipv4(groups[1], groups[2])];
+    if (groups[0] === 0x2001 && groups[1] === 0) return [ipv4(groups[2], groups[3]), ipv4(groups[6] ^ 0xffff, groups[7] ^ 0xffff)];
+    return [];
 }
 
 // What plain http may reach: 127.0.0.0/8 (BlockList also matches it against the IPv4-mapped ::ffff:127.0.0.0/104
