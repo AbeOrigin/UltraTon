@@ -3,8 +3,27 @@ import { finished, pipeline, Transform, type Readable } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 import { incompleteResponse } from './response.ts';
 
-/** The content-codings the reader decodes. */
-const CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
+/** The first release of each Node line whose Brotli decoder has the fix for CVE-2026-111497 (an out-of-bounds write). */
+const BROTLI_FIXED: Readonly<Record<number, readonly [minor: number, patch: number]>> = { 22: [23, 4], 24: [22, 1], 26: [12, 1] };
+
+/**
+ * Whether this Node's Brotli decoder is safe to feed a server's bytes. Lines after 26 carry the fix; 23 and 25 are
+ * end-of-life and never got it; a prerelease (`27.0.0-rc.1`, a nightly) may predate it, so it counts as unsafe. On an unsafe one, br is neither requested nor decoded (see CODINGS): a body a server
+ * sends as br anyway comes back raw, as any coding this runtime cannot decode does.
+ */
+export function hasSafeBrotli(version: string = process.versions.node): boolean {
+    if (version.includes('-')) return false;
+    const [major, minor, patch] = version.split('.').map(Number);
+    if (major > 26) return true;
+    const fixed = BROTLI_FIXED[major];
+    if (fixed === undefined) return false;
+    return minor > fixed[0] || (minor === fixed[0] && patch >= fixed[1]);
+}
+
+const BROTLI = hasSafeBrotli();
+
+/** The content-codings the reader decodes: br only on a Node whose decoder is fixed (see hasSafeBrotli). */
+const CODINGS = new Set(BROTLI ? ['gzip', 'x-gzip', 'deflate', 'br'] : ['gzip', 'x-gzip', 'deflate']);
 
 /**
  * A fresh decoder for a coding in CODINGS. A switch rather than a lookup table: no header value ever selects the
@@ -32,7 +51,7 @@ function createDecoder(coding: string): Transform {
 // once a cut frame can be detected.
 
 /** The accept-encoding sent by default: every coding the reader decodes. */
-export const ACCEPT_ENCODING = 'gzip, deflate, br';
+export const ACCEPT_ENCODING = BROTLI ? 'gzip, deflate, br' : 'gzip, deflate';
 
 /** Each layer is another decompression to bound; two cover every real server (e.g. "gzip, br"). */
 const MAX_LAYERS = 2;

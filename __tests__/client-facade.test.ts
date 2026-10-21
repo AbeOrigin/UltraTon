@@ -509,6 +509,21 @@ describe('UltraTonClient tls', () => {
             });
         });
 
+        if (!http2) {
+            it('HTTP/1: a Host header never changes the name the certificate is checked against', async (t) => {
+                // 127.0.0.2 is not in the certificate, localhost is: with the TLS name taken from the Host header, this
+                // request would pass. It is taken from the URL.
+                const server = https.createServer({ cert: CA, key: KEY }, (_req, res) => res.end('tls-ok'));
+                track(server as http.Server, t);
+                await new Promise<void>(r => server.listen(0, '127.0.0.2', r));
+                const client = clientFor(t, { permitReservedIps: true, tls: { ca: CA } });
+                for (const host of ['localhost', '127.1']) {
+                    await assert.rejects(client.get(`https://127.0.0.2:${(server.address() as AddressInfo).port}/`, { headers: { host } }),
+                        (err: Error) => err.message === 'UltraTon: TLS handshake failed (ERR_TLS_CERT_ALTNAME_INVALID).', host);
+                }
+            });
+        }
+
         it(`${label}: another client's tls never applies (the self-signed cert is rejected)`, async (t) => {
             const url = await startTls(t, http2);
             const trusting = clientFor(t, { http2, permitReservedIps: true, tls: { ca: [CA.toString()] } });

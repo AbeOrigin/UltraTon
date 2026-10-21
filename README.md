@@ -58,7 +58,7 @@ await api.close(); // when the client is no longer needed
 | https → http redirect | **Rejected**. | — |
 | Credentials on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped. | — |
 | Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
-| Compressed responses (gzip, deflate, br) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. | `decompress: false` |
+| Compressed responses (gzip, deflate, br) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. br only on a Node release with the Brotli fix (see [Security](#security)). | `decompress: false` |
 | Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
 | Idle connection | **10 s** without bytes | `socketTimeoutMs` (`0` = none) |
 | TLS verification | **Always on**. It cannot be disabled. | `tls: { ca, cert, key }` for private CAs and mTLS |
@@ -158,6 +158,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
 | `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
+| `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
 | `SecureHttpError` | A request on a closed client | — |
 | `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |
@@ -488,7 +489,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
-- **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is.
+- **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is. On a Node release without the fix for CVE-2026-111497 (before 22.23.4, 24.22.1 or 26.12.1), br is neither requested nor decoded: a server that sends it anyway gets its body back raw, even when you asked for br in your own `accept-encoding`.
 - **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. A `File` or `Blob` body is read whole into memory first: pass a stream (`createReadStream`) to upload a large file. Over HTTP/2, a `stream()` body you have not read yet can hold up to 1 MiB (the stream's flow-control window) until you read or cancel it.
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
@@ -516,6 +517,8 @@ The full list is in [CHANGELOG.md](CHANGELOG.md).
 ## Security
 
 To report a vulnerability, see [SECURITY.md](SECURITY.md). Please do not open a public issue for it.
+
+**Keep Node.js up to date.** Run 22.23.4, 24.22.1, 26.12.1 or later: those releases fix a Brotli decoder flaw that a malicious server could use for remote code execution, and TLS hostname checks fooled by non-canonical IP addresses. On older releases UltraTon stops requesting and decoding `br`; [SECURITY.md](SECURITY.md#nodejs-releases) lists what it covers and what it cannot.
 
 The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, what `UltraTonClient` and `createSecureAgents()` block next to axios, got, node-fetch and Node's `fetch` on their own: IP spellings, cloud metadata, DNS and redirects. The corpus runs in CI, and a case UltraTon stops blocking fails the build.
 

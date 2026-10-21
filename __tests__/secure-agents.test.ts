@@ -75,6 +75,25 @@ describe('createSecureAgents', () => {
         }
     });
 
+    it('refuses a host given as an IPv4 in a non-canonical form, whatever the policy', async (t) => {
+        // What a library may pass as is (options.host), unlike a URL string, which Node canonicalizes first. Fullwidth
+        // digits never get this far: Node refuses them in the Host header before the agent is asked for a socket.
+        const agents = agentsOf(t, { permitReservedIps: true });
+        for (const host of ['127.1', '0x7f.0.0.1', '0177.0.0.1', '2130706433', '0x7f']) {
+            for (const [request, agent] of [[http.request, agents.http], [https.request, agents.https]] as const) {
+                await assert.rejects(new Promise((resolve, reject) => {
+                    request({ host, port: 9, path: '/', agent }, resolve).on('error', reject).end();
+                }), (err: Error & { code?: string }) => err.code === 'ERR_ULTRATON_NON_CANONICAL_IP', host);
+            }
+        }
+        // The TLS name: Node's agent takes it from servername, else from the Host header, before asking for a socket.
+        for (const extra of [{ servername: '127.1' }, { headers: { host: '0x7f.0.0.1' } }]) {
+            await assert.rejects(new Promise((resolve, reject) => {
+                https.request({ host: 'localhost', port: 9, path: '/', agent: agents.https, ...extra }, resolve).on('error', reject).end();
+            }), (err: Error & { code?: string }) => err.code === 'ERR_ULTRATON_NON_CANONICAL_IP', JSON.stringify(extra));
+        }
+    });
+
     it("ignores the caller's own lookup: the agent resolves and validates itself", async (t) => {
         mockDns(t, { 'evil.example': [v4('10.0.0.5')] });
         const agents = agentsOf(t, { permitReservedIps: ['127.0.0.1'] });
