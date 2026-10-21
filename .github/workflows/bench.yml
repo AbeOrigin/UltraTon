@@ -1,6 +1,6 @@
 # Benchmarks (compat/bench): UltraTon next to node:http, fetch (undici), axios, got and node-fetch, on loopback.
 # They run here and never on contributors' machines. RESULTS.md and results.json are uploaded as an artifact; the
-# maintainer commits them to compat/bench/ when they move.
+# maintainer commits them to compat/bench/ when they move. CPU profiles of UltraTon follow, as the cpu-profile artifact.
 name: Benchmarks
 
 on:
@@ -65,3 +65,14 @@ jobs:
         path: |
           compat/bench/RESULTS.md
           compat/bench/results.json
+
+    # Where UltraTon's time goes under the same load: a top-20 report plus the raw .cpuprofile files (Chrome DevTools).
+    - name: Profile UltraTon
+      working-directory: compat
+      run: npm run profile
+
+    - name: Upload the profiles
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: cpu-profile
+        path: compat/bench/profile/

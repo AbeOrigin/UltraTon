@@ -19,3 +19,5 @@ _agent/
 
 # compat/ installs the packed tarball
 compat/*.tgz
+# CPU profiles written by compat/bench/profile.ts (CI artifacts)
+compat/bench/profile/

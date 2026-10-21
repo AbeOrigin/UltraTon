@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node --import ../__tests__/fixtures/loopback-only.ts --test \"*.test.ts\"",
     "corpus": "node --import ../__tests__/fixtures/loopback-only.ts ssrf-corpus/report.ts",
-    "bench": "node bench/bench.ts"
+    "bench": "node bench/bench.ts",
+    "profile": "node bench/profile.ts"
   },
   "devDependencies": {
     "axios": "1.20.0",
