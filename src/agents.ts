@@ -24,7 +24,9 @@ export interface UltraTonSecureAgentOptions {
 
 /** An `http.Agent` and an `https.Agent` that only ever connect to addresses UltraTon validated. */
 export interface UltraTonSecureAgents {
+    /** For `http:` URLs: loopback only, unless `allowPlainHttp` is set. */
     readonly http: http.Agent;
+    /** For `https:` URLs, with TLS always verified. */
     readonly https: https.Agent;
 }
 

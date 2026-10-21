@@ -4,6 +4,7 @@ import type { UltraTonRetryInfo } from '../types/request-options.types.ts';
 
 /** The request every event of one client call carries: the same frozen object from start to end. */
 export interface UltraTonDiagnosticsRequest {
+    /** The HTTP method. */
     readonly method: string;
     /** Scheme, host and port: never a resolved IP. */
     readonly origin: string;
@@ -16,7 +17,9 @@ export interface UltraTonDiagnosticsRequest {
 
 /** An error as the events describe it: its name and its UltraTon or Node `code`, never its message chain or `cause`. */
 export interface UltraTonDiagnosticsError {
+    /** The error's `name`, such as `UltraTonNetworkError`. */
     readonly name: string;
+    /** Its `code` (`ERR_ULTRATON_*` or Node's own), or `undefined` when it has none. */
     readonly code: string | undefined;
 }
 
@@ -26,19 +29,41 @@ const failure = diagnosticsChannel.channel('ultraton:request:error');
 const retry = diagnosticsChannel.channel('ultraton:request:retry');
 
 /** `ultraton:request:start`. */
-export interface UltraTonRequestStartMessage { readonly request: UltraTonDiagnosticsRequest }
+export interface UltraTonRequestStartMessage {
+    /** The request this call makes. */
+    readonly request: UltraTonDiagnosticsRequest;
+}
 /** `ultraton:request:retry`, published once a retry is decided (after `onRetry` ran), before the wait. */
 export interface UltraTonRequestRetryMessage {
+    /** The request being retried. */
     readonly request: UltraTonDiagnosticsRequest;
+    /** The retry about to happen: 1 for the first. */
     readonly attempt: number;
+    /** The wait before it, in milliseconds. */
     readonly delayMs: number;
+    /** The status of the response being retried. */
     readonly statusCode?: number;
+    /** The network error being retried. */
     readonly error?: UltraTonDiagnosticsError;
 }
 /** `ultraton:request:response`. For `stream()` it is published on the headers. */
-export interface UltraTonRequestResponseMessage { readonly request: UltraTonDiagnosticsRequest; readonly statusCode: number; readonly durationMs: number }
+export interface UltraTonRequestResponseMessage {
+    /** The request that got this response. */
+    readonly request: UltraTonDiagnosticsRequest;
+    /** The status the call resolved with, after any retries. */
+    readonly statusCode: number;
+    /** Milliseconds from the start of the call, retries included. */
+    readonly durationMs: number;
+}
 /** `ultraton:request:error`. */
-export interface UltraTonRequestErrorMessage { readonly request: UltraTonDiagnosticsRequest; readonly error: UltraTonDiagnosticsError; readonly durationMs: number }
+export interface UltraTonRequestErrorMessage {
+    /** The request that failed. */
+    readonly request: UltraTonDiagnosticsRequest;
+    /** Why it failed. */
+    readonly error: UltraTonDiagnosticsError;
+    /** Milliseconds from the start of the call, retries included. */
+    readonly durationMs: number;
+}
 
 /**
  * Only a string `name` and `code`. The error may be anything the caller made reject the request (an abort reason, a

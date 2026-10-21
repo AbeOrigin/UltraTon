@@ -149,7 +149,9 @@ export interface UltraTonRetryOptions {
 
 /** What `onRetry` receives: the retry about to happen (1 for the first), the wait before it, and what caused it. */
 export interface UltraTonRetryInfo {
+    /** The retry about to happen: 1 for the first. */
     readonly attempt: number;
+    /** The wait before it, in milliseconds, the jittered backoff or what `Retry-After` asked for. */
     readonly delayMs: number;
     /** The status of the response being retried. */
     readonly statusCode?: number;

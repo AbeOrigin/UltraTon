@@ -41,6 +41,9 @@ jobs:
     - name: Build TypeScript
       run: npm run build && npm run build:strict
 
+    - name: TSDoc on every public symbol
+      run: npm run check:tsdoc
+
     - name: Run Test Suite
       run: npm test
       env:
