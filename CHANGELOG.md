@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Faster HTTP/2 bodies.** The receive window is 1 MiB per stream (was Node's 64 KiB) and 16 MiB per connection (was 64 KiB, shared by every stream), so a body no longer waits on WINDOW_UPDATE round trips. The stream window is also the most a `stream()` body left unread can hold; the connection window bounds no memory, because Node acknowledges it as data arrives.
+
 ## [2.4.0] - 2026-10-21
 
 Uploads that stream and APIs that paginate: request bodies can be streams, with an optional size limit, `client.paginate()` walks paginated APIs without ever leaving their origin, and every response now says where it came from. All additive.

@@ -8,6 +8,7 @@ import type {
 } from "node:http2";
 import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
+  H2_STREAM_WINDOW,
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
   MAX_SESSION_MEMORY_MB,
@@ -64,6 +65,7 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
       options.settings.maxHeaderListSize,
       MAX_HEADER_LIST_SIZE,
     );
+    assert.strictEqual(options.settings.initialWindowSize, H2_STREAM_WINDOW);
     assert.strictEqual(options.maxSessionMemory, MAX_SESSION_MEMORY_MB);
     assert.strictEqual(options.maxHeaderListPairs, MAX_HEADER_LIST_PAIRS);
   });
