@@ -35,7 +35,7 @@ const sourceFiles = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMa
   return entry.name.endsWith('.ts') ? [full] : [];
 });
 
-/** The snapshot: one section per public symbol (sorted by name), then every `ERR_ULTRATON_*` code found in `src`. */
+/** The snapshot: one section per public symbol (sorted by name), then every `ERR_ULTRATON_*` code an error is raised with in `src`. */
 export function apiSnapshot(dist, src) {
   const sections = publicDeclarations(dist)
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -45,7 +45,9 @@ export function apiSnapshot(dist, src) {
     });
   const codes = new Set();
   for (const file of sourceFiles(src)) {
-    for (const [, code] of fs.readFileSync(file, 'utf8').matchAll(/['"`](ERR_ULTRATON_[A-Z_]+)['"`]/g)) codes.add(code);
+    // The codes errors are raised with (`code: '...'`): not ones a comment documents or a comparison checks, which
+    // would keep listing a code nothing raises any more.
+    for (const [, code] of fs.readFileSync(file, 'utf8').matchAll(/\bcode:\s*['"](ERR_ULTRATON_[A-Z0-9_]+)['"]/g)) codes.add(code);
   }
   sections.push(['## error codes', ...[...codes].sort()].join('\n'));
   return `${sections.join('\n\n')}\n`;
