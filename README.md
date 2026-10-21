@@ -312,7 +312,7 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 
 - **Scope:** the next page must be on the first page's origin and, with `baseUrl`, inside it (its path checks apply). A server cannot steer the walk to another host: that rejects with `ERR_ULTRATON_PAGE_OUT_OF_SCOPE`, and so does a `next()` result. So does a page that a followed redirect served from outside that scope (it is yielded, then the walk rejects before its link is read): otherwise another server would choose the next request on your origin, with your credentials.
 - **Bounded:** `maxPages` (default 100). A next page left after it rejects with `ERR_ULTRATON_MAX_PAGES`, after the pages already yielded: a collection is never cut short in silence.
-- **Errors:** a non-2xx page is yielded and ends the walk. A relative link, or a `next()` result, resolves against the page's final `url` (under `baseUrl`, return `items?cursor=x`, not `/items?cursor=x`, which is from the origin root).
+- **Errors:** a non-2xx page is yielded and ends the walk. A relative `Link` resolves against the page's final `url`, as RFC 8288 says. A path from `next()` reads like a `get()` path: under `baseUrl`, `'/items?cursor=x'` and `'items?cursor=x'` are both from the base. An absolute URL from `next()` (a `next_url` field in the body, say) works too, as long as it stays in scope.
 - **Options:** `query` applies to the first page only, since a next link carries its own; every other option (headers, `signal`, `retry`, …) to every page. There is no body: every page is a GET.
 
 ### Retries

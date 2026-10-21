@@ -193,10 +193,11 @@ export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'max
 /** The options of `client.paginate()`: the GET options (no body), plus how to find the next page and when to stop. */
 export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body'> {
     /**
-     * Returns the next page's URL (absolute, or relative to the page's `url`), or `undefined` or `null` when this page is
-     * the last. Default: the `rel="next"` link of the `Link` header (RFC 8288). Throwing from it ends the iteration with
-     * that error. Its result is held to the same origin and `baseUrl` rule as a `Link` header: under `baseUrl`, return
-     * a path relative to the page ('items?cursor=x'), since one starting with '/' is from the origin root.
+     * Returns the next page's URL, or `undefined` or `null` when this page is the last. An absolute URL is taken as is;
+     * a path is read as `get()` reads one: under `baseUrl`, from the base ('/items' and 'items' alike, with its path
+     * checks), otherwise relative to the page's `url`. Default: the `rel="next"` link of the `Link` header (RFC 8288),
+     * resolved against the page's `url`. Throwing from it ends the iteration with that error. Either way the next page
+     * must stay on the first page's origin and inside `baseUrl`.
      */
     readonly next?: (page: UltraTonResponse<T>) => string | URL | null | undefined;
     /**

@@ -213,7 +213,8 @@ export class UltraTonClient {
     /**
      * Walks a paginated collection with GET requests, yielding each page as a complete response once it arrives: every
      * page is a full `get()`, with all its checks. The next page is the `rel="next"` link of the `Link` header (RFC 8288)
-     * or what `next(page)` returns, resolved against the page's final `url`. The walk stays on the first page's origin
+     * (resolved against the page's final `url`) or what `next(page)` returns (an absolute URL, or a path read as `get()`
+     * reads one: under `baseUrl`, from the base; otherwise from the page's `url`). The walk stays on the first page's origin
      * and, with `baseUrl`, inside it: a next page outside rejects, and so does a page a redirect served from outside it
      * (that server would otherwise pick the next request, with your credentials, on your origin). A non-2xx page is
      * yielded and ends the walk. `query` applies to the first page only (a next link carries its own); every other
@@ -254,8 +255,15 @@ export class UltraTonClient {
             if (count === split.maxPages) {
                 throw new SecureHttpError(`UltraTon: More pages than maxPages (${split.maxPages}).`, { code: 'ERR_ULTRATON_MAX_PAGES' });
             }
-            if (!URL.canParse(ref, from)) throw new SecureHttpError('UltraTon: Invalid next page URL.');
-            const target = new URL(ref, from);
+            let target: URL;
+            if (base && split.next && typeof ref === 'string' && !URL.canParse(ref)) {
+                // A path from the caller's own next() under baseUrl reads as a get() path ('/items' is from the base);
+                // a Link header keeps RFC 8288's resolution against the page.
+                target = new URL(resolveAgainstBase(ref, base));
+            } else {
+                if (!URL.canParse(ref, from)) throw new SecureHttpError('UltraTon: Invalid next page URL.');
+                target = new URL(ref, from);
+            }
             if (!inScope(target)) throw outOfScope();
             // Under baseUrl the part below it goes through get() as a path, so the traversal checks of a path apply too.
             // './' keeps it relative and resolving to exactly `target` ('//x', 'users:search', '?q' included).

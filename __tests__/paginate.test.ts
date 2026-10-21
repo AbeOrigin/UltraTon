@@ -179,6 +179,31 @@ for (const http2 of [false, true]) {
             assert.deepEqual(targets, ['/items?page=1', '/items?page=1']);
         });
 
+        it('reads a next() path as get() does under baseUrl, with or without a leading slash', async (t) => {
+            const { base, targets } = await pagedServer(t, http2, () => ({}));
+            const client = clientOf(t, http2, { baseUrl: `${base}/v1/` });
+            const refs = ['/items?cursor=2', 'items?cursor=3', `${base}/v1/items?cursor=4`, undefined];
+            await collect(client.paginate('a/b/start', { next: () => refs.shift() }));
+            assert.deepEqual(targets, ['/v1/a/b/start', '/v1/items?cursor=2', '/v1/items?cursor=3', '/v1/items?cursor=4']);
+        });
+
+        it('applies the baseUrl path checks to a next() path', async (t) => {
+            const { base, targets } = await pagedServer(t, http2, () => ({}));
+            const client = clientOf(t, http2, { baseUrl: `${base}/v1/` });
+            await assert.rejects(collect(client.paginate('items', { next: () => '../admin' })), TypeError);
+            await assert.rejects(collect(client.paginate('items', { next: () => '//evil.example/' })), TypeError);
+            await assert.rejects(collect(client.paginate('items', { next: () => `${base}/admin` })), { code: 'ERR_ULTRATON_PAGE_OUT_OF_SCOPE' });
+            assert.deepEqual(targets, ['/v1/items', '/v1/items', '/v1/items']);
+        });
+
+        it('resolves a next() path against the page without baseUrl', async (t) => {
+            const { base, targets } = await pagedServer(t, http2, () => ({}));
+            const client = clientOf(t, http2);
+            const refs = ['c?cursor=2', undefined];
+            await collect(client.paginate(`${base}/a/b`, { next: () => refs.shift() }));
+            assert.deepEqual(targets, ['/a/b', '/a/c?cursor=2']);
+        });
+
         it('ends when next() returns null', async (t) => {
             const { base } = await pagedServer(t, http2, () => ({}));
             const client = clientOf(t, http2);
