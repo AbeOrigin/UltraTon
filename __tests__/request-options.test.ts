@@ -92,6 +92,16 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         assert.deepStrictEqual(result.permitReservedIps, ['10.0.0.0/8']);
     });
 
+    it('reuses a list it already validated, and still validates a frozen list it did not freeze', () => {
+        const validated = buildSafeRequestOptions({ permitReservedIps: ['10.0.0.0/8'] }).permitReservedIps;
+        assert.ok(Object.isFrozen(validated));
+        assert.strictEqual(buildSafeRequestOptions({ permitReservedIps: validated }).permitReservedIps, validated);
+        // Frozen by the caller, not by the validator: checked and copied like any other list.
+        assert.throws(() => buildSafeRequestOptions({ permitReservedIps: Object.freeze(['http://evil']) }), TypeError);
+        const callerFrozen = Object.freeze(['10.0.0.0/8']);
+        assert.notStrictEqual(buildSafeRequestOptions({ permitReservedIps: callerFrozen }).permitReservedIps, callerFrozen);
+    });
+
     it('treats an empty permitReservedIps array as a valid (blocking) policy', () => {
         assert.deepStrictEqual(buildSafeRequestOptions({ permitReservedIps: [] }).permitReservedIps, []);
         assert.strictEqual(buildSafeRequestOptions({ permitReservedIps: true }).permitReservedIps, true);

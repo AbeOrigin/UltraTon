@@ -54,6 +54,10 @@ function isReservedIpEntry(entry: unknown): entry is string {
     return /^[a-z0-9.-]+$/i.test(entry) && !entry.startsWith('.') && !entry.endsWith('.');
 }
 
+// Lists this module validated, copied and froze. The client's allowlist comes back with every request it merges into;
+// a frozen list cannot change, so it is returned as is instead of being validated and copied again.
+const validatedPolicies = new WeakSet<readonly string[]>();
+
 /**
  * `permitReservedIps` is a boolean or an allowlist of IPs, CIDRs and hostnames. The list is copied and frozen after
  * validation, so the caller cannot widen the policy by mutating their array afterwards.
@@ -63,13 +67,16 @@ function reservedIpPolicy(value: unknown): ReservedIpPolicy {
     if (!Array.isArray(value)) {
         return validateType('permitReservedIps', value, 'boolean') && value === true;
     }
+    if (validatedPolicies.has(value)) return value;
 
     for (const entry of value) {
         if (!isReservedIpEntry(entry)) {
             throw new TypeError(`UltraTon: Invalid permitReservedIps entry '${String(entry)}': expected an IP, CIDR or hostname.`);
         }
     }
-    return Object.freeze([...value] as string[]);
+    const policy = Object.freeze([...value] as string[]);
+    validatedPolicies.add(policy);
+    return policy;
 }
 
 /**
