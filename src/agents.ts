@@ -6,6 +6,7 @@ import type { Duplex } from 'node:stream';
 import { SecureHttpError } from './errors.ts';
 import { resolveSecureAgentOptions } from './helpers/request-options.ts';
 import { isLoopbackHost } from './helpers/url-parser.ts';
+import { KEEP_ALIVE } from './helpers/keep-alive.ts';
 import { pinnedLookup, resolveAndPinAll, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import type { TlsMaterial } from './types/request-options.types.ts';
 
@@ -149,7 +150,8 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
     }
 
     return Object.freeze({
-        http: new SecureHttpAgent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }),
-        https: new SecureHttpsAgent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...tlsMaterial }),
+        // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
+        http: new SecureHttpAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
+        https: new SecureHttpsAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...tlsMaterial }),
     });
 }
