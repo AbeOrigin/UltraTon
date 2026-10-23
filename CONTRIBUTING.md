@@ -55,6 +55,7 @@ Before Node 22.18, `npm test` needs `NODE_OPTIONS=--experimental-strip-types`.
 - **Keep them light.** Tests run on contributors' own machines. Prove a limit with a small one (`maxBodySize: 1024`), never with a real zip bomb, a multi-gigabyte body or thousands of connections. Anything heavy belongs in CI.
 - **Fuzzing.** [`__tests__/fuzz/`](__tests__/fuzz/) holds property tests for the parsers that face hostile input. `npm test` runs 200 cases per property with a fixed seed. `FUZZ_RUNS` and `FUZZ_SEED` change that, and a failure prints the seed and the shrunk input that reproduce it.
 - **Benchmarks** run only in CI ([`compat/bench/`](compat/README.md#benchmarks)); `npm run bench` refuses to run elsewhere.
+- **Soak test.** [`scripts/soak.ts`](scripts/soak.ts) runs 20 to 60 minutes of hostile and flaky server behaviour on loopback and fails on memory, socket or HTTP/2 session growth. CI only (`soak.yml`, weekly and on demand); it refuses to run elsewhere, except `SOAK_SMOKE=1 SOAK_SECONDS=5` for a few seconds' check of the harness.
 
 ## Pull requests
 
