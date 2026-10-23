@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-10-23
+
+Closes the API surface and debugging work: `maxConcurrency` caps the calls in flight per origin (the wait counts against `timeoutMs`), the client's `headers` may be a function called once per call for values such as `traceparent`, and the diagnostics events carry per-phase `timings` (DNS, connect, TLS, first byte, queue, total, reused connection) that `NODE_DEBUG=ultraton` shows. From an adversarial security audit of 2.7.0 that found no bypass: the secure agents check the certificate against the host the socket goes to, two more reserved ranges, and a prototype fix in `extend()`. No breaking changes; the defaults are the same. This is the last feature release before a period of patches only.
+
 ### Added
 
 - **`headers` as a function on the client.** `new UltraTonClient({ headers: ({ method, url }) => ({ traceparent: current() }) })` is called once per call (not per retry or redirect hop) and its result goes through the same validation as static headers. Only headers: it cannot change the URL, the method, the policy or the response.
