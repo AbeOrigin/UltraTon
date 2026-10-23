@@ -38,6 +38,7 @@ import { parseSafeUrl } from "../helpers/url-parser.ts";
 import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
 import { followRedirect } from "../helpers/redirect-headers.ts";
+import type { HopTimings, TimingsCollector } from "../helpers/diagnostics.ts";
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -93,13 +94,15 @@ export class Http2Engine {
 
   /**
    * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
+   * @param timings - Where each hop records its phases; only while someone listens to the diagnostics events.
    */
-  public async request<T = unknown>(targetUrl: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>>;
-  public async request(targetUrl: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }): Promise<UltraTonStreamResponse>;
+  public async request<T = unknown>(targetUrl: string, options: ResolvedRequestOptions, stream?: undefined, timings?: TimingsCollector): Promise<UltraTonResponse<T>>;
+  public async request(targetUrl: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonStreamResponse>;
   public async request<T = unknown>(
     targetUrl: string,
     options: ResolvedRequestOptions,
     stream?: { maxBodySize?: number },
+    timings?: TimingsCollector,
   ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     // One clock for the whole redirect chain: timeoutMs is a budget shared by every hop.
     const startTime = Date.now();
@@ -130,12 +133,14 @@ export class Http2Engine {
 
       // DNS and the pool wait run under the same budget as the stream: a nameserver that never answers must not
       // outlive timeoutMs. The budget left here is what bounds session acquisition; it is measured again below.
+      const phases = timings?.hop();
       let session: ClientHttp2Session;
       try {
         session = await this.#acquireSession(
           origin,
           reqOpts,
           remainingBudget(reqOpts.timeoutMs, startTime),
+          phases,
         );
       } catch (err: unknown) {
         throw this.#orClosed(err);
@@ -180,6 +185,7 @@ export class Http2Engine {
         remainingMs,
         reqOpts,
         stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl, redirected: redirectCount > 0 },
+        phases,
       );
 
       const statusCode = response.statusCode;
@@ -216,6 +222,7 @@ export class Http2Engine {
     origin: string,
     reqOpts: SecureUltraTonRequestOptions,
     remainingMs: number,
+    phases: HopTimings | undefined,
   ): Promise<ClientHttp2Session> {
     const callerSignal = reqOpts.signal;
     if (remainingMs <= 0) {
@@ -224,6 +231,7 @@ export class Http2Engine {
         undefined,
         reqOpts.permitReservedIps,
         callerSignal,
+        phases,
       );
     }
 
@@ -242,6 +250,7 @@ export class Http2Engine {
         callerSignal
           ? AbortSignal.any([controller.signal, callerSignal])
           : controller.signal,
+        phases,
       );
     } finally {
       clearTimeout(timer);
@@ -269,6 +278,7 @@ export class Http2Engine {
     remainingMs: number,
     reqOpts: SecureUltraTonRequestOptions,
     streaming?: { maxBodySize: number; url: string; redirected: boolean },
+    phases?: HopTimings,
   ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     const { timeoutMs, maxBodySize, socketTimeoutMs, signal, decompress } = reqOpts;
     const followRedirects = reqOpts.maxRedirects > 0;
@@ -383,6 +393,7 @@ export class Http2Engine {
 
       stream.on("response", (headers) => {
         if (settled) return;
+        phases?.mark("response");
         armIdleTimer();
         statusCode = Number(headers[":status"]);
         responseHeaders = headers;
@@ -584,6 +595,7 @@ export class Http2Engine {
         body.pump(stream, () => {
           if (!handedOff) armIdleTimer();
         }).then(() => {
+          phases?.mark("sent");
           if (!stream.destroyed && !stream.closed) stream.end();
         }, (err: unknown) => {
           // The request ending first (answered, aborted, timed out) reports its own outcome.
@@ -605,6 +617,8 @@ export class Http2Engine {
       }
       const writeFrom = (offset: number): void => {
         if (body === undefined || offset >= body.length) {
+          // On a session still connecting, this is queued: the time to the first byte counts from the connect then.
+          phases?.mark("sent");
           stream.end();
           return;
         }

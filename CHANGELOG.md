@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-phase timings on the diagnostics events.** `ultraton:request:response` and `ultraton:request:error` carry `timings` (`dnsMs`, `connectMs`, `tlsMs`, `firstByteMs`, `totalMs`, `reusedConnection`), measured only while someone listens; `NODE_DEBUG=ultraton` shows them.
+
 ### Security
 
 - **`createSecureAgents()` checks the certificate against the host the socket goes to**, as the client does: never against a `servername` the library set or one Node derived from its `Host` header, and an IP literal is checked as itself with no SNI. Before, a library could connect to `127.0.0.1` with `Host: localhost` and a certificate for `localhost` only was accepted (the CVE-2026-106069 pattern, outside the threat model's adversaries since libraries derive `Host` from the URL, but a gap against what SECURITY.md promised for the client). Found by an adversarial audit of 2.7.0, which found no bypass of any documented defense.

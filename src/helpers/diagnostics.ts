@@ -23,6 +23,86 @@ export interface UltraTonDiagnosticsError {
     readonly code: string | undefined;
 }
 
+/** Where the time of a call went, in milliseconds. Phases a call did not go through are `undefined`. */
+export interface UltraTonTimings {
+    /** Name resolution of the last hop, when a new connection was opened for it. */
+    readonly dnsMs?: number;
+    /** TCP connect of the last hop (on HTTP/2: TCP and TLS together, Node reports them as one). */
+    readonly connectMs?: number;
+    /** TLS handshake of the last hop, HTTP/1.1 only. */
+    readonly tlsMs?: number;
+    /** From the request of the last hop being sent to its first response byte (headers). */
+    readonly firstByteMs?: number;
+    /** The whole call: every hop, every retry, until the response (or the error). */
+    readonly totalMs: number;
+    /** Whether the last hop went over a pooled connection or session. */
+    readonly reusedConnection: boolean;
+}
+
+/**
+ * The moments an engine marks on a hop. `start`: the hop begins (on HTTP/2, the connection attempt does); `lookup`: the
+ * name resolved (never for an IP literal); `connect`: the connection is up (TCP, or TCP and TLS for an HTTP/2 session,
+ * or a proxy tunnel); `secure`: the TLS handshake of an HTTP/1.1 socket is done; `sent`: the request and its body were
+ * written; `response`: its headers arrived.
+ */
+export type TimingsPhase = 'start' | 'lookup' | 'connect' | 'secure' | 'sent' | 'response';
+
+/** The marks of one hop. A hop given up (a redirect, a failed attempt) keeps getting late marks, which nothing reads. */
+export class HopTimings {
+    readonly marks: Partial<Record<TimingsPhase, number>> = {};
+    isReused = false;
+
+    /** Records `phase` now, or at `at` (a `performance.now()` taken earlier). The first mark of a phase wins. */
+    mark(phase: TimingsPhase, at: number = performance.now()): void {
+        // A response that came before the upload finished: the time to it is measured from the connection instead.
+        if (phase === 'sent' && this.marks.response !== undefined) return;
+        this.marks[phase] ??= at;
+    }
+
+    /** The hop went over a pooled connection or session: it had no lookup nor connect of its own. */
+    reused(): void {
+        this.isReused = true;
+    }
+}
+
+const tenth = (ms: number): number => Math.round(ms * 10) / 10;
+const between = (from: number | undefined, to: number | undefined): number | undefined =>
+    from === undefined || to === undefined ? undefined : tenth(Math.max(0, to - from));
+
+/**
+ * The timings of one client call, handed to the engine only while someone listens (see observeRequest). Each hop (every
+ * redirect, every retry) starts a new HopTimings: the events report the last one, and the whole call as `totalMs`.
+ */
+export class TimingsCollector {
+    #last = new HopTimings();
+
+    /** Starts the record of a new hop, which replaces the previous one. */
+    hop(): HopTimings {
+        this.#last = new HopTimings();
+        return this.#last;
+    }
+
+    /** The timings of the last hop, with `totalMs` as given. Only numbers and one boolean. */
+    snapshot(totalMs: number): UltraTonTimings {
+        const { marks, isReused } = this.#last;
+        const connected = marks.secure ?? marks.connect;
+        // Nothing goes out before the connection is up: an HTTP/2 stream opened on a connecting session waits for it.
+        const ready = marks.sent ?? connected ?? marks.start;
+        const sent = ready === undefined || connected === undefined ? ready : Math.max(ready, connected);
+        const phases = {
+            dnsMs: between(marks.start, marks.lookup),
+            connectMs: between(marks.lookup ?? marks.start, marks.connect),
+            tlsMs: between(marks.connect, marks.secure),
+            firstByteMs: between(sent, marks.response),
+        };
+        const timings: Record<string, number | boolean> = {};
+        for (const [name, value] of Object.entries(phases)) if (value !== undefined) timings[name] = value;
+        timings.totalMs = tenth(totalMs);
+        timings.reusedConnection = isReused;
+        return timings as unknown as UltraTonTimings;
+    }
+}
+
 const start = diagnosticsChannel.channel('ultraton:request:start');
 const response = diagnosticsChannel.channel('ultraton:request:response');
 const failure = diagnosticsChannel.channel('ultraton:request:error');
@@ -52,8 +132,10 @@ export interface UltraTonRequestResponseMessage {
     readonly request: UltraTonDiagnosticsRequest;
     /** The status the call resolved with, after any retries. */
     readonly statusCode: number;
-    /** Milliseconds from the start of the call, retries included. */
+    /** Milliseconds from the start of the call, retries included: `timings.totalMs`. */
     readonly durationMs: number;
+    /** Where that time went, phase by phase, on the hop that got the response. */
+    readonly timings: UltraTonTimings;
 }
 /** `ultraton:request:error`. */
 export interface UltraTonRequestErrorMessage {
@@ -61,8 +143,10 @@ export interface UltraTonRequestErrorMessage {
     readonly request: UltraTonDiagnosticsRequest;
     /** Why it failed. */
     readonly error: UltraTonDiagnosticsError;
-    /** Milliseconds from the start of the call, retries included. */
+    /** Milliseconds from the start of the call, retries included: `timings.totalMs`. */
     readonly durationMs: number;
+    /** Where that time went, phase by phase, on the hop that failed (the phases it got through). */
+    readonly timings: UltraTonTimings;
 }
 
 /**
@@ -82,6 +166,8 @@ const describeError = (err: unknown): UltraTonDiagnosticsError => {
 
 /** The events of one client call, once it has a request to report on. */
 export interface RequestObserver {
+    /** What the engine measures each hop on; the events publish the last hop's. */
+    readonly timings: TimingsCollector;
     /** Publishes `ultraton:request:retry`: call it once the retry is decided, before the wait. */
     retry(info: UltraTonRetryInfo): void;
     /** Publishes `ultraton:request:response` or `ultraton:request:error` when `result` settles, and passes it on. */
@@ -93,6 +179,7 @@ export interface RequestObserver {
  * `undefined`, at no cost, when nobody listens to any UltraTon channel or the URL does not parse (the engine rejects it).
  * Payloads hold the method, origin and path (no query), status, durations, retry attempt and the error's name and
  * code: never headers, bodies, credentials, `error.cause` or resolved addresses, since APMs ship events off the host.
+ * The timings are numbers and one boolean; nothing creates or measures them when this returns `undefined`.
  */
 export function observeRequest(method: string, url: string): RequestObserver | undefined {
     if (!(start.hasSubscribers || response.hasSubscribers || failure.hasSubscribers || retry.hasSubscribers)) return undefined;
@@ -102,9 +189,11 @@ export function observeRequest(method: string, url: string): RequestObserver | u
     const path = parsed.pathname.split('/').map(segment => segment.split(';', 1)[0]).join('/');
     const request: UltraTonDiagnosticsRequest = Object.freeze({ method, origin: parsed.origin, path });
     const startedAt = performance.now();
-    const elapsed = () => performance.now() - startedAt;
+    const collector = new TimingsCollector();
+    const measured = () => collector.snapshot(performance.now() - startedAt);
     if (start.hasSubscribers) start.publish({ request });
     return {
+        timings: collector,
         retry(info) {
             if (!retry.hasSubscribers) return;
             retry.publish({
@@ -117,10 +206,16 @@ export function observeRequest(method: string, url: string): RequestObserver | u
         },
         track(result) {
             return result.then(res => {
-                if (response.hasSubscribers) response.publish({ request, statusCode: res.statusCode, durationMs: elapsed() });
+                if (response.hasSubscribers) {
+                    const timings = measured();
+                    response.publish({ request, statusCode: res.statusCode, durationMs: timings.totalMs, timings });
+                }
                 return res;
             }, (err: unknown) => {
-                if (failure.hasSubscribers) failure.publish({ request, error: describeError(err), durationMs: elapsed() });
+                if (failure.hasSubscribers) {
+                    const timings = measured();
+                    failure.publish({ request, error: describeError(err), durationMs: timings.totalMs, timings });
+                }
                 throw err;
             });
         },
