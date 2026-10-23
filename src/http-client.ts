@@ -1,7 +1,8 @@
 import type * as http from 'node:http';
 import type * as https from 'node:https';
 import { isIP } from 'node:net';
-import { SecureHttpError, clientClosed } from './errors.ts';
+import { performance } from 'node:perf_hooks';
+import { SecureHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, remainingBudget } from './errors.ts';
 import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
@@ -14,11 +15,13 @@ import { kSessionManager, kSharedEngine, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
-import { observeRequest } from './helpers/diagnostics.ts';
+import { observeRequest, type TimingsCollector } from './helpers/diagnostics.ts';
+import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
+import { createStreamResponse } from './helpers/response.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
-import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
+import type { ResolvedRequestOptions, UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
@@ -155,6 +158,8 @@ export class UltraTonClient {
     readonly #baseUrl?: URL;
     /** With `proxy.resolve: 'proxy'` (or a `socks5h:` URL) names are resolved by the proxy, so explain() has no addresses to judge. */
     readonly #proxyResolvesNames: boolean;
+    /** With `maxConcurrency`: this client's own slots per origin, never shared with a variant from `extend()`. */
+    readonly #limiter?: OriginLimiter;
     #closed = false;
 
     /**
@@ -176,6 +181,7 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
         this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
+        if (resolved.maxConcurrency !== undefined) this.#limiter = new OriginLimiter(resolved.maxConcurrency);
         // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out, and the copy goes two
         // levels down so that a caller mutating their arrays or objects later (the permitReservedIps list, headers,
         // tls material) changes neither this client nor a variant made from it: the policy a variant gets is the one
@@ -382,13 +388,15 @@ export class UltraTonClient {
     }
 
     /**
-     * Closes this client: any later request rejects with `SecureHttpError('UltraTon: Client is closed.')`. Its pooled
-     * sockets and sessions are destroyed with it (requests still in flight on them fail), unless a client made with
-     * `extend()` still shares them: then they close with the last of those clients. Calling it again does nothing.
+     * Closes this client: any later request rejects with `SecureHttpError('UltraTon: Client is closed.')`, and so does
+     * every call still waiting under `maxConcurrency`. Its pooled sockets and sessions are destroyed with it (requests
+     * still in flight on them fail), unless a client made with `extend()` still shares them: then they close with the
+     * last of those clients. Calling it again does nothing.
      */
     public async close(): Promise<void> {
         if (this.#closed) return;
         this.#closed = true;
+        this.#limiter?.close(clientClosed());
         if (--this.#shared.refs === 0) this.#engine.close();
     }
 
@@ -437,16 +445,77 @@ export class UltraTonClient {
         // Without it the engines get no timings to measure.
         const observer = observeRequest(method, target);
         const timings = observer?.timings;
-        const send = (timeoutMs?: number): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {
-            const attempt = timeoutMs === undefined ? resolvedOptions : { ...resolvedOptions, timeoutMs };
-            return stream ? this.#engine.request(target, attempt, stream, timings) : this.#engine.request<T>(target, attempt, undefined, timings);
-        };
-        if (!observer) return retry ? withRetry(send, retry, resolvedOptions.timeoutMs, resolvedOptions.signal) : send();
-        const observed = retry && {
+        const observed = observer && retry && {
             ...retry,
             // The caller's hook first: when it throws there is no retry, so no retry event either.
             onRetry: (info: Parameters<NonNullable<typeof retry.onRetry>>[0]) => { retry.onRetry?.(info); observer.retry(info); },
         };
-        return observer.track(observed ? withRetry(send, observed, resolvedOptions.timeoutMs, resolvedOptions.signal) : send());
+        const policy = observed || retry;
+        const call = (options: ResolvedRequestOptions): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {
+            const send = (timeoutMs?: number): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {
+                const attempt = timeoutMs === undefined ? options : { ...options, timeoutMs };
+                return stream ? this.#engine.request(target, attempt, stream, timings) : this.#engine.request<T>(target, attempt, undefined, timings);
+            };
+            return policy ? withRetry(send, policy, options.timeoutMs, options.signal) : send();
+        };
+        // Without maxConcurrency nothing is queued nor measured: the call goes straight to the engine, as it always did.
+        const result = this.#limiter
+            ? this.#limited(this.#limiter, target, resolvedOptions, stream !== undefined && method !== 'HEAD', timings, call)
+            : call(resolvedOptions);
+        return observer ? observer.track(result) : result;
+    }
+
+    /**
+     * Runs `call` once a slot for the target's origin is free (`maxConcurrency`), and gives the slot back exactly once
+     * when the call is over: when it settles or, for a stream with a body (`holdsBody`), once that body ends, fails or
+     * is cancelled. The time queued comes out of `timeoutMs`: the call gets what is left of it, and a timeout still
+     * names the configured value, as a retry's does.
+     */
+    async #limited<R extends UltraTonResponse<unknown> | UltraTonStreamResponse>(
+        limiter: OriginLimiter,
+        target: string,
+        options: ResolvedRequestOptions,
+        holdsBody: boolean,
+        timings: TimingsCollector | undefined,
+        call: (options: ResolvedRequestOptions) => Promise<R>,
+    ): Promise<R> {
+        // Checked as the engine checks them, before waiting: a malformed timeoutMs or URL throws now, not after the queue.
+        const budget = buildSafeRequestOptions(options).timeoutMs;
+        const origin = parseSafeUrl(target).origin;
+        let release = limiter.tryAcquire(origin);
+        let attempt = options;
+        if (!release) {
+            const startedAt = Date.now();
+            const queuedAt = performance.now();
+            try {
+                release = await limiter.acquire(origin, options.signal, budget);
+            } finally {
+                // Also when the wait ended the call (timeout, abort, close()): the error event shows the time it took.
+                timings?.queued(performance.now() - queuedAt);
+            }
+            try {
+                // close() ran on a variant whose engine others still use: the engine itself would not refuse the call.
+                if (this.#closed) throw clientClosed();
+                attempt = { ...options, timeoutMs: remainingBudget(budget, startedAt) };
+            } catch (err) {
+                release();
+                throw err;
+            }
+        }
+        let response: R;
+        try {
+            response = await call(attempt);
+        } catch (err) {
+            release();
+            const shortened = attempt !== options && err instanceof UltraTonNetworkError && err.code === 'ERR_ULTRATON_TIMEOUT';
+            throw shortened ? absoluteTimeout(budget) : err;
+        }
+        if (!holdsBody) {
+            release();
+            return response;
+        }
+        // A new response around the new body, so that assertOk() cancels that one (and gives the slot back with it).
+        const res = response as UltraTonStreamResponse;
+        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirected) as R;
     }
 }

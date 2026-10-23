@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`headers` as a function on the client.** `new UltraTonClient({ headers: ({ method, url }) => ({ traceparent: current() }) })` is called once per call (not per retry or redirect hop) and its result goes through the same validation as static headers. Only headers: it cannot change the URL, the method, the policy or the response.
 - **Per-phase timings on the diagnostics events.** `ultraton:request:response` and `ultraton:request:error` carry `timings` (`dnsMs`, `connectMs`, `tlsMs`, `firstByteMs`, `totalMs`, `reusedConnection`), measured only while someone listens; `NODE_DEBUG=ultraton` shows them.
+- **`maxConcurrency`** caps the calls in flight per origin; the rest wait in order, the wait counts against `timeoutMs` and shows as `queuedMs` in the diagnostics timings. A `stream()` holds its slot until its body ends or is cancelled.
 
 ### Security
 

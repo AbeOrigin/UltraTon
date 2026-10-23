@@ -25,6 +25,8 @@ export interface UltraTonDiagnosticsError {
 
 /** Where the time of a call went, in milliseconds. Phases a call did not go through are `undefined`. */
 export interface UltraTonTimings {
+    /** Waiting for a free slot under the client's `maxConcurrency`, before the first hop; `undefined` when the call did not wait. */
+    readonly queuedMs?: number;
     /** Name resolution of the last hop, when a new connection was opened for it. */
     readonly dnsMs?: number;
     /** TCP connect of the last hop (on HTTP/2: TCP and TLS together, Node reports them as one). */
@@ -75,11 +77,17 @@ const between = (from: number | undefined, to: number | undefined): number | und
  */
 export class TimingsCollector {
     #last = new HopTimings();
+    #queuedMs?: number;
 
     /** Starts the record of a new hop, which replaces the previous one. */
     hop(): HopTimings {
         this.#last = new HopTimings();
         return this.#last;
+    }
+
+    /** The call waited `ms` in the `maxConcurrency` queue before its first hop. */
+    queued(ms: number): void {
+        this.#queuedMs = ms;
     }
 
     /** The timings of the last hop, with `totalMs` as given. Only numbers and one boolean. */
@@ -90,6 +98,7 @@ export class TimingsCollector {
         const ready = marks.sent ?? connected ?? marks.start;
         const sent = ready === undefined || connected === undefined ? ready : Math.max(ready, connected);
         const phases = {
+            queuedMs: this.#queuedMs === undefined ? undefined : tenth(this.#queuedMs),
             dnsMs: between(marks.start, marks.lookup),
             connectMs: between(marks.lookup ?? marks.start, marks.connect),
             tlsMs: between(marks.connect, marks.secure),
