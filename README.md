@@ -317,6 +317,14 @@ const billing = internalClient('https://billing.internal/', '10.20.3.7'); // or 
 - `baseUrl`: a request path cannot escape it, so `billing.get('invoices/7')` can never become a call on another host.
 - Add `tls: { ca: fs.readFileSync('internal-ca.pem') }` for a private CA; verification itself cannot be turned off.
 
+**Variants of a client.** `extend(options)` returns a new client with the same options and `options` on top: headers merge (the variant wins), `retry` merges field by field, and a `userAgent` here replaces the base's. Variants share the base's connection pools unless they set `http2`, `tls` or `proxy`; pools stay apart per `permitReservedIps` policy either way. Closing one client leaves the others working; the pools close with the last one:
+
+```ts
+const api = new UltraTonClient({ baseUrl: 'https://api.example.com/v1/', timeoutMs: 5000 });
+const admin = api.extend({ headers: { authorization: `Bearer ${adminToken}` } }); // same pools, one more header
+const slow = api.extend({ timeoutMs: 60_000, maxBodySize: 50 * 1024 * 1024 });   // for the export endpoint
+```
+
 **Local development against `http://localhost`.** `localhost` usually resolves to both `::1` and `127.0.0.1`, and *every* resolved address must be allowed:
 
 ```ts
@@ -603,6 +611,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **Redirects into allowlisted ranges are followed.** A public server can redirect to an address your `permitReservedIps` allows. Keep allowlists narrow, or keep `maxRedirects: 0` on clients that allow private ranges.
 - **Redirects are not bound to `baseUrl`.** A followed redirect can go to another host, and every hop is still checked against the SSRF policy. Redirects are off by default.
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
+- **A closed client rejects new requests at once; its pools live on while a variant from `extend()` uses them.** Requests in flight on such a pool are allowed to finish; the pools close with the last client sharing them.
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is. On a Node release without the fix for CVE-2026-111497 (before 22.23.4, 24.22.1 or 26.12.1), br is neither requested nor decoded: a server that sends it anyway gets its body back raw, even when you asked for br in your own `accept-encoding`.

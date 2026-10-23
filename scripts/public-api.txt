@@ -27,6 +27,7 @@ export declare class UltraTonClient {
     #private;
     readonly fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
     constructor(options?: UltraTonClientOptions);
+    extend(options?: UltraTonClientOptions): UltraTonClient;
     get<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     post<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     put<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;

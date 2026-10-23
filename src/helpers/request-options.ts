@@ -1,6 +1,6 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
-import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
+import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
@@ -892,6 +892,39 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         auth: own.auth,
         body: own.body,
     };
+}
+
+/**
+ * The options of a client derived from `base` with `extra` on top: what `extra` sets wins (an `undefined` value sets
+ * nothing), headers merge case-insensitively with `extra` winning, `retry` merges field by field when both are
+ * objects, and a `userAgent` or `user-agent` header in `extra` replaces whichever of the two `base` had. The
+ * constructor validates the result as it validates any options.
+ * @throws {TypeError} If `extra` is not a plain object.
+ */
+export function mergeClientOptions(base: UltraTonClientOptions, extra: unknown): UltraTonClientOptions {
+    const own = ownOptions(extra as object) as Record<string, unknown>;
+    const merged: Record<string, unknown> = { ...base };
+    for (const key of Object.keys(own)) {
+        const value = own[key];
+        if (value === undefined) continue;
+        if (key === 'headers' && isPlainObject(value) && isPlainObject(merged.headers)) {
+            const lower: Record<string, unknown> = {};
+            for (const name of Object.keys(merged.headers)) lower[name.toLowerCase()] = merged.headers[name];
+            merged.headers = mergeHeaders(lower as ClientDefaults['headers'], value);
+        } else if (key === 'retry' && isPlainObject(value) && isPlainObject(merged.retry)) {
+            merged.retry = { ...merged.retry, ...value };
+        } else {
+            merged[key] = value;
+        }
+    }
+    if (own.userAgent !== undefined && isPlainObject(merged.headers)) {
+        // A copy: without an extra `headers` this is still the base's own object, which must stay as it was.
+        const headers: Record<string, unknown> = { ...merged.headers };
+        for (const name of Object.keys(headers)) if (name.toLowerCase() === 'user-agent') delete headers[name];
+        merged.headers = headers;
+    }
+    if (isPlainObject(own.headers) && Object.keys(own.headers).some(name => name.toLowerCase() === 'user-agent')) delete merged.userAgent;
+    return merged as UltraTonClientOptions;
 }
 
 function mergeHeaders(defaults: ClientDefaults['headers'], own: unknown): ResolvedRequestOptions['headers'] {

@@ -6,11 +6,11 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
-import { kSessionManager, kTransport } from './internal.ts';
+import { kSessionManager, kSharedEngine, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
@@ -22,7 +22,25 @@ import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOpt
 import type { UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
+/** A copy of `value` with its arrays and plain objects copied down to `depth` levels; anything else (a Buffer, a function) as is. */
+function snapshot(value: unknown, depth: number): unknown {
+    if (depth === 0 || typeof value !== 'object' || value === null) return value;
+    if (Array.isArray(value)) return value.map(item => snapshot(item, depth - 1));
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) copy[key] = snapshot((value as Record<string, unknown>)[key], depth - 1);
+    return copy;
+}
+
+/** An engine and the number of clients using it: the last one to close closes the engine. */
+interface SharedEngine {
+    readonly engine: Http1Engine | Http2Engine;
+    refs: number;
+}
+
 interface InternalClientOptions extends UltraTonClientOptions {
+    readonly [kSharedEngine]?: SharedEngine;
     readonly [kTransport]?: typeof https.request | typeof http.request;
     readonly [kSessionManager]?: Http2SessionManager;
 }
@@ -121,10 +139,17 @@ function resolveAgainstBase(path: unknown, base: URL): string {
 /**
  * The UltraTon client. Configure it once; every request is validated, merged with the client's defaults and sent over
  * HTTP/1.1 or, with `http2: true`, HTTP/2. Each client owns its connection pools: two clients never share a socket or a
- * session, so a permissive `permitReservedIps` or a custom `tls` never reaches another client. Call `close()` when done.
+ * session, so a permissive `permitReservedIps` or a custom `tls` never reaches another client. The one exception is a
+ * variant made with `extend()`, which shares the pools of the client it came from; inside them, sockets are still kept
+ * apart per `permitReservedIps` policy, and a variant with its own `tls`, `proxy` or `http2` gets pools of its own.
+ * Call `close()` when done.
  */
 export class UltraTonClient {
     readonly #engine: Http1Engine | Http2Engine;
+    /** The engine and who else uses it (a variant from `extend()`, or the client it came from). */
+    readonly #shared: SharedEngine;
+    /** The constructor options, string keys only (the seams are never inherited): what `extend()` builds on. */
+    readonly #options: UltraTonClientOptions;
     readonly #defaults: ClientDefaults;
     readonly #baseUrl?: URL;
     /** With `proxy.resolve: 'proxy'` (or a `socks5h:` URL) names are resolved by the proxy, so explain() has no addresses to judge. */
@@ -150,15 +175,46 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
         this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
+        // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out, and the copy goes two
+        // levels down so that a caller mutating their arrays or objects later (the permitReservedIps list, headers,
+        // tls material) changes neither this client nor a variant made from it: the policy a variant gets is the one
+        // this client was built with.
+        this.#options = snapshot(options ?? {}, 2) as UltraTonClientOptions;
 
         // The seams are read only once the options validated as an object, and only as own properties.
         const internal = (options ?? {}) as InternalClientOptions;
-        const own = <K extends typeof kTransport | typeof kSessionManager>(key: K) =>
+        const own = <K extends typeof kTransport | typeof kSessionManager | typeof kSharedEngine>(key: K) =>
             Object.hasOwn(internal, key) ? internal[key] : undefined;
-        // An injected session manager (test seam) brings its own TLS and proxy settings; `proxy` applies to the default one.
-        this.#engine = resolved.http2
-            ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy))
-            : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy);
+        const shared = own(kSharedEngine);
+        if (shared) {
+            shared.refs++;
+            this.#shared = shared;
+        } else {
+            // An injected session manager (test seam) brings its own TLS and proxy settings; `proxy` applies to the default one.
+            const engine = resolved.http2
+                ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy))
+                : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy);
+            this.#shared = { engine, refs: 1 };
+        }
+        this.#engine = this.#shared.engine;
+    }
+
+    /**
+     * A new client with this client's options and `options` on top: what `options` sets wins, headers merge
+     * case-insensitively (`options` wins), `retry` merges field by field when both are objects, and a `userAgent` or
+     * `user-agent` header here replaces whichever this client had. The variant shares this client's connection pools
+     * unless `options` sets `http2`, `tls` or `proxy`; pools are kept apart per `permitReservedIps` policy either way,
+     * so a variant never takes a socket judged under another policy. Closing either client leaves the other working;
+     * the pools close with the last one.
+     * @throws {SecureHttpError} If this client is closed.
+     * @throws {TypeError} As the constructor: an unknown or invalid option.
+     */
+    public extend(options?: UltraTonClientOptions): UltraTonClient {
+        if (this.#closed) throw clientClosed();
+        const merged = mergeClientOptions(this.#options, options ?? {});
+        const extra = options as Record<string, unknown> | undefined;
+        const ownEngine = ['http2', 'tls', 'proxy'].some(key => extra !== undefined && Object.hasOwn(extra, key) && extra[key] !== undefined);
+        return new UltraTonClient(ownEngine ? merged : { ...merged, [kSharedEngine]: this.#shared } as UltraTonClientOptions);
     }
 
     /**
@@ -325,13 +381,14 @@ export class UltraTonClient {
     }
 
     /**
-     * Destroys every pooled socket and session of this client; requests still in flight on them fail. Any later
-     * request rejects with `SecureHttpError('UltraTon: Client is closed.')`. Calling it again does nothing.
+     * Closes this client: any later request rejects with `SecureHttpError('UltraTon: Client is closed.')`. Its pooled
+     * sockets and sessions are destroyed with it (requests still in flight on them fail), unless a client made with
+     * `extend()` still shares them: then they close with the last of those clients. Calling it again does nothing.
      */
     public async close(): Promise<void> {
         if (this.#closed) return;
         this.#closed = true;
-        this.#engine.close();
+        if (--this.#shared.refs === 0) this.#engine.close();
     }
 
     /** Closes the client, as `close()` does: lets `await using client = new UltraTonClient()` close it when the block ends. */

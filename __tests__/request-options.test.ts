@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { buildSafeRequestOptions } from '../src/helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientOptions } from '../src/helpers/request-options.ts';
 
 describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
 
@@ -150,4 +150,38 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
         });
     });
 
+});
+
+describe('mergeClientOptions', () => {
+    const lower = (headers: Record<string, unknown>) => Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+
+    it('what extra sets wins, the rest is kept; an undefined value in extra does not erase the base', () => {
+        assert.deepStrictEqual(mergeClientOptions({ timeoutMs: 1, maxBodySize: 2 }, { timeoutMs: 3 }), { timeoutMs: 3, maxBodySize: 2 });
+        assert.deepStrictEqual(mergeClientOptions({ timeoutMs: 1 }, { timeoutMs: undefined }), { timeoutMs: 1 });
+    });
+
+    it('headers merge case-insensitively, extra wins', () => {
+        const merged = mergeClientOptions({ headers: { A: '1', b: '1' } }, { headers: { a: '2', c: '3' } });
+        assert.deepStrictEqual(lower(merged.headers as Record<string, unknown>), { a: '2', b: '1', c: '3' });
+    });
+
+    it('retry merges field by field when both are objects, else extra wins', () => {
+        assert.deepStrictEqual(mergeClientOptions({ retry: { limit: 2, statusCodes: [503] } }, { retry: { limit: 1 } }).retry, { limit: 1, statusCodes: [503] });
+        assert.deepStrictEqual(mergeClientOptions({ retry: 3 }, { retry: { limit: 1 } }).retry, { limit: 1 });
+        assert.strictEqual(mergeClientOptions({ retry: { limit: 1 } }, { retry: 0 }).retry, 0);
+    });
+
+    it('userAgent in extra drops the base user-agent header, and the other way round', () => {
+        const ua = mergeClientOptions({ headers: { 'User-Agent': 'x' } }, { userAgent: 'y' });
+        assert.strictEqual(ua.userAgent, 'y');
+        assert.deepStrictEqual(Object.keys(ua.headers ?? {}), []);
+        const header = mergeClientOptions({ userAgent: 'x' }, { headers: { 'user-agent': 'y' } });
+        assert.strictEqual(header.userAgent, undefined);
+        assert.strictEqual((header.headers as Record<string, string>)['user-agent'], 'y');
+    });
+
+    it('extra must be a plain object', () => {
+        assert.throws(() => mergeClientOptions({}, 'x'), TypeError);
+        assert.throws(() => mergeClientOptions({}, new Map()), TypeError);
+    });
 });
