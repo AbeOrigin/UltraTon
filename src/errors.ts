@@ -1,9 +1,12 @@
+import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+
 /** Every code UltraTon raises its own errors with. Internal: `UltraTonErrorCode` is built from it, and a test keeps it equal to what `src` raises. */
 export const ERROR_CODES = [
     'ERR_ULTRATON_AGENT_KEEP_ALIVE',
     'ERR_ULTRATON_AGENT_PROXY',
     'ERR_ULTRATON_CONTENT_ENCODING',
     'ERR_ULTRATON_DOWNGRADE',
+    'ERR_ULTRATON_HTTP_STATUS',
     'ERR_ULTRATON_MAX_PAGES',
     'ERR_ULTRATON_NON_CANONICAL_IP',
     'ERR_ULTRATON_PAGE_OUT_OF_SCOPE',
@@ -94,9 +97,25 @@ export const requestBodyLength = (length: number) =>
 export class UltraTonParseError extends SecureHttpError {}
 /** The server redirected more times than `maxRedirects` allows. */
 export class UltraTonRedirectError extends SecureHttpError {}
+/**
+ * A response whose status the caller asked to be 2xx with `assertOk()`. `code` is `ERR_ULTRATON_HTTP_STATUS`; the
+ * message carries the status only, never the body.
+ */
+export class UltraTonHttpError extends SecureHttpError {
+    /** The status that was not 2xx. */
+    readonly statusCode: number;
+    /** The response, non-enumerable: logging the error never dumps its body. A streamed one is already cancelled. */
+    declare readonly response: UltraTonResponse | UltraTonStreamResponse;
+
+    constructor(statusCode: number, response: UltraTonResponse | UltraTonStreamResponse) {
+        super(`UltraTon: HTTP ${statusCode}.`, { code: 'ERR_ULTRATON_HTTP_STATUS' });
+        this.statusCode = statusCode;
+        Object.defineProperty(this, 'response', { value: response, enumerable: false });
+    }
+}
 
 /** The `name` of every error class above: what isUltraTonError recognizes an error by. */
-const ERROR_NAMES = new Set(['SecureHttpError', 'UltraTonNetworkError', 'UltraTonNetworkTimeoutError', 'UltraTonMemoryError', 'UltraTonParseError', 'UltraTonRedirectError']);
+const ERROR_NAMES = new Set(['SecureHttpError', 'UltraTonNetworkError', 'UltraTonNetworkTimeoutError', 'UltraTonMemoryError', 'UltraTonParseError', 'UltraTonRedirectError', 'UltraTonHttpError']);
 
 /**
  * Whether `err` is an error UltraTon raised, optionally one with the given `code`. Judged by shape (`name` and `code`),

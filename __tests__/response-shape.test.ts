@@ -219,3 +219,38 @@ describe('response headers named __proto__ are kept as data', () => {
         }
     });
 });
+
+describe('a UTF-8 BOM at the start of the body', () => {
+    const BOM = '﻿';
+    const response = (text: string) => createResponse(200, {}, Buffer.from(text));
+
+    it('text() and json() skip a leading BOM, as fetch does; data keeps it', () => {
+        const res = response(`${BOM}{"a":1}`);
+        assert.deepStrictEqual(res.json(), { a: 1 });
+        assert.strictEqual(res.text(), '{"a":1}');
+        assert.strictEqual(res.data.length, 10);
+        assert.deepStrictEqual(res.data.subarray(0, 3), Buffer.from([0xef, 0xbb, 0xbf]));
+    });
+
+    it('a BOM elsewhere is kept', () => {
+        assert.strictEqual(response(`a${BOM}b`).text(), `a${BOM}b`);
+    });
+
+    it('a body that is only a BOM reads as empty', () => {
+        const res = response(BOM);
+        assert.strictEqual(res.text(), '');
+        assert.deepStrictEqual(res.json(), {});
+    });
+
+    it('a BOM before invalid JSON still fails as UltraTonParseError', () => {
+        assert.throws(() => response(`${BOM}{nope`).json(), UltraTonParseError);
+    });
+
+    it('json() parses on every call', () => {
+        const res = response(`${BOM}{"a":1}`);
+        const first = res.json();
+        const second = res.json();
+        assert.deepStrictEqual(first, second);
+        assert.notStrictEqual(first, second);
+    });
+});

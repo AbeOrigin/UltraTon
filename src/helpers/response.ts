@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Buffer } from "node:buffer";
-import { UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
+import { UltraTonHttpError, UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
 import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 
 export const secureReviver = (key: string, value: any) => {
@@ -50,7 +50,12 @@ export function createResponse<T = unknown>(
     else headers[key] = rawHeaders[key];
   }
 
-  return {
+  // A leading byte order mark is not content, as fetch reads it; `data` keeps the raw bytes.
+  const text = (): string => {
+    const decoded = data.toString("utf-8");
+    return decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded;
+  };
+  const response: UltraTonResponse<T> = {
     statusCode,
     ok: statusCode >= 200 && statusCode < 300,
     headers,
@@ -58,17 +63,21 @@ export function createResponse<T = unknown>(
     redirected,
     data,
     json<R = T>(): R {
-      if (data.length === 0) return {} as R;
+      const payload = text();
+      if (payload === "") return {} as R;
       try {
-        return JSON.parse(data.toString("utf-8"), secureReviver) as R;
+        return JSON.parse(payload, secureReviver) as R;
       } catch (cause: unknown) {
         throw new UltraTonParseError("UltraTon: Failed to parse JSON response payload.", { cause });
       }
     },
-    text(): string {
-      return data.toString("utf-8");
+    text,
+    assertOk(): UltraTonResponse<T> {
+      if (response.ok) return response;
+      throw new UltraTonHttpError(statusCode, response);
     },
   };
+  return response;
 }
 
 /** The stream counterpart of createResponse: same status and header rules, the body left to the caller. */
@@ -80,5 +89,19 @@ export function createStreamResponse(
   redirected: boolean,
 ): UltraTonStreamResponse {
   const { headers } = createResponse(statusCode, rawHeaders, Buffer.alloc(0));
-  return { statusCode, ok: statusCode >= 200 && statusCode < 300, headers, url, redirected, body };
+  const response: UltraTonStreamResponse = {
+    statusCode,
+    ok: statusCode >= 200 && statusCode < 300,
+    headers,
+    url,
+    redirected,
+    body,
+    assertOk(): UltraTonStreamResponse {
+      if (response.ok) return response;
+      // Nobody will read a body the caller refused: cancel it so the connection is not held (its failure is irrelevant).
+      void body.cancel().catch(() => {});
+      throw new UltraTonHttpError(statusCode, response);
+    },
+  };
+  return response;
 }
