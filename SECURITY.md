@@ -61,3 +61,11 @@ Releases are built and staged by GitHub Actions with npm provenance, and only re
 ```bash
 npm audit signatures
 ```
+
+Each GitHub release also carries the packed tarball and a signed build-provenance attestation (Sigstore, keyless, tied to the `publish.yml` workflow of this repository), attached as `ultraton-<version>.tgz` and `ultraton-<version>.tgz.sigstore.json`. Verify an asset against this repository with the GitHub CLI:
+
+```bash
+gh attestation verify ultraton-<version>.tgz --repo AbeOrigin/UltraTon
+```
+
+Offline, pass the bundle as well: `--bundle ultraton-<version>.tgz.sigstore.json`.

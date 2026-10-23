@@ -1,0 +1,44 @@
+# Soak test (scripts/soak.ts): thousands of hostile and flaky server behaviours in a row on loopback (both engines,
+# directly and through a CONNECT proxy), then a check that memory, sockets and HTTP/2 sessions are back where they
+# started. The unit tests prove each behaviour once; this is what catches a slow leak. It loads the machine for up to
+# an hour, so it runs here and never on contributors' machines (the script refuses outside CI).
+name: Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Length of the request loop, in minutes (20 to 60)'
+        default: '20'
+        required: true
+  schedule:
+    - cron: '53 3 * * 0'
+
+permissions:
+  contents: read
+
+jobs:
+  soak:
+    name: Soak (Node 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 24.x
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci --ignore-scripts
+
+    # The summary (requests per operation, memory before and after, anything left open) lands on the run's page.
+    - name: Run the soak loop
+      run: node --expose-gc --import ./__tests__/fixtures/loopback-only.ts scripts/soak.ts
+      env:
+        SOAK_MINUTES: ${{ inputs.minutes || '20' }}

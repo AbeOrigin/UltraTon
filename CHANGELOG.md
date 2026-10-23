@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A weekly soak test in CI.** `scripts/soak.ts` (workflow `soak.yml`, also on demand with a chosen length) runs 20 to 60 minutes of hostile and flaky server behaviour on loopback, on HTTP/1.1 and HTTP/2, directly and through a CONNECT proxy: redirects across origins, 503s with retries, dropped streams, aborts, idle timeouts, body-size overruns on the wire and after decompression, uploads and cancelled streams. It fails if RSS or heap end above the warm-up baseline by more than a margin, or if an HTTP/2 session, a socket or a handle is still open after `close()`.
+- **Signed build provenance on every GitHub release.** `publish.yml` attests the packed tarball with Sigstore (`actions/attest-build-provenance`) and attaches `ultraton-<version>.tgz` and its `.sigstore.json` bundle to the release, so OpenSSF Scorecard's Signed-Releases check no longer scores -1. SECURITY.md shows the `gh attestation verify` command.
+
 ## [2.6.0] - 2026-10-23
 
 Closes the last of Node's October 2026 security issues that SECURITY.md still listed as unmitigated: on a Node release without the keep-alive fix (CVE-2026-105481), HTTP/1.1 sockets are no longer reused, so a server cannot slip a response into the next request. Nothing changes on 22.23.4, 24.22.1, 26.12.1 or later; on an earlier release each HTTP/1.1 request opens its own connection. Upgrade Node too: SECURITY.md lists the releases.

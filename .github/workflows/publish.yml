@@ -48,3 +48,48 @@ jobs:
     - run: npm stage publish --ignore-scripts --provenance --access public --tag "$([ "$PRERELEASE" = true ] && echo next || echo latest)"
       env:
         PRERELEASE: ${{ github.event.release.prerelease }}
+
+  # Signed build provenance for the GitHub release. npm provenance (above) covers what npm serves, but OpenSSF Scorecard's
+  # Signed-Releases check only looks at the assets of the GitHub release, so without one here it scores -1. This job packs
+  # the same tarball again, attests it (Sigstore, keyless, through the workflow's OIDC identity) and attaches the tarball
+  # and its Sigstore bundle to the release.
+  # Anyone can verify an asset against this repository and workflow:
+  #   gh attestation verify ultraton-<version>.tgz --repo AbeOrigin/UltraTon
+  # Permissions stay on this job: `contents: write` to upload the two assets, `id-token` and `attestations` for Sigstore.
+  attest:
+    needs: stage
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: 24.x
+
+    - run: npm ci --ignore-scripts
+
+    # prepack builds a clean dist, the same steps the stage job ran; the asset attested and attached is this tarball.
+    - run: npm pack --ignore-scripts=false
+
+    - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+      id: attest
+      with:
+        subject-path: ultraton-*.tgz
+
+    # The bundle keeps its `.sigstore.json` suffix: it is what Scorecard looks for and what `gh attestation verify
+    # --bundle` reads offline.
+    - name: Attach the tarball and its Sigstore bundle to the release
+      run: |
+        tarball=$(ls ultraton-*.tgz)
+        cp "$BUNDLE" "$tarball.sigstore.json"
+        gh release upload "$GITHUB_REF_NAME" "$tarball" "$tarball.sigstore.json" --repo "$GITHUB_REPOSITORY"
+      env:
+        BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        GH_TOKEN: ${{ github.token }}
