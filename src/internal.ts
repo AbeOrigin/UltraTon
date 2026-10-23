@@ -12,3 +12,9 @@ export const kTransport: unique symbol = Symbol('ultraton.transport');
  * the pool timings (session idle timeout, maximum lifespan) through the manager's `SessionTimings` constructor argument.
  */
 export const kSessionManager: unique symbol = Symbol('ultraton.sessionManager');
+
+/**
+ * The engine (and its connection pools) a client made with `extend()` shares with the client it was derived from,
+ * with the count of clients using it. Set by `extend()` only; never by a caller.
+ */
+export const kSharedEngine: unique symbol = Symbol('ultraton.sharedEngine');
