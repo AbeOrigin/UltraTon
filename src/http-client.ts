@@ -332,6 +332,11 @@ export class UltraTonClient {
         this.#engine.close();
     }
 
+    /** Closes the client, as `close()` does: lets `await using client = new UltraTonClient()` close it when the block ends. */
+    async [Symbol.asyncDispose](): Promise<void> {
+        await this.close();
+    }
+
     async #request<T>(method: string, url: string, options: unknown, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         try {
             return await this.#send<T>(method, url, options, stream);

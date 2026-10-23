@@ -37,10 +37,11 @@ if (res.ok) {
   const user = res.json<{ id: number; name: string }>();
   console.log(user.name);
 }
+const name = (await api.get('users/8')).assertOk().json<{ name: string }>().name; // throws UltraTonHttpError on a non-2xx
 
 await api.get('users', { query: { page: 2, tags: ['a', 'b'] } }); // users?page=2&tags=a&tags=b
 await api.post('users', { json: { name: 'Ada' } });
-await api.close(); // when the client is no longer needed
+await api.close(); // when the client is no longer needed; or `await using api = new UltraTonClient(...)` (Node 24+, TypeScript 5.2+) and it closes when the block ends
 ```
 
 - Create **one client and reuse it**. Each client has its own connection pool.
@@ -159,8 +160,9 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `url` | `string` | The final URL, after any redirect that was followed. |
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
-| `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. |
-| `text()` | `string` | Decodes the body as UTF-8. |
+| `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |
+| `text()` | `string` | Decodes the body as UTF-8. A leading BOM is skipped, as with `fetch`; `data` keeps it. |
+| `assertOk()` | the response | Returns the response when `ok`, otherwise throws `UltraTonHttpError` (`statusCode`, `response`). On `stream()` it cancels the body first. A redirect that was not followed is not `ok`. |
 
 ## Errors
 
@@ -185,6 +187,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `UltraTonMemoryError` | The request body exceeded `maxRequestBodySize` | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` |
 | `SecureHttpError` | A streamed request body yielded more or fewer bytes than its `content-length` | `ERR_ULTRATON_REQUEST_BODY_LENGTH` |
 | `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
+| `UltraTonHttpError` | `assertOk()` on a non-2xx response. `statusCode` and `response` are on the error; the message carries the status only. | `ERR_ULTRATON_HTTP_STATUS` |
 | `SecureHttpError` | `paginate()`: a next page on another origin, or outside `baseUrl` | `ERR_ULTRATON_PAGE_OUT_OF_SCOPE` |
 | `SecureHttpError` | `paginate()`: a next page is left after `maxPages` | `ERR_ULTRATON_MAX_PAGES` |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
@@ -467,7 +470,7 @@ await fetch(url, { agent: (u: URL) => (u.protocol === 'http:' ? agents.http : ag
 // Node's own http.request / https.request
 https.get(url, { agent: agents.https }, onResponse);
 
-// when done
+// when done (or `using agents = createSecureAgents(...)` on Node 24+ / TypeScript 5.2+, and they are destroyed when the block ends)
 agents.http.destroy();
 agents.https.destroy();
 ```

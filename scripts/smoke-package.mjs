@@ -15,6 +15,7 @@ const require = createRequire(import.meta.url);
 const VALUES = [
   'SecureHttpError',
   'UltraTonClient',
+  'UltraTonHttpError',
   'UltraTonMemoryError',
   'UltraTonNetworkError',
   'UltraTonNetworkTimeoutError',

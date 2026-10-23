@@ -30,6 +30,8 @@ export interface UltraTonSecureAgents {
     readonly http: http.Agent;
     /** For `https:` URLs, with TLS always verified. */
     readonly https: https.Agent;
+    /** Destroys both agents: lets `using agents = createSecureAgents()` free their sockets when the block ends. */
+    [Symbol.dispose](): void;
 }
 
 type Connect = (options: any) => Duplex;
@@ -158,6 +160,10 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
         // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
         http: new SecureHttpAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
         https: new SecureHttpsAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...tlsMaterial }),
+        [Symbol.dispose](): void {
+            agents.http.destroy();
+            agents.https.destroy();
+        },
     };
     if (!KEEP_ALIVE) {
         refuseSocketReuse(agents.http);

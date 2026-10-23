@@ -28,8 +28,14 @@ export interface UltraTonResponse<T = unknown> {
      */
     json<R = T>(): R;
 
-    /** Decodes `data` as UTF-8. */
+    /** Decodes `data` as UTF-8. A leading byte order mark is skipped, as `fetch` does; `data` keeps it. */
     text(): string;
+    /**
+     * The response itself when `ok`; otherwise throws `UltraTonHttpError` (`ERR_ULTRATON_HTTP_STATUS`, with
+     * `statusCode` and the response), so `(await client.get(url)).assertOk().json()` reads like a fetch that throws.
+     * A redirect that was not followed is not `ok` either.
+     */
+    assertOk(): UltraTonResponse<T>;
 }
 
 /** A response whose body is read as a stream: what `client.stream()` resolves with once the headers arrive. */
@@ -50,6 +56,11 @@ export interface UltraTonStreamResponse {
      * corrupt, idle past `socketTimeoutMs` while being read, aborted, or when the client is closed.
      */
     readonly body: ReadableStream<Uint8Array>;
+    /**
+     * The response itself when `ok`; otherwise cancels `body` (so the connection is not held by a body nobody reads)
+     * and throws `UltraTonHttpError` (`ERR_ULTRATON_HTTP_STATUS`). A redirect that was not followed is not `ok` either.
+     */
+    assertOk(): UltraTonStreamResponse;
 }
 
 /** One address a host resolved to, as the client's policy judges it. See {@link UltraTonExplanation}. */

@@ -18,6 +18,7 @@ export {
   UltraTonMemoryError,
   UltraTonParseError,
   UltraTonRedirectError,
+  UltraTonHttpError,
   isUltraTonError,
 } from './errors.ts';
 export type { UltraTonErrorCode } from './errors.ts';
