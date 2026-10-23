@@ -1,11 +1,10 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
 import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
-import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
+import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
 import { discardBody, isStreamBody, StreamedBody } from './request-body.ts';
-const INT32_MAX = 2147483647;
 
 /**
  * @throws {TypeError} Synchronously throws if the value is defined but breaches the expected type.

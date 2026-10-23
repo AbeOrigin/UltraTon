@@ -9,7 +9,7 @@ import { isLoopbackHost } from './helpers/url-parser.ts';
 import { KEEP_ALIVE } from './helpers/keep-alive.ts';
 import { pinnedLookup, resolveAndPinAll, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import type { TlsMaterial } from './types/request-options.types.ts';
-import { TLS_MIN_VERSION } from './constants.ts';
+import { IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from './constants.ts';
 
 /** The options of {@link createSecureAgents}. All optional; the defaults are the client's. */
 export interface UltraTonSecureAgentOptions {
@@ -31,9 +31,6 @@ export interface UltraTonSecureAgents {
     /** For `https:` URLs, with TLS always verified. */
     readonly https: https.Agent;
 }
-
-// Idle pooled sockets are reaped after 5s, as in the client's own agents.
-const IDLE_SOCKET_TIMEOUT_MS = 5000;
 
 type Connect = (options: any) => Duplex;
 type Callback = (err: Error | null, socket: Duplex) => void;

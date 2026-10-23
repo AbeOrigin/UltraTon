@@ -34,6 +34,19 @@ export class UltraTonNetworkTimeoutError extends UltraTonNetworkError {}
 export const absoluteTimeout = (timeoutMs: number) =>
     new UltraTonNetworkTimeoutError(`UltraTon: Absolute execution time of ${timeoutMs}ms exceeded.`, { code: 'ERR_ULTRATON_TIMEOUT' });
 /**
+ * What is left of the `timeoutMs` budget shared by every hop and step of a request, or `timeoutMs` itself when it is
+ * not positive (0 means no timeout). Throws once the budget is spent: a non-positive value would silently disable the
+ * timer it is passed to.
+ */
+export function remainingBudget(timeoutMs: number, startedAt: number): number {
+    if (timeoutMs <= 0) return timeoutMs;
+    const remaining = timeoutMs - (Date.now() - startedAt);
+    if (remaining <= 0) throw absoluteTimeout(timeoutMs);
+    return remaining;
+}
+/** The request (or a step of it) ran into `close()`. */
+export const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
+/**
  * HTTP/2: the server never processed the request, so sending it again is safe (RFC 9113 8.7). Either it reset the
  * stream with REFUSED_STREAM before answering, or a GOAWAY left the stream above its last processed one.
  */

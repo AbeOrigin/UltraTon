@@ -115,6 +115,25 @@ export const isStreamBody = (body: unknown): body is AsyncIterable<unknown> =>
     typeof body === 'object' && body !== null && typeof (body as Record<symbol, unknown>)[Symbol.asyncIterator] === 'function'
     && !(body instanceof Blob) && !(body instanceof FormData) && !(body instanceof URLSearchParams);
 
+/**
+ * Sets `content-length` and `transfer-encoding` as the body dictates, whatever the caller put there: a buffered body
+ * goes out with its exact length; a streamed one keeps the length it was given (StreamedBody holds it to it), else goes
+ * chunked where the protocol frames that way (HTTP/1.1; HTTP/2 has no transfer-encoding); without a body a
+ * content-length would promise bytes that never come. Never both headers at once: a content-length next to chunked is
+ * a smuggling vector. Mutates `headers`.
+ */
+export function frameBody(headers: Record<string, string | string[] | undefined>, body: Buffer | StreamedBody | undefined, chunked: boolean): void {
+    delete headers['transfer-encoding'];
+    if (body === undefined) {
+        delete headers['content-length'];
+    } else if (body instanceof StreamedBody && body.length === undefined) {
+        delete headers['content-length'];
+        if (chunked) headers['transfer-encoding'] = 'chunked';
+    } else {
+        headers['content-length'] = String(body.length);
+    }
+}
+
 /** Releases a caller's stream body that will never be sent (the request failed before it got to it). */
 export function discardBody(body: unknown): void {
     if (body instanceof StreamedBody) body.discard();

@@ -29,6 +29,10 @@ export const H2_CONNECTION_WINDOW = 16 * 1024 * 1024;
 export const TLS_MIN_VERSION = 'TLSv1.2';
 
 export const IDLE_TIMEOUT = 10000;
+/** Idle pooled HTTP/1.1 sockets are reaped after this, as with Node's global agent, in the client's agents and the secure ones. */
+export const IDLE_SOCKET_TIMEOUT_MS = 5000;
+/** The largest delay `setTimeout` takes: the ceiling of every millisecond option. */
+export const INT32_MAX = 2147483647;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;
 
 /** The package version, sent in the default `user-agent`. A test keeps it equal to `package.json` `version`. */
