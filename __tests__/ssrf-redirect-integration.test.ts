@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { kTransport } from '../src/internal.ts';
 import { SecureHttpError, UltraTonNetworkError } from '../src/errors.ts';
+import { KEEP_ALIVE } from '../src/helpers/keep-alive.ts';
 
 // Real sockets on purpose: Node skips the custom `lookup` for IP literals, so mocks cannot catch this class of bug.
 describe('UltraTonClient - IP literal SSRF and auth redirect leaks (real sockets)', () => {
@@ -264,7 +265,9 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
 
         await client.get(url, { permitReservedIps: ['127.0.0.0/8', 'Localhost'] });
         await client.get(url, { permitReservedIps: ['localhost', '127.0.0.0/8'] });
-        assert.equal(connections(), 1);
+        // One pool per policy key, so a safe Node reuses the socket (1 connection). With keep-alive off (CVE-2026-105481,
+        // see KEEP_ALIVE) there is no reuse to observe, so each request opens its own.
+        assert.equal(connections(), KEEP_ALIVE ? 1 : 2);
     });
 
     // Parity with Node's global agent (keepAlive, 5s idle timeout): without the timeout an idle pooled socket lives until
@@ -292,7 +295,8 @@ describe('UltraTonClient - HTTP/1 keep-alive pools are isolated per reserved-IP 
         assert.ok(httpsAgent instanceof https.Agent, 'https URL gets an https.Agent');
         for (const agent of [httpAgent, httpsAgent]) {
             const { keepAlive, timeout } = (agent as unknown as { options: { keepAlive?: boolean, timeout?: number } }).options;
-            assert.equal(keepAlive, true);
+            // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481, see KEEP_ALIVE).
+            assert.equal(keepAlive, KEEP_ALIVE);
             assert.equal(timeout, 5000);
         }
     });

@@ -13,6 +13,7 @@ import type { AddressInfo, Socket } from 'node:net';
 import { UltraTonClient } from '../src/http-client.ts';
 import { SecureHttpError, UltraTonNetworkError, UltraTonNetworkTimeoutError } from '../src/errors.ts';
 import { VERSION } from '../src/constants.ts';
+import { KEEP_ALIVE } from '../src/helpers/keep-alive.ts';
 
 const fixture = (name: string) => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 const CA = fixture('localhost-cert.pem');
@@ -147,6 +148,9 @@ describe('VERSION', () => {
 });
 
 for (const [name, http2, start] of engines) {
+    // HTTP/2 always reuses its one session; HTTP/1 pools sockets only on a Node whose keep-alive reuse is safe
+    // (CVE-2026-105481, see KEEP_ALIVE). On an unsafe Node each HTTP/1 request opens and closes its own connection.
+    const pools = http2 || KEEP_ALIVE;
     describe(`UltraTonClient facade over ${name}`, () => {
         it('sends the constructor headers; a request header (any case) overrides them', async (t) => {
             const f = await start(t);
@@ -265,14 +269,14 @@ for (const [name, http2, start] of engines) {
 
             await permissive.get(`${f.base}/1`);
             await permissive.get(`${f.base}/2`);
-            assert.equal(f.accepted(), 1, 'one client reuses its own pooled connection');
+            assert.equal(f.accepted(), pools ? 1 : 2, pools ? 'one client reuses its own pooled connection' : 'keep-alive off: each request opens its own connection');
 
             await strict.get(`${f.base}/3`, { permitReservedIps: true });
-            assert.equal(f.accepted(), 2, 'another client opens its own connection');
+            assert.equal(f.accepted(), pools ? 2 : 3, 'another client opens its own connection');
 
             // The strict client's default policy still applies: the permissive client's pool is not reachable.
             await assert.rejects(strict.get(`${f.base}/4`), SecureHttpError);
-            assert.equal(f.accepted(), 2);
+            assert.equal(f.accepted(), pools ? 2 : 3);
         });
 
         it('close() releases every pooled connection and later requests throw "Client is closed"', async (t) => {
@@ -280,7 +284,9 @@ for (const [name, http2, start] of engines) {
             const client = new UltraTonClient({ http2, permitReservedIps: true });
 
             await client.get(`${f.base}/1`);
-            assert.equal(f.open(), 1);
+            // Pooled: the connection is held open for reuse. Keep-alive off: it closes right after the response.
+            if (pools) assert.equal(f.open(), 1);
+            else await until(() => f.open() === 0);
 
             await client.close();
             await until(() => f.open() === 0);
