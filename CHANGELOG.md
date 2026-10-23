@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- SUPPORT.md states the stability period: from 2.8.0 (2026-10-23) and for at least three months, patch releases only, with the public API snapshot frozen and enforced by CI; the one exception is a security fix that needs a new option. `redirectHeaders: 'safe'` as the default is recorded as a candidate for a later major.
+
 ## [2.8.0] - 2026-10-23
 
 Closes the API surface and debugging work: `maxConcurrency` caps the calls in flight per origin (the wait counts against `timeoutMs`), the client's `headers` may be a function called once per call for values such as `traceparent`, and the diagnostics events carry per-phase `timings` (DNS, connect, TLS, first byte, queue, total, reused connection) that `NODE_DEBUG=ultraton` shows. From an adversarial security audit of 2.7.0 that found no bypass: the secure agents check the certificate against the host the socket goes to, two more reserved ranges, and a prototype fix in `extend()`. No breaking changes; the defaults are the same. This is the last feature release before a period of patches only.
