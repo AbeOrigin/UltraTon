@@ -48,6 +48,16 @@ await api.close(); // when the client is no longer needed; or `await using api =
 - Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`.
 - **A non-2xx response resolves.** Check `res.ok` or `res.statusCode`. The promise only rejects when no complete response arrives, or when a policy or a limit stops the request.
 
+### The first five minutes
+
+Three defaults surprise people on day one. Each one is a decision, and each has a one-line answer:
+
+- **Localhost and private addresses are blocked** (`ERR_ULTRATON_RESERVED_IP`), because a URL from outside must never reach your network. For a local server: `new UltraTonClient({ permitReservedIps: ['127.0.0.1'] })`; for an internal client, list its ranges, or `true`.
+- **Bodies stop at 2 MB** (`UltraTonMemoryError`), because a response must not be able to exhaust the process. Raise `maxBodySize` on the request, or read it with `stream()`.
+- **Redirects come back as responses** (a 3xx with `ok: false`), because every hop is a new target to judge. `maxRedirects: 3` follows them, and `redirectHeaders: 'safe'` keeps your custom headers from following a redirect to another origin.
+
+Not sure why something was blocked? `await client.explain(url)` tells you before connecting (see [Why was this blocked?](#why-was-this-blocked)).
+
 ## Secure defaults
 
 | Protection | Default | How to change it |
@@ -211,6 +221,30 @@ try {
 
 Error messages never contain the IP address or hostname, so they are safe to show to the user who supplied the URL. The original Node error is in `err.cause`, and it does contain them, so do not send `cause` to untrusted sinks.
 
+### Troubleshooting by error code
+
+Every code UltraTon raises, what happened, and what to change. A test keeps this table complete.
+
+| Code | What happened | What to change |
+|---|---|---|
+| `ERR_ULTRATON_RESERVED_IP` | The host is, or resolves to, a private, loopback, link-local or otherwise reserved address that `permitReservedIps` does not allow. | For a local or internal target, allow it in `permitReservedIps` (an IP, a CIDR or the exact hostname). `client.explain(url)` shows the addresses. |
+| `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. Plain http is only for local development. |
+| `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
+| `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
+| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
+| `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |
+| `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` | The request body went past `maxRequestBodySize`. | Raise `maxRequestBodySize`, or send less. |
+| `ERR_ULTRATON_REQUEST_BODY_LENGTH` | A streamed request body sent more or fewer bytes than its `content-length`. | Fix the `content-length` you set, or leave it out and let the body go chunked. |
+| `ERR_ULTRATON_CONTENT_ENCODING` | The response stacked more than two content-encodings. | Nothing on your side; `decompress: false` returns the body as received. |
+| `ERR_ULTRATON_PAGE_OUT_OF_SCOPE` | `paginate()`: a next page on another origin, or outside `baseUrl`. | Pages must stay on the first page's origin (and inside `baseUrl`); fetch the other origin with its own call. |
+| `ERR_ULTRATON_MAX_PAGES` | `paginate()`: a next page was left after `maxPages`. | Raise `maxPages`, or stop iterating earlier. |
+| `ERR_ULTRATON_PROXY` | The proxy refused the tunnel (CONNECT status or SOCKS5 reason) or answered outside its protocol. | Check `proxy.url`, `proxy.auth` and that the proxy allows CONNECT to that IP and port (or set `resolve: 'proxy'` for proxies that filter by hostname). |
+| `ERR_ULTRATON_AGENT_PROXY` | `createSecureAgents()`: the library tried to send a forward-proxy request (an absolute URL in the request line). | With axios, set `proxy: false`; proxies go in UltraTon's own client. |
+| `ERR_ULTRATON_AGENT_KEEP_ALIVE` | `createSecureAgents()`, on a Node release without the keep-alive fix: `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. | Upgrade Node (see SECURITY.md); the agents cannot pool sockets safely before that. |
+| `ERR_ULTRATON_NON_CANONICAL_IP` | `createSecureAgents()`: a host such as `127.1` or `0x7f.0.0.1`. | Write the IP in its canonical dotted form. |
+| `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND` | Node's own network codes: nothing listens there, the connection dropped, the name does not resolve. | The server or the network. `retry` covers the transient ones. |
+| `ERR_TLS_CERT_ALTNAME_INVALID` and other TLS codes | The certificate does not match the host, or is not trusted. | A private CA goes in `tls: { ca }`; verification cannot be turned off. |
+
 ## Recipes
 
 **Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small; every hop is still checked against the SSRF policy. With `redirectHeaders: 'safe'`, a server that redirects cannot carry your custom headers (an `x-api-key`) to another origin:
@@ -220,15 +254,68 @@ const client = new UltraTonClient({ maxRedirects: 3, redirectHeaders: 'safe', ma
 const res = await client.get(untrustedUrl);
 ```
 
-**Call an internal service.** Allow only the ranges you need, never `true`:
+**Deliver a webhook.** POST it, retry only what is safe to retry, never follow redirects, keep the reply small. The code below runs as a test in `__tests__/recipes.test.ts`:
 
 ```ts
-const internal = new UltraTonClient({
-  baseUrl: 'https://billing.internal/',
-  permitReservedIps: ['10.20.0.0/16'],
-  tls: { ca: fs.readFileSync('internal-ca.pem') },
-});
+import { UltraTonClient } from 'ultraton';
+
+/** Deliver a webhook: POST it, retry what is safe to retry, never follow redirects, keep the reply small. */
+async function deliver(client: UltraTonClient, url: string, event: unknown): Promise<void> {
+  const res = await client.post(url, { json: event, retry: { limit: 2, methods: ['POST'] }, maxBodySize: 64 * 1024, timeoutMs: 10_000 });
+  res.assertOk(); // a 4xx/5xx after the retries throws UltraTonHttpError
+}
 ```
+
+- `methods: ['POST']`, because POST is not retried by default: list it only if your receivers are idempotent (webhook receivers are expected to be).
+- `maxBodySize: 64 * 1024`: a webhook reply has no business being large, and a hostile receiver must not make you buffer one.
+- Redirects stay off (the default): a receiver that redirects your event elsewhere is not a receiver you want to follow.
+- A URL that points inside your network rejects with `ERR_ULTRATON_RESERVED_IP` before connecting, whatever the customer typed.
+
+**Preview a link.** Read at most 64 KiB, stop at `</head>`, and cancel the rest so the connection is released:
+
+```ts
+import { UltraTonClient, UltraTonMemoryError } from 'ultraton';
+
+/** The <title> of a page, reading at most 64 KiB of it. */
+async function previewTitle(client: UltraTonClient, url: string): Promise<string | undefined> {
+  const res = await client.stream(url, { maxBodySize: 64 * 1024, timeoutMs: 5_000, maxRedirects: 3, redirectHeaders: 'safe' });
+  if (!res.ok) { await res.body.cancel(); return undefined; }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let html = '';
+  try {
+    while (!html.includes('</head>')) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      html += decoder.decode(value, { stream: true });
+    }
+  } catch (err) {
+    if (!(err instanceof UltraTonMemoryError)) throw err; // past 64 KiB without a </head>: no title, not an error
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return /<title[^>]*>([^<]*)<\/title>/i.exec(html)?.[1].trim();
+}
+```
+
+- `stream()` with `maxBodySize: 64 * 1024`: the limit applies as the body is read, so a page without a `</head>` ends with `UltraTonMemoryError` at 64 KiB, never buffered beyond that.
+- `reader.cancel()` in `finally`: a body nobody reads to the end holds its connection and keeps the process alive.
+- `maxRedirects: 3` with `redirectHeaders: 'safe'`: previews follow a few redirects, and your own headers never follow them to another origin.
+
+**Call an internal service.** Allow only the address or ranges you need, never `true`, and keep redirects off so the service cannot send you to another internal host:
+
+```ts
+/** The client for one internal service: its address only, no redirects, short timeout. */
+function internalClient(baseUrl: string, address: string): UltraTonClient {
+  return new UltraTonClient({ baseUrl, permitReservedIps: [address], maxRedirects: 0, timeoutMs: 2_000 });
+}
+
+const billing = internalClient('https://billing.internal/', '10.20.3.7'); // or a range: permitReservedIps: ['10.20.0.0/16']
+```
+
+- `permitReservedIps: [address]`: only that address resolves; another private address, even from a redirect, rejects with `ERR_ULTRATON_RESERVED_IP`.
+- `baseUrl`: a request path cannot escape it, so `billing.get('invoices/7')` can never become a call on another host.
+- Add `tls: { ca: fs.readFileSync('internal-ca.pem') }` for a private CA; verification itself cannot be turned off.
 
 **Local development against `http://localhost`.** `localhost` usually resolves to both `::1` and `127.0.0.1`, and *every* resolved address must be allowed:
 
@@ -514,6 +601,29 @@ A path that would land outside the base throws as well. That includes encoded an
 - **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. A `File` or `Blob` body is read whole into memory first: pass a stream (`createReadStream`) to upload a large file. Over HTTP/2, a `stream()` body you have not read yet can hold up to 1 MiB (the stream's flow-control window) until you read or cancel it.
 - **HTTP/2 to an IP literal on Node 22.12–22.13.** Node itself sends the IP as SNI there and prints a `DEP0123` warning once. Node 22.14 and later send no SNI for an IP, as UltraTon asks.
 - **Fake-IP DNS setups.** `198.18.0.0/15` is reserved, which affects Clash and sing-box TUN modes. Allow it explicitly if you rely on them.
+
+## Coming from axios, got or fetch
+
+Four defaults change when you migrate, on purpose: **redirects are not followed** (`maxRedirects: 0`), **bodies stop at 2 MB** (`maxBodySize`), **the whole request has 30 s** (`timeoutMs`), and **a non-2xx response resolves** (check `res.ok`, or call `res.assertOk()` to throw). The rest maps like this (axios 1.20, got 16.1, the `fetch` of Node 24):
+
+| Task | axios | got | fetch | UltraTon |
+|---|---|---|---|---|
+| Total timeout | `timeout` | `timeout: { request }` | `signal: AbortSignal.timeout(ms)` | `timeoutMs` |
+| Query string | `params` | `searchParams` | `new URL()` + `searchParams` | `query` |
+| JSON body | `data` | `json` | `body: JSON.stringify()` + header | `json` |
+| Form body | `URLSearchParams` in `data` | `form` | `body: new URLSearchParams()` | `form` |
+| Parse JSON | automatic (`responseType`) | `.json()` | `await res.json()` | `res.json()` (never automatic) |
+| Max response size | `maxContentLength` | — | — | `maxBodySize` |
+| Throw on non-2xx | default (`validateStatus`) | default (`throwHttpErrors`) | — (`res.ok`) | `res.assertOk()` |
+| Redirects | followed (21) | followed (10) | followed (20) | off; `maxRedirects` |
+| Stream the body | `responseType: 'stream'` | `got.stream()` | `res.body` | `stream()` |
+| Retries | plugin | `retry` | — | `retry` (opt-in, idempotent methods only) |
+| Proxy | env vars by default, `proxy` | an agent | `NODE_USE_ENV_PROXY` | `proxy` (never env vars) |
+| Base URL | `baseURL` | `prefixUrl` | — | `baseUrl` (cannot be escaped) |
+| Interceptors / hooks | interceptors | hooks | — | none, on purpose; `diagnostics_channel` to observe |
+| Cookies, HTTP cache | — | yes | — | — (not supported) |
+
+Keep the client you have and add only the SSRF protection: see [Protect the client you already use](#protect-the-client-you-already-use).
 
 ## Migrating from 1.x
 
