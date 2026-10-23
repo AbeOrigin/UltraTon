@@ -117,6 +117,11 @@ function secureConnect(connect: Connect, options: any, callback: Callback, polic
  * (`ERR_ULTRATON_AGENT_PROXY`), since the proxy would pick the target: turn it off (axios: `proxy: false`). Connection
  * failures to an allowed address are Node's own errors and may name that address. Call `destroy()` on both agents
  * when done.
+ *
+ * On a Node.js release without the October 2026 keep-alive fix (before 22.23.4, 24.22.1, 26.12.1), the agents run
+ * with keep-alive off, and setting `keepAlive`, `maxSockets` or `maxTotalSockets` on them throws
+ * (`ERR_ULTRATON_AGENT_KEEP_ALIVE`): each would let a socket reach the next request while it still holds bytes the
+ * server wrote early.
  * @throws {TypeError} On an unknown option or a value of the wrong type, as the client constructor does.
  */
 export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraTonSecureAgents {
@@ -149,9 +154,50 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
         }
     }
 
-    return Object.freeze({
+    const agents = {
         // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
         http: new SecureHttpAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
         https: new SecureHttpsAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...tlsMaterial }),
-    });
+    };
+    if (!KEEP_ALIVE) {
+        refuseSocketReuse(agents.http);
+        refuseSocketReuse(agents.https);
+    }
+    return Object.freeze(agents);
+}
+
+/**
+ * The agent settings that would let a socket be reused, with what each must stay at, on a Node without the keep-alive
+ * fix (CVE-2026-105481). keepAlive pools the socket. A socket limit makes a request wait in the agent's queue, and when
+ * a response ends Node hands its socket straight to that request, before it checks keepAlive; a finite maxSockets also
+ * makes Node ask for keep-alive whatever the agent says. Either way the next request reads whatever the server wrote
+ * after the response.
+ */
+const NO_REUSE = [
+    ['keepAlive', false, "turn 'keepAlive' on"],
+    ['maxSockets', Infinity, "take a 'maxSockets' limit"],
+    ['maxTotalSockets', Infinity, "take a 'maxTotalSockets' limit"],
+] as const;
+
+/**
+ * Pins keepAlive off and the socket limits at Infinity, so no socket is ever handed to a second request: each is closed
+ * after its response. The agents are frozen in their container only, so this is done on each one; setting another
+ * value throws rather than being ignored, and setting the pinned value is accepted.
+ */
+function refuseSocketReuse(agent: http.Agent): void {
+    for (const [key, pinned, action] of NO_REUSE) {
+        // configurable must be explicit: Node's constructor already defined the key, and an omitted attribute keeps its value.
+        Object.defineProperty(agent, key, {
+            configurable: false,
+            enumerable: true,
+            get: () => pinned,
+            set: (value: unknown) => {
+                if (value === pinned) return;
+                throw new SecureHttpError(
+                    `UltraTon: A secure agent cannot ${action} on this Node.js release, which lacks the keep-alive fix (CVE-2026-105481). Upgrade Node.js to 22.23.4, 24.22.1, 26.12.1 or later.`,
+                    { code: 'ERR_ULTRATON_AGENT_KEEP_ALIVE' },
+                );
+            },
+        });
+    }
 }
