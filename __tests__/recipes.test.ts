@@ -89,7 +89,11 @@ describe('deliver a webhook', () => {
 
 describe('preview a link', () => {
     const KiB = 1024;
-    /** A page: the given head, then `tail` bytes in 16 KiB chunks; records how many bytes were written when the client left. */
+    /**
+     * A page: the given head, then `tail` bytes in 16 KiB chunks, one every 5 ms (paced, so the server sees the client
+     * leave before it has written everything: a loopback socket buffer can swallow a whole megabyte at once); records
+     * how many bytes were written when the client left.
+     */
     const page = async (t: TestContext, head: string, tail: number) => {
         const written = { atClose: -1, total: 0 };
         const base = await serve(t, (_req, res) => {
@@ -97,16 +101,16 @@ describe('preview a link', () => {
             res.write(head);
             res.on('close', () => { if (written.atClose < 0) written.atClose = written.total; });
             let sent = 0;
-            const pump = () => {
-                while (sent < tail && !res.destroyed) {
-                    const chunk = Buffer.alloc(Math.min(16 * KiB, tail - sent), 'x');
-                    sent += chunk.length;
-                    written.total = sent;
-                    if (!res.write(chunk)) return void res.once('drain', pump);
-                }
-                if (!res.destroyed) res.end();
+            const tick = () => {
+                if (res.destroyed) return;
+                if (sent >= tail) return void res.end();
+                const chunk = Buffer.alloc(Math.min(16 * KiB, tail - sent), 'x');
+                sent += chunk.length;
+                written.total = sent;
+                res.write(chunk);
+                setTimeout(tick, 5);
             };
-            pump();
+            tick();
         });
         return { base, written };
     };
