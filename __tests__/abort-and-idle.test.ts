@@ -419,3 +419,38 @@ describe('holdSession', () => {
     assert.deepEqual(session.calls, []);
   });
 });
+
+describe('timeoutMs cuts a body that keeps dripping (slowloris on the response)', () => {
+  /** Headers, then one byte every 50 ms and never the end: each byte resets the idle timer, so only timeoutMs can stop it. */
+  const drip = (res: http.ServerResponse | ServerHttp2Stream) => {
+    if ('respond' in res) res.respond({ ':status': 200 }); else res.writeHead(200);
+    const tick = setInterval(() => res.write('x'), 50);
+    res.on('close', () => clearInterval(tick));
+  };
+  for (const engine of ENGINES) {
+    it(`${engine}: get() rejects with ERR_ULTRATON_TIMEOUT when the budget ends and the server sees the request close`, { timeout: 5000 }, async (t) => {
+      let closed = false;
+      const { url, client } = await startServer(t, engine, { respond: (res) => { drip(res); res.on('close', () => { closed = true; }); } });
+      const started = Date.now();
+      await assert.rejects(client.get(url, { timeoutMs: 300, socketTimeoutMs: 0 }), (err: unknown) => {
+        assert.ok(err instanceof UltraTonNetworkTimeoutError);
+        assert.equal((err as { code?: string }).code, 'ERR_ULTRATON_TIMEOUT');
+        return true;
+      });
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed >= 250 && elapsed < 2000, `rejected after ${elapsed}ms`);
+      await new Promise((r) => setTimeout(r, 150));
+      assert.ok(closed, 'the server saw the request close');
+    });
+
+    it(`${engine}: stream() is not cut by timeoutMs once the headers arrived; its body is guarded by the idle timer alone`, { timeout: 5000 }, async (t) => {
+      const { url, client } = await startServer(t, engine, { respond: drip });
+      const response = await client.stream(url, { timeoutMs: 300, socketTimeoutMs: 0 });
+      const reader = response.body.getReader();
+      await new Promise((r) => setTimeout(r, 500));
+      const { done } = await reader.read();
+      assert.equal(done, false, 'the body is still flowing past the budget');
+      await reader.cancel();
+    });
+  }
+});

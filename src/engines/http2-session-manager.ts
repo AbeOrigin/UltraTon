@@ -25,6 +25,7 @@ import { incompleteResponse } from "../helpers/response.ts";
 import { tunnelTo, type ProxyConfig } from "../proxy/tunnel.ts";
 import tls from "node:tls";
 import type { Duplex } from "node:stream";
+import { TLS_MIN_VERSION } from "../constants.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -328,6 +329,7 @@ export class Http2SessionManager {
         // back to the name of the socket it wraps, the proxy's, and accept the proxy's own certificate.
         host: bareHost,
         ...(isIP(bareHost) === 0 ? { servername: bareHost } : {}),
+        minVersion: TLS_MIN_VERSION,
         ALPNProtocols: ["h2"],
       });
     }
@@ -357,7 +359,12 @@ export class Http2SessionManager {
         initialWindowSize: H2_STREAM_WINDOW,
         ...this.#tlsConfig?.settings,
         ...overrideOptions?.settings,
+        // Nothing in UltraTon reads a pushed stream, so a server could park up to maxReservedRemoteStreams (200) of
+        // them, each holding a window of data, outside maxSessionMemory and the idle timer. Refused: a PUSH_PROMISE
+        // is then a protocol error that fails the request. Last, so that no override turns it back on.
+        enablePush: false,
       },
+      minVersion: TLS_MIN_VERSION,
       // The connect URL keeps the name; this is the only way it becomes addresses (see pinnedLookup). Node never
       // calls it for an IP literal, which connects to the literal resolveAndPinAll just judged.
       lookup: pinnedLookup(addresses),

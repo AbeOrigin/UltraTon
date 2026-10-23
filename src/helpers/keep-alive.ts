@@ -1,7 +1,4 @@
-import { atLeastFixed, type FixedReleases } from './node-release.ts';
-
-/** The first release of each Node line that fixes CVE-2026-105481 (a keep-alive socket taking a response written before the request). */
-const KEEP_ALIVE_FIXED: FixedReleases = { 22: [23, 4], 24: [22, 1], 26: [12, 1] };
+import { atLeastFixed, NODE_OCT_2026_FIXES } from './node-release.ts';
 
 /**
  * Whether this Node reuses keep-alive sockets safely. A server that writes a response on an idle pooled socket, before
@@ -14,7 +11,7 @@ const KEEP_ALIVE_FIXED: FixedReleases = { 22: [23, 4], 24: [22, 1], 26: [12, 1] 
  * Lines 23 and 25 are end-of-life and never got the fix; a prerelease may predate it. Upgrade Node to pool again.
  */
 export function hasSafeKeepAlive(version: string = process.versions.node): boolean {
-    return atLeastFixed(KEEP_ALIVE_FIXED, version);
+    return atLeastFixed(NODE_OCT_2026_FIXES, version);
 }
 
 /** The `keepAlive` every HTTP/1.1 agent is built with: off on a Node whose pooled-socket reuse is unsafe (see hasSafeKeepAlive). */
