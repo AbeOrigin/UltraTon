@@ -12,6 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS } from '../constants.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
+import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
 import { isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
 import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
 import { isIP } from 'node:net';
@@ -112,10 +113,11 @@ export class Http1Engine {
         let agents = this.#agentsByPolicy.get(key);
         if (!agents) {
             agents = {
-                http: new http.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS }),
+                // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
+                http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
                 https: this.#proxy
-                    ? new TunnelAgent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }, this.#proxy, this.#closing.signal)
-                    : new https.Agent({ keepAlive: true, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
+                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }, this.#proxy, this.#closing.signal)
+                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
             };
             this.#agentsByPolicy.set(key, agents);
         }

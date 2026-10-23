@@ -159,6 +159,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
 | `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
+| `SecureHttpError` | `createSecureAgents()`, on a Node.js release without the keep-alive fix (see [SECURITY.md](SECURITY.md)): `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. Thrown by the assignment. | `ERR_ULTRATON_AGENT_KEEP_ALIVE` |
 | `SecureHttpError` | A request on a closed client | — |
 | `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |

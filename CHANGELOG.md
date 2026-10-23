@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP/1.1 keep-alive is turned off on Node releases without the keep-alive fix.** Node fixed a keep-alive socket taking a response a server wrote before the next request was sent (CVE-2026-105481) in 22.23.4, 24.22.1 and 26.12.1. Part of Node's fix needs a native binding a library cannot reach, so on any earlier release UltraTon now builds its HTTP/1.1 agents with `keepAlive: false` instead: a socket serves one request and is then closed, so none ever sits idle in a pool to be poisoned. The cost is a new TCP/TLS connection per request on those releases; upgrade Node to pool again. HTTP/2 is unaffected. SECURITY.md lists the minimum releases.
+- **On those releases, the agents of `createSecureAgents()` cannot be switched back to reusing sockets.** Setting `keepAlive` (other than `false`), `maxSockets` or `maxTotalSockets` (other than `Infinity`) on one throws `ERR_ULTRATON_AGENT_KEEP_ALIVE`. `keepAlive` would bring the pool back. With a limit, a request waits in the agent's queue, and when a response ends Node hands it that socket before checking keep-alive, so it could still read bytes the server wrote early; a finite `maxSockets` also makes Node ask for keep-alive whatever the agent says. `UltraTonClient` keeps its agents private and was never exposed.
+
 ## [2.5.0] - 2026-10-21
 
 Closes the residual risks UltraTon still listed and narrows exposure to Node's October 2026 security issues: 6to4 and Teredo addresses are judged by the IPv4 they carry, Brotli is off on Node releases without the decoder fix, and a TLS name can no longer come from anything but the URL. `stream()` now reports body limits as `get()` does, and the public API is frozen in CI. Upgrade Node too: SECURITY.md lists the releases.
