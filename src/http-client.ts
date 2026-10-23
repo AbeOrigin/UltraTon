@@ -12,6 +12,8 @@ import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
 import { observeRequest } from './helpers/diagnostics.ts';
+// For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
+import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
 import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
 import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
