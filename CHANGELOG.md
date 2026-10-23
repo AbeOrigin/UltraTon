@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-10-23
+
+The quality-of-life release, plus what an independent review of 2.6.0 asked for. Security: HTTP/2 server push is refused, TLS 1.2 is the explicit floor of every connection, and `redirectHeaders: 'safe'` keeps custom headers from following a redirect to another origin. For the developer: `client.explain(url)` says what a request would do before connecting, error codes are typed (`UltraTonErrorCode`, `isUltraTonError()`), `res.assertOk()` throws on a non-2xx when you want it to, `await using` closes clients and agents, `client.extend()` makes variants that share the pools, `NODE_DEBUG=ultraton` shows requests without secrets, and the README gains a first-five-minutes section, a troubleshooting table, a migration guide and tested recipes. No breaking changes; the defaults are the same. Nothing published to npm depends on anything but Node.
+
 ### Security
 
 - **HTTP/2 server push is refused.** Sessions were opened with Node's default `enablePush: true`, and nothing in UltraTon reads a pushed stream, so a hostile server could park up to 200 pushed streams of 1 MiB each (the window UltraTon advertises) in the process per origin, outside `maxSessionMemory` and the idle timer, until `client.close()`. Every session now sets `enablePush: false`: a `PUSH_PROMISE` is a protocol error that fails the request as a network error. Found in an independent review.
