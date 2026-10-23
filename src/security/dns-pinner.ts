@@ -13,6 +13,7 @@ const reservedIpv4Ranges = [
     ['172.16.0.0', 12],    // Private
     ['192.0.0.0', 24],     // IETF protocol assignments
     ['192.0.2.0', 24],     // TEST-NET-1
+    ['192.88.99.0', 24],   // Deprecated 6to4 relay anycast (RFC 7526)
     ['192.168.0.0', 16],   // Private
     ['198.18.0.0', 15],    // Benchmarking
     ['198.51.100.0', 24],  // TEST-NET-2
@@ -36,6 +37,7 @@ for (const [network, prefix] of [
     ['64:ff9b:1::', 48],   // Local-use NAT64 (RFC 8215): targets non-global IPv4 by definition
     ['100::', 64],         // Discard-only
     ['2001:db8::', 32],    // Documentation
+    ['3fff::', 20],        // Documentation (RFC 9637)
     ['fc00::', 7],         // Unique local
     ['fe80::', 10],        // Link-local
     ['fec0::', 10],        // Deprecated site-local

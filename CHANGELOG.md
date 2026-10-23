@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`createSecureAgents()` checks the certificate against the host the socket goes to**, as the client does: never against a `servername` the library set or one Node derived from its `Host` header, and an IP literal is checked as itself with no SNI. Before, a library could connect to `127.0.0.1` with `Host: localhost` and a certificate for `localhost` only was accepted (the CVE-2026-106069 pattern, outside the threat model's adversaries since libraries derive `Host` from the URL, but a gap against what SECURITY.md promised for the client). Found by an adversarial audit of 2.7.0, which found no bypass of any documented defense.
+- **Two more reserved ranges**: `192.88.99.0/24` (deprecated 6to4 relay anycast, RFC 7526) and `3fff::/20` (documentation, RFC 9637).
+
+### Fixed
+
+- A header named `__proto__` (from JSON) on the client options no longer makes `extend()` fail: the options copy has no prototype, so the key stays a plain key and is dropped as always.
+
 ## [2.7.0] - 2026-10-23
 
 The quality-of-life release, plus what an independent review of 2.6.0 asked for. Security: HTTP/2 server push is refused, TLS 1.2 is the explicit floor of every connection, and `redirectHeaders: 'safe'` keeps custom headers from following a redirect to another origin. For the developer: `client.explain(url)` says what a request would do before connecting, error codes are typed (`UltraTonErrorCode`, `isUltraTonError()`), `res.assertOk()` throws on a non-2xx when you want it to, `await using` closes clients and agents, `client.extend()` makes variants that share the pools, `NODE_DEBUG=ultraton` shows requests without secrets, and the README gains a first-five-minutes section, a troubleshooting table, a migration guide and tested recipes. No breaking changes; the defaults are the same. Nothing published to npm depends on anything but Node.

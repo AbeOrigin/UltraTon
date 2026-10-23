@@ -150,7 +150,15 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
             // Certificate checks stay on: a library's rejectUnauthorized: false or no-op checkServerIdentity is ignored.
             // (The agent's own options, minVersion among them, already win over the request's: Node's Agent merges
             // them last.)
-            const connect: Connect = opts => super.createConnection({ ...opts, rejectUnauthorized: true, checkServerIdentity: tls.checkServerIdentity }) as Duplex;
+            // The TLS name is the host the socket goes to, as in the client: never a `servername` the library set, nor
+            // one Node derived from its Host header, which would check the certificate against a name while the socket
+            // goes to another address (the CVE-2026-106069 family). An IP literal gets no SNI and is checked as itself.
+            const connect: Connect = opts => super.createConnection({
+                ...opts,
+                rejectUnauthorized: true,
+                checkServerIdentity: tls.checkServerIdentity,
+                servername: isIP(String(opts.host)) === 0 ? opts.host : undefined,
+            }) as Duplex;
             secureConnect(connect, connectOptions, callback!, policy, false);
             return undefined;
         }
