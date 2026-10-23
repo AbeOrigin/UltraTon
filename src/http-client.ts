@@ -1,6 +1,6 @@
 import type * as http from 'node:http';
 import type * as https from 'node:https';
-import { SecureHttpError } from './errors.ts';
+import { SecureHttpError, clientClosed } from './errors.ts';
 import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
@@ -295,7 +295,7 @@ export class UltraTonClient {
     }
 
     async #send<T>(method: string, url: string, options: unknown, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
-        if (this.#closed) throw new SecureHttpError('UltraTon: Client is closed.');
+        if (this.#closed) throw clientClosed();
         const resolved = this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url;
         // The caller's own options are validated (unknown keys, json/form/body, body type) and the body encoded before any
         // client default is merged in. The content-type comes last: a client default one is kept for json, replaced by

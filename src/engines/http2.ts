@@ -14,13 +14,13 @@ import type {
   SecureUltraTonRequestOptions,
 } from "../types/request-options.types.ts";
 import {
-  SecureHttpError,
   UltraTonMemoryError,
   UltraTonNetworkTimeoutError,
-  UltraTonRedirectError,
   absoluteTimeout,
+  clientClosed,
   idleTimeout,
   refusedStream,
+  remainingBudget,
   toNetworkError,
 } from "../errors.ts";
 import { HTTP_CODES_REDIRECTS } from "../constants.ts";
@@ -36,8 +36,8 @@ import {
 } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
-import { isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
-import { headersForNextHop } from "../helpers/redirect-headers.ts";
+import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
+import { followRedirect } from "../helpers/redirect-headers.ts";
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -63,8 +63,6 @@ function watchGoaway(session: ClientHttp2Session, onGoaway: (lastStreamID: numbe
 
 /** Request bodies go out in pieces of this size so that the idle timer can tell progress from a stall. */
 const BODY_CHUNK_BYTES = 64 * 1024;
-
-const clientClosed = () => new SecureHttpError("UltraTon: Client is closed.");
 
 /** Connection-specific request headers, meaningless (and refused by node) on HTTP/2. `te` is handled apart. */
 const HOP_BY_HOP_HEADERS = ["connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade", "http2-settings"];
@@ -137,7 +135,7 @@ export class Http2Engine {
         session = await this.#acquireSession(
           origin,
           reqOpts,
-          this.#remainingBudget(reqOpts.timeoutMs, startTime),
+          remainingBudget(reqOpts.timeoutMs, startTime),
         );
       } catch (err: unknown) {
         throw this.#orClosed(err);
@@ -158,18 +156,9 @@ export class Http2Engine {
       for (const name of HOP_BY_HOP_HEADERS) delete safeHeaders[name];
       if (safeHeaders["te"] !== "trailers") delete safeHeaders["te"];
 
-      // Always present with a buffered body, and the real byte length wins over anything the caller put in the header.
-      // A streamed body keeps the caller's content-length (StreamedBody holds it to it), or has none. Without a body a
-      // caller content-length would promise bytes that never come: drop it.
+      // The body dictates the framing (see frameBody); HTTP/2 has no chunked transfer-encoding.
       const body = currentOptions.body;
-      if (body instanceof StreamedBody) {
-        if (body.length !== undefined) safeHeaders["content-length"] = String(body.length);
-        else delete safeHeaders["content-length"];
-      } else if (body !== undefined) {
-        safeHeaders["content-length"] = String(body.length);
-      } else {
-        delete safeHeaders["content-length"];
-      }
+      frameBody(safeHeaders, body, false);
 
       const method = (reqOpts.method || "GET").toUpperCase();
 
@@ -182,19 +171,14 @@ export class Http2Engine {
 
       // Measured again after getSession, so DNS resolution and pool wait are already charged to the budget.
       // The TCP/TLS connect runs inside the stream and is bounded by the same remaining budget.
-      const remainingMs = this.#remainingBudget(reqOpts.timeoutMs, startTime);
+      const remainingMs = remainingBudget(reqOpts.timeoutMs, startTime);
 
       const response = await this.#executeStream<T>(
         session,
         pseudoHeaders,
         currentOptions.body,
         remainingMs,
-        reqOpts.timeoutMs,
-        reqOpts.maxBodySize,
-        reqOpts.socketTimeoutMs,
-        reqOpts.signal,
-        reqOpts.maxRedirects > 0,
-        reqOpts.decompress,
+        reqOpts,
         stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl, redirected: redirectCount > 0 },
       );
 
@@ -210,51 +194,11 @@ export class Http2Engine {
         !(body instanceof StreamedBody && (statusCode === 307 || statusCode === 308))
       ) {
         if (reqOpts.maxRedirects > 0) {
-          if (redirectCount >= reqOpts.maxRedirects) {
-            throw new UltraTonRedirectError(
-              `UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`,
-            );
-          }
-
+          const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirectCount);
           redirectCount++;
-
-          const nextUrl = parseSafeUrl(location, currentUrl);
-
-          // A response fetched over TLS must never steer the request onto plaintext (e.g. the http loopback escape hatch).
-          if (parsedUrl.protocol === "https:" && nextUrl.protocol === "http:") {
-            throw new SecureHttpError(
-              "UltraTon: Redirect from https to http is not allowed.",
-              { code: "ERR_ULTRATON_DOWNGRADE" },
-            );
-          }
-
-          const nextHeaders = headersForNextHop(reqOpts.headers, parsedUrl.origin !== nextUrl.origin, reqOpts.redirectHeaders);
-
-          let nextMethod = method;
-          let nextBody = currentOptions.body;
-
-          if (
-            statusCode === 303 ||
-            ((statusCode === 301 || statusCode === 302) &&
-              nextMethod !== "GET" &&
-              nextMethod !== "HEAD")
-          ) {
-            nextMethod = "GET";
-            nextBody = undefined;
-            delete nextHeaders["content-length"];
-            delete nextHeaders["content-type"];
-            delete nextHeaders["transfer-encoding"];
-          }
-
-          currentUrl = nextUrl.href;
-          currentOptions = {
-            ...currentOptions,
-            method: nextMethod,
-            headers: nextHeaders,
-            body: nextBody,
-          };
+          currentUrl = next.url;
+          currentOptions = next.options;
           reqOpts = this.#buildRequestOptions(currentOptions);
-
           continue;
         }
       }
@@ -262,20 +206,6 @@ export class Http2Engine {
       // A buffered response is built without its URL in #executeStream; the stream one already carries it.
       return stream ? response : Object.assign(response, { url: currentUrl, redirected: redirectCount > 0 });
     }
-  }
-
-  /**
-   * What is left of the budget `timeoutMs` shared by every hop and step of a request, or `timeoutMs` itself
-   * when it is not positive (0 means no timeout). A spent budget must throw here: a non-positive value
-   * would silently disable the timer it is passed to.
-   */
-  #remainingBudget(timeoutMs: number, startTime: number): number {
-    if (timeoutMs <= 0) return timeoutMs;
-    const remainingMs = timeoutMs - (Date.now() - startTime);
-    if (remainingMs <= 0) {
-      throw absoluteTimeout(timeoutMs);
-    }
-    return remainingMs;
   }
 
   /**
@@ -337,14 +267,11 @@ export class Http2Engine {
     pseudoHeaders: OutgoingHttpHeaders,
     body: Buffer | StreamedBody | undefined,
     remainingMs: number,
-    timeoutMs: number,
-    maxBodySize: number,
-    socketTimeoutMs: number,
-    signal: AbortSignal | undefined,
-    followRedirects: boolean,
-    decompress: boolean,
+    reqOpts: SecureUltraTonRequestOptions,
     streaming?: { maxBodySize: number; url: string; redirected: boolean },
   ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
+    const { timeoutMs, maxBodySize, socketTimeoutMs, signal, decompress } = reqOpts;
+    const followRedirects = reqOpts.maxRedirects > 0;
     return new Promise((resolve, reject) => {
       // The caller may have aborted while the session was being acquired: do not open a stream for nobody.
       if (signal?.aborted) return reject(signal.reason);
@@ -568,9 +495,8 @@ export class Http2Engine {
       });
 
       // A response that ended without a status, on a stream that was reset or aborted, or with fewer or more bytes than
-      // its content-length, is a lost response, not a successful one: resolving it would hand the caller a statusless
-      // or truncated body.
-      const lostResponse = incompleteResponse;
+      // its content-length, is a lost response (incompleteResponse), not a successful one: resolving it would hand the
+      // caller a statusless or truncated body.
       const declared = () =>
         statusCode === undefined || Number.isNaN(statusCode)
           ? undefined
@@ -598,7 +524,7 @@ export class Http2Engine {
 
         const expected = declared();
         if (expected !== undefined && wireBytes() !== expected) {
-          return fail(lostResponse());
+          return fail(incompleteResponse());
         }
 
         if (
@@ -607,7 +533,7 @@ export class Http2Engine {
           statusCode === undefined ||
           Number.isNaN(statusCode)
         ) {
-          return fail(this.#orClosed(lostResponse()));
+          return fail(this.#orClosed(incompleteResponse()));
         }
 
         stopUpload(constants.NGHTTP2_NO_ERROR);
@@ -635,7 +561,7 @@ export class Http2Engine {
         // HTTP/1 reports; the original error stays reachable as `cause`.
         const expected = declared();
         if (expected !== undefined && wireBytes() < expected) {
-          return reject(this.#orClosed(lostResponse(err)));
+          return reject(this.#orClosed(incompleteResponse(err)));
         }
         // Reset with RST_STREAM REFUSED_STREAM before any answer: the server never processed it (RFC 9113 8.7).
         if (statusCode === undefined && stream.rstCode === constants.NGHTTP2_REFUSED_STREAM) {
@@ -651,7 +577,7 @@ export class Http2Engine {
         settled = true;
         cleanup();
         reader?.destroy();
-        reject(this.#orClosed(lostResponse()));
+        reject(this.#orClosed(incompleteResponse()));
       });
 
       // Written one chunk at a time, each acknowledged write counting as activity: a large upload that is slower than

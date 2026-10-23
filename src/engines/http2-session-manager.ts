@@ -20,7 +20,7 @@ import {
   type ReservedIpPolicy,
   resolveAndPinAll,
 } from "../security/dns-pinner.ts";
-import { SecureHttpError, toNetworkError } from "../errors.ts";
+import { SecureHttpError, clientClosed, toNetworkError } from "../errors.ts";
 import { incompleteResponse } from "../helpers/response.ts";
 import { tunnelTo, type ProxyConfig } from "../proxy/tunnel.ts";
 import tls from "node:tls";
@@ -168,7 +168,7 @@ export class Http2SessionManager {
    * Closes all active sessions and clears the manager.
    */
   public closeAll(): void {
-    this.#closing.abort(new SecureHttpError("UltraTon: Client is closed."));
+    this.#closing.abort(clientClosed());
     this.#closing = new AbortController();
     for (const [key, entry] of this.#sessions.entries()) {
       this.#destroySession(key, entry.session);

@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { SecureHttpError, UltraTonMemoryError, UltraTonNetworkError, UltraTonRedirectError, absoluteTimeout, idleTimeout, toNetworkError } from "../errors.ts";
+import { UltraTonMemoryError, absoluteTimeout, clientClosed, idleTimeout, remainingBudget, toNetworkError } from "../errors.ts";
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
@@ -9,12 +9,13 @@ import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
-import { HTTP_CODES_REDIRECTS, TLS_MIN_VERSION } from '../constants.ts';
-import { headersForNextHop } from '../helpers/redirect-headers.ts';
+import { promisify } from 'node:util';
+import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from '../constants.ts';
+import { followRedirect } from '../helpers/redirect-headers.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
-import { isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
+import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
 import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../proxy/tunnel.ts';
 import { isIP } from 'node:net';
 import tls from 'node:tls';
@@ -24,18 +25,10 @@ import { finished, type Duplex } from 'node:stream';
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
 // Hence one keep-alive agent pair per policy: sockets are never shared across policies. The map belongs to one engine (one
 // client), so two clients never share a socket either, whatever their policies or TLS settings.
-// Idle pooled sockets are reaped after 5s, as with Node's global agent: without it a hostile server reached through N hostnames
-// could pin N file descriptors for as long as it keeps them open.
+// Idle pooled sockets are reaped after IDLE_SOCKET_TIMEOUT_MS, as with Node's global agent: without it a hostile server
+// reached through N hostnames could pin N file descriptors for as long as it keeps them open.
 // ponytail: one agent pair per distinct policy, never evicted, so the map grows with distinct allowlists; the ceiling is the
 // number of policies an app uses. Same upgrade path as the compiled-allowlist cache: bound it if lists ever come from request-time input.
-const IDLE_SOCKET_TIMEOUT_MS = 5000;
-
-const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
-
-/** Every validated address of `host`, through the request's own pinning `lookup` (see _executeSingleNetworkHop). */
-const lookupAll = (lookup: (host: string, options: LookupOptions, callback: (err: NodeJS.ErrnoException | null, addresses: LookupAddress[]) => void) => void, host: string) =>
-    new Promise<string[]>((resolve, reject) =>
-        lookup(host, { all: true }, (err, addresses) => (err ? reject(err) : resolve(addresses.map(a => a.address)))));
 
 /**
  * An HTTPS agent whose sockets are TLS over a CONNECT tunnel through the proxy. The tunnel goes to an address the
@@ -57,7 +50,10 @@ class TunnelAgent extends https.Agent {
         const host = String(options.host);
         const port = Number(options.port) || 443;
         // An IP literal was judged by request() already, and has nothing to resolve.
-        const hosts = this.#proxy.resolve === 'proxy' || isIP(host) !== 0 ? Promise.resolve([host]) : lookupAll(options.lookup, host);
+        // Every validated address of the host, through the request's own pinning `lookup` (see _executeSingleNetworkHop).
+        const hosts: Promise<string[]> = this.#proxy.resolve === 'proxy' || isIP(host) !== 0
+            ? Promise.resolve([host])
+            : promisify(options.lookup)(host, { all: true }).then((all: LookupAddress[]) => all.map(a => a.address));
         // close() or this request giving up (abort, timeout) tears down a tunnel still being set up.
         const hop: unknown = options[kTunnelSignal];
         const signal = hop instanceof AbortSignal ? AbortSignal.any([this.#signal, hop]) : this.#signal;
@@ -169,7 +165,7 @@ export class Http1Engine {
             // A socket error with a code (ECONNRESET, ERR_STREAM_PREMATURE_CLOSE, ...) maps like any other network error;
             // a stream that just ends early has none, which is a reset connection as far as the caller is concerned.
             if (typeof code === 'string') throw toNetworkError(err);
-            throw new UltraTonNetworkError('UltraTon: Connection failed (ECONNRESET).', { cause: err, code: 'ECONNRESET' });
+            throw incompleteResponse(err);
         }
 
         // The absolute timeout still runs while the queued compressed bytes finish decoding.
@@ -197,24 +193,9 @@ export class Http1Engine {
 
             const transport = this.#transport || (urlObj.protocol === 'http:' ? http.request : https.request);
             
-            // A buffered body always goes out with its exact length, never chunked: a caller-supplied content-length or
-            // transfer-encoding must not disagree with the bytes actually written. A streamed one keeps the caller's
-            // content-length (StreamedBody holds it to it), else goes chunked, set here so Node frames it that way for
-            // every method. Without a body a caller content-length would promise bytes that never come: drop it.
+            // The body dictates the framing (see frameBody); chunked is set here so Node frames it that way for every method.
             const headers = { ...reqOpts.headers };
-            delete headers['transfer-encoding'];
-            if (body instanceof StreamedBody) {
-                // Never both: a content-length left from the client defaults next to chunked would be a smuggling vector.
-                if (body.length !== undefined) headers['content-length'] = String(body.length);
-                else {
-                    delete headers['content-length'];
-                    headers['transfer-encoding'] = 'chunked';
-                }
-            } else if (body !== undefined) {
-                headers['content-length'] = String(body.length);
-            } else {
-                delete headers['content-length'];
-            }
+            frameBody(headers, body, true);
             // A streamed body cannot be sent again: a 307/308 is returned to the caller instead of being followed.
             const canFollow = (status: number) => followRedirects && !(body instanceof StreamedBody && (status === 307 || status === 308));
             // The streamed body's own failure (its stream, a limit, the length): what the request reports, mid-response too.
@@ -394,51 +375,17 @@ export class Http1Engine {
             assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
             if (this.#proxy && urlObj.protocol === 'https:') assertTunnelable(this.#proxy, bareHostname);
 
-            let currentTimeoutMs = reqOpts.timeoutMs;
-            if (reqOpts.timeoutMs > 0) {
-                const elapsed = Date.now() - startTime;
-                currentTimeoutMs = Math.max(0, reqOpts.timeoutMs - elapsed);
-                if (currentTimeoutMs === 0) {
-                    throw absoluteTimeout(reqOpts.timeoutMs);
-                }
-            }
+            const currentTimeoutMs = remainingBudget(reqOpts.timeoutMs, startTime);
 
             const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0,
                 stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize });
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
-                if (redirectCount >= reqOpts.maxRedirects) {
-                    throw new UltraTonRedirectError(`UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`);
-                }
-
+                const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirectCount);
                 redirectCount++;
-
-                const nextUrlObj: URL = parseSafeUrl(hop.headers.location, currentUrl);
-
-                // A response fetched over TLS must never steer the request onto plaintext (e.g. the http loopback escape hatch).
-                if (urlObj.protocol === 'https:' && nextUrlObj.protocol === 'http:') {
-                    throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.', { code: 'ERR_ULTRATON_DOWNGRADE' });
-                }
-
-                const crossOrigin = urlObj.origin !== nextUrlObj.origin;
-                if (crossOrigin) currentOptions = { ...currentOptions, auth: undefined };
-                const nextHeaders = headersForNextHop(reqOpts.headers, crossOrigin, reqOpts.redirectHeaders);
-
-                let nextMethod = reqOpts.method;
-                let nextBody = currentOptions.body;
-
-                if (hop.statusCode === 303 || ((hop.statusCode === 301 || hop.statusCode === 302) && nextMethod !== 'GET' && nextMethod !== 'HEAD')) {
-                    nextMethod = 'GET';
-                    nextBody = undefined;
-                    delete nextHeaders['content-length'];
-                    delete nextHeaders['content-type'];
-                    delete nextHeaders['transfer-encoding'];
-                }
-
-                currentUrl = nextUrlObj.href;
-                currentOptions = { ...currentOptions, method: nextMethod, headers: nextHeaders, body: nextBody };
+                currentUrl = next.url;
+                currentOptions = next.options;
                 reqOpts = buildSafeRequestOptions(currentOptions);
-
                 continue;
             }
 

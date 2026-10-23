@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import { UltraTonNetworkError, absoluteTimeout } from '../errors.ts';
-import { DEFAULT_TIMEOUT_MS } from '../constants.ts';
+import { DEFAULT_TIMEOUT_MS, INT32_MAX } from '../constants.ts';
 import type { UltraTonRetryInfo } from '../types/request-options.types.ts';
 import type { RetryInput } from './request-options.ts';
 
@@ -11,7 +11,6 @@ const DEFAULT_METHODS: readonly string[] = ['GET', 'PUT', 'DELETE', 'HEAD', 'OPT
 const DEFAULT_STATUS_CODES: readonly number[] = [408, 429, 502, 503, 504];
 const DEFAULT_MAX_DELAY_MS = 30_000;
 const BASE_DELAY_MS = 300;
-const INT32_MAX = 2147483647;
 /**
  * Transient network failures, the idle timeout, and an HTTP/2 stream the server never processed (REFUSED_STREAM or
  * above a GOAWAY's last stream). Anything else (policy, memory, redirects, decoding, other resets) is final.

@@ -5,6 +5,7 @@ import { UltraTonNetworkError, toNetworkError } from '../errors.ts';
 import type { TlsMaterial } from '../types/request-options.types.ts';
 import { ipv6Groups } from '../security/dns-pinner.ts';
 import { TLS_MIN_VERSION } from '../constants.ts';
+import { incompleteResponse } from '../helpers/response.ts';
 
 /** `proxy` once validated (see proxyOption). */
 export interface ProxyConfig {
@@ -237,7 +238,7 @@ function openTunnel(proxy: ProxyConfig, host: string, port: number, signal: Abor
             if (!reached && mapped instanceof Error) finalRefusals.add(mapped);
             finish(mapped);
         };
-        const onClose = () => finish(new UltraTonNetworkError('UltraTon: Connection failed (ECONNRESET).', { code: 'ECONNRESET' }));
+        const onClose = () => finish(incompleteResponse());
         const onAbort = () => finish(signal!.reason);
         const onTimeout = () => {
             const err = new UltraTonNetworkError('UltraTon: Connection failed (ETIMEDOUT).', { code: 'ETIMEDOUT' });
