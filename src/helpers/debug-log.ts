@@ -12,10 +12,14 @@ import type { UltraTonRequestErrorMessage, UltraTonRequestResponseMessage, Ultra
 
 type Message = UltraTonRequestResponseMessage | UltraTonRequestRetryMessage | UltraTonRequestErrorMessage;
 
-/** ` [dns 3 ms, connect 12 ms, tls 28 ms, ttfb 40 ms]` or ` [reused, ttfb 9 ms]`: the phases gone through, if any. */
+/**
+ * ` [dns 3 ms, connect 12 ms, tls 28 ms, ttfb 40 ms]` or ` [queued 120 ms, reused, ttfb 9 ms]`: the phases gone
+ * through, if any.
+ */
 function formatTimings(timings: UltraTonTimings | undefined): string {
     if (!timings) return '';
-    const phases = timings.reusedConnection ? ['reused'] : [];
+    const phases = timings.queuedMs === undefined ? [] : [`queued ${Math.round(timings.queuedMs)} ms`];
+    if (timings.reusedConnection) phases.push('reused');
     const named: Array<[string, number | undefined]> = [['dns', timings.dnsMs], ['connect', timings.connectMs], ['tls', timings.tlsMs], ['ttfb', timings.firstByteMs]];
     for (const [name, ms] of named) if (ms !== undefined) phases.push(`${name} ${Math.round(ms)} ms`);
     return phases.length > 0 ? ` [${phases.join(', ')}]` : '';

@@ -342,6 +342,16 @@ export interface UltraTonClientOptions {
      * Plain `http:` targets (loopback only) never use it. Never read from `HTTP_PROXY`/`HTTPS_PROXY`.
      */
     readonly proxy?: string | UltraTonProxyOptions;
+
+    /**
+     * At most this many calls in flight at once per origin (scheme, host and port of the URL called, before any
+     * redirect); the rest wait in a queue, in order. An integer from 1; unset, no limit. The wait counts against
+     * `timeoutMs`: a call still queued when it runs out rejects with `ERR_ULTRATON_TIMEOUT` without connecting (with
+     * `timeoutMs: 0` it waits as long as it takes). An abort takes a call out of the queue, and `close()` rejects every
+     * queued call. A `stream()` (and so `fetch()`) holds its slot until its body ends, fails or is cancelled. Retries
+     * and redirects run on the slot of their call. A variant made with `extend()` has a counter of its own.
+     */
+    readonly maxConcurrency?: number;
 }
 
 /** The `proxy` client option in full. */

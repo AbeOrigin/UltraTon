@@ -138,6 +138,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
+| `maxConcurrency` | integer from 1 | At most this many calls in flight at once per origin; the rest wait in order, and the wait counts against `timeoutMs`. Unset: no limit. See [Limits and things to know](#limits-and-things-to-know). |
 | `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
 
 **Request options** are the second argument of every method:
@@ -464,6 +465,7 @@ For a quick look without code, run with `NODE_DEBUG=ultraton`: one line on stder
 ```text
 ULTRATON 4242: GET https://api.example.com -> 200 (84 ms) [dns 3 ms, connect 12 ms, tls 28 ms, ttfb 40 ms]
 ULTRATON 4242: GET https://api.example.com -> 200 (10 ms) [reused, ttfb 9 ms]
+ULTRATON 4242: GET https://api.example.com -> 200 (131 ms) [queued 120 ms, reused, ttfb 9 ms]
 ULTRATON 4242: POST https://hooks.example.net retry 1 in 300 ms (503)
 ULTRATON 4242: GET https://api.example.com failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (5001 ms) [reused]
 ```
@@ -479,6 +481,7 @@ UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_ch
 
 `request` is `{ method, origin, path }`, frozen, and **the same object** on every event of one call, so it can key a span or a timer. `error` is `{ name, code }`. `timings` (`UltraTonTimings`) says where the time of a slow call went, in milliseconds:
 
+- `queuedMs`: the wait for a free slot under the client's `maxConcurrency`, before the first request went out; `undefined` when the call did not wait (or the client has no limit).
 - `dnsMs`: name resolution, when a new connection was opened (none for an IP literal).
 - `connectMs`: the TCP connect. On HTTP/2 it includes the TLS handshake, which Node reports together with it; through a proxy it includes the tunnel.
 - `tlsMs`: the TLS handshake, on HTTP/1.1 only.
@@ -625,6 +628,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
 - **A closed client rejects new requests at once; its pools live on while a variant from `extend()` uses them.** Requests in flight on such a pool are allowed to finish; the pools close with the last client sharing them.
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
+- **`maxConcurrency` counts calls per origin, per client.** The origin is that of the URL called, before any redirect; retries and redirect hops run on the slot of their call. The wait in the queue counts against `timeoutMs`: a call still queued when it runs out rejects with `ERR_ULTRATON_TIMEOUT` without connecting, and with `timeoutMs: 0` it waits as long as it takes. An abort takes a call out of the queue and `close()` rejects every queued call. A `stream()` (and so `fetch()`) holds its slot until its body ends, fails or is cancelled: read it or cancel it, or the calls behind it keep waiting. A variant from `extend()` has a counter of its own.
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is. On a Node release without the fix for CVE-2026-111497 (before 22.23.4, 24.22.1 or 26.12.1), br is neither requested nor decoded: a server that sends it anyway gets its body back raw, even when you asked for br in your own `accept-encoding`.
 - **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. A `File` or `Blob` body is read whole into memory first: pass a stream (`createReadStream`) to upload a large file. Over HTTP/2, a `stream()` body you have not read yet can hold up to 1 MiB (the stream's flow-control window) until you read or cancel it.

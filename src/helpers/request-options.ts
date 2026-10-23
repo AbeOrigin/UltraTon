@@ -25,15 +25,16 @@ function validateType(propName: string, value: unknown, expectedType: 'string' |
 }
 
 /**
- * A non-negative integer up to `max` (INT32_MAX by default, the most a timer accepts), or `fallback` when `undefined`.
- * @throws {TypeError} For a wrong type, and for a negative, fractional or too large number, naming the allowed range:
+ * An integer from `min` (0 by default) up to `max` (INT32_MAX by default, the most a timer accepts), or `fallback`
+ * when `undefined`.
+ * @throws {TypeError} For a wrong type, and for a too small, fractional or too large number, naming the allowed range:
  *   an out-of-range value is a mistake to report, never something to replace silently with the default.
  */
-function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX): number {
+function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX, min = 0): number {
     if (!validateType(propName, value, 'number')) return fallback;
     const n = value as number;
-    if (!Number.isInteger(n) || n < 0 || n > max) {
-        throw new TypeError(`UltraTon: Expected '${propName}' to be an integer from 0 to ${max}, received ${n}.`);
+    if (!Number.isInteger(n) || n < min || n > max) {
+        throw new TypeError(`UltraTon: Expected '${propName}' to be an integer from ${min} to ${max}, received ${n}.`);
     }
     return n;
 }
@@ -175,7 +176,7 @@ const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs',
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -668,6 +669,8 @@ export interface ResolvedClientOptions {
     readonly http2: boolean;
     readonly tls: TlsOptions;
     readonly proxy?: ProxyConfig;
+    /** Calls in flight per origin at most; `undefined` for no limit. */
+    readonly maxConcurrency?: number;
     readonly defaults: ClientDefaults;
 }
 
@@ -864,6 +867,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
     const http2 = validateType('http2', raw.http2, 'boolean') && raw.http2 === true;
     const tls = tlsOptions(raw.tls);
     const proxy = proxyOption(raw.proxy);
+    const maxConcurrency = raw.maxConcurrency === undefined ? undefined : intOption('maxConcurrency', raw.maxConcurrency, 0, INT32_MAX, 1);
 
     let baseUrl: URL | undefined;
     if (validateType('baseUrl', raw.baseUrl, 'string')) {
@@ -883,6 +887,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         http2,
         tls,
         proxy,
+        maxConcurrency,
         defaults: {
             headers,
             headersFn,

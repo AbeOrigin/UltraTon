@@ -65,6 +65,7 @@ export interface UltraTonClientOptions {
     };
     readonly userAgent?: string;
     readonly proxy?: string | UltraTonProxyOptions;
+    readonly maxConcurrency?: number;
 }
 
 ## UltraTonDiagnosticsError (helpers/diagnostics.d.ts)
@@ -266,6 +267,7 @@ export interface UltraTonStreamResponse {
 
 ## UltraTonTimings (helpers/diagnostics.d.ts)
 export interface UltraTonTimings {
+    readonly queuedMs?: number;
     readonly dnsMs?: number;
     readonly connectMs?: number;
     readonly tlsMs?: number;

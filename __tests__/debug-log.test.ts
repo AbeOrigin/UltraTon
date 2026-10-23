@@ -41,6 +41,15 @@ describe('formatDebugLine', () => {
         assert.equal(formatDebugLine('error', { request, error: { name: 'UltraTonNetworkTimeoutError', code: 'ERR_ULTRATON_TIMEOUT' }, durationMs: 3.2, timings: literal }, false),
             'GET https://a.example failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (3 ms) [connect 1 ms]');
     });
+
+    it('puts the time queued under maxConcurrency first, when there was any', () => {
+        const queued = { queuedMs: 120.4, firstByteMs: 9.2, totalMs: 131, reusedConnection: true };
+        assert.equal(formatDebugLine('response', { request, statusCode: 200, durationMs: 131, timings: queued }, false),
+            'GET https://a.example -> 200 (131 ms) [queued 120 ms, reused, ttfb 9 ms]');
+        const timedOut = { queuedMs: 100, totalMs: 100.2, reusedConnection: false };
+        assert.equal(formatDebugLine('error', { request, error: { name: 'UltraTonNetworkTimeoutError', code: 'ERR_ULTRATON_TIMEOUT' }, durationMs: 100.2, timings: timedOut }, false),
+            'GET https://a.example failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (100 ms) [queued 100 ms]');
+    });
 });
 
 describe('NODE_DEBUG=ultraton', () => {
