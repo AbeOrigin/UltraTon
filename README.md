@@ -458,7 +458,15 @@ Every attempt is a full request: a new connection resolves and validates DNS aga
 
 ### Observability
 
-UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html) events for every client call (`get`, `post`, …, `stream()`, `fetch()`), so tracing and metrics tools can see requests without wrapping the client. Publishing costs nothing when nobody subscribes.
+For a quick look without code, run with `NODE_DEBUG=ultraton`: one line on stderr per response, retry and error, with the method, the origin, the status or error code and the duration. Query strings, credentials, headers, bodies and resolved IPs are never written. Paths are off by default, because APIs put secrets in them: `ULTRATON_DEBUG_PATHS=1` adds them (`NODE_DEBUG=*` does not).
+
+```text
+ULTRATON 4242: GET https://api.example.com -> 200 (38 ms)
+ULTRATON 4242: POST https://hooks.example.net retry 1 in 300 ms (503)
+ULTRATON 4242: GET https://api.example.com failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (5001 ms)
+```
+
+UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html) events for every client call (`get`, `post`, …, `stream()`, `fetch()`), so tracing and metrics tools can see requests without wrapping the client. The debug lines above are a subscriber of these events. Publishing costs nothing when nobody subscribes.
 
 | Channel | When | Message |
 |---|---|---|
