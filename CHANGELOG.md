@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`redirectHeaders` option, `'all'` or `'safe'`, per request and as a client default.** On a redirect to another origin UltraTon drops `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` and lets every other header follow, as `fetch`, got and axios do; the README said "credentials are dropped" without saying that an `x-api-key` or any other custom header is not one of them. `'safe'` lets only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` cross origins. The default stays `'all'`; `'safe'` is the candidate default for 3.0. Found in an independent review.
 - Tests: a server that pushes streams, the TLS floor on every connection, and a Slowloris body (a byte every 50 ms) cut by `timeoutMs` in `get()` and left to the idle timer in `stream()`, on both engines. README and THREAT_MODEL.md now say the latter.
 
 ## [2.6.0] - 2026-10-23

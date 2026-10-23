@@ -8,6 +8,9 @@ export type { ReservedIpPolicy };
 /** A value of the `query` option: sent as its string form. */
 export type QueryValue = string | number | boolean;
 
+/** Which of the caller's headers follow a redirect to another origin. See {@link UltraTonRequestOptions.redirectHeaders}. */
+export type RedirectHeaders = 'all' | 'safe';
+
 /**
  * The options of one request, the same for every method and both engines. A closed list: anything else throws a
  * `TypeError` (with a hint for the common mistakes), it is never ignored.
@@ -109,6 +112,15 @@ export interface UltraTonRequestOptions {
      * Default is 0 (redirects are returned, not followed).
      */
     readonly maxRedirects?: number;
+
+    /**
+     * Which of your headers follow a redirect to another origin. `'all'` (default): everything but `authorization`,
+     * `cookie`, `proxy-authorization`, `host` and `auth`, as `fetch`, got and axios do. `'safe'`: only `accept`,
+     * `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length`, so an `x-api-key` or any
+     * other custom header stays behind and a server that redirects cannot send it elsewhere. A redirect on the same
+     * origin always keeps every header. Anything else throws a `TypeError`.
+     */
+    readonly redirectHeaders?: RedirectHeaders;
 
     /**
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
@@ -225,6 +237,7 @@ export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
     readonly socketTimeoutMs: number;
     readonly timeoutMs: number;
     readonly maxRedirects: number;
+    readonly redirectHeaders: RedirectHeaders;
     readonly permitReservedIps: ReservedIpPolicy;
 }
 
@@ -273,6 +286,9 @@ export interface UltraTonClientOptions {
 
     /** Default `maxRedirects` for every request. See {@link UltraTonRequestOptions.maxRedirects}. */
     readonly maxRedirects?: number;
+
+    /** Default `redirectHeaders` for every request. See {@link UltraTonRequestOptions.redirectHeaders}. */
+    readonly redirectHeaders?: RedirectHeaders;
 
     /**
      * Default `permitReservedIps` for every request. See {@link UltraTonRequestOptions.permitReservedIps}. A list is

@@ -4,6 +4,9 @@ export declare function createSecureAgents(options?: UltraTonSecureAgentOptions)
 ## QueryValue (types/request-options.types.d.ts)
 export type QueryValue = string | number | boolean;
 
+## RedirectHeaders (types/request-options.types.d.ts)
+export type RedirectHeaders = 'all' | 'safe';
+
 ## ReservedIpPolicy (security/dns-pinner.d.ts)
 export type ReservedIpPolicy = boolean | readonly string[];
 
@@ -43,6 +46,7 @@ export interface UltraTonClientOptions {
     readonly maxBodySize?: number;
     readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
+    readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
     readonly http2?: boolean;
@@ -124,6 +128,7 @@ export interface UltraTonRequestOptions {
     readonly socketTimeoutMs?: number;
     readonly timeoutMs?: number;
     readonly maxRedirects?: number;
+    readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
 }
