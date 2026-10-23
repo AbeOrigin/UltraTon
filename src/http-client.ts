@@ -429,12 +429,14 @@ export class UltraTonClient {
         const retry = body.options.body instanceof StreamedBody ? undefined : retryPolicy;
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, this.#defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
+        // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
+        // Without it the engines get no timings to measure.
+        const observer = observeRequest(method, target);
+        const timings = observer?.timings;
         const send = (timeoutMs?: number): Promise<UltraTonResponse<T> | UltraTonStreamResponse> => {
             const attempt = timeoutMs === undefined ? resolvedOptions : { ...resolvedOptions, timeoutMs };
-            return stream ? this.#engine.request(target, attempt, stream) : this.#engine.request<T>(target, attempt);
+            return stream ? this.#engine.request(target, attempt, stream, timings) : this.#engine.request<T>(target, attempt, undefined, timings);
         };
-        // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
-        const observer = observeRequest(method, target);
         if (!observer) return retry ? withRetry(send, retry, resolvedOptions.timeoutMs, resolvedOptions.signal) : send();
         const observed = retry && {
             ...retry,

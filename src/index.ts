@@ -10,6 +10,7 @@ export type {
   UltraTonRequestRetryMessage,
   UltraTonRequestResponseMessage,
   UltraTonRequestErrorMessage,
+  UltraTonTimings,
 } from './helpers/diagnostics.ts';
 export {
   SecureHttpError,

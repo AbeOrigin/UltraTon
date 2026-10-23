@@ -20,6 +20,7 @@ import { assertTunnelable, kTunnelSignal, tunnelTo, type ProxyConfig } from '../
 import { isIP } from 'node:net';
 import tls from 'node:tls';
 import { finished, type Duplex } from 'node:stream';
+import type { HopTimings, TimingsCollector } from '../helpers/diagnostics.ts';
 
 // Node only runs the custom `lookup` (the SSRF check) when it opens a NEW socket, and its default agent pools sockets by
 // host:port alone, so a socket opened under one reserved-IP policy would be reused by a request under another and skip the check.
@@ -186,7 +187,8 @@ export class Http1Engine {
         body: Buffer | StreamedBody | undefined,
         currentTimeoutMs: number,
         followRedirects: boolean,
-        stream?: { maxBodySize: number }
+        stream?: { maxBodySize: number },
+        phases?: HopTimings
     ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean, body?: ReadableStream<Uint8Array> }> {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
@@ -214,6 +216,8 @@ export class Http1Engine {
             // would otherwise take it from there, and a non-canonical IP (`127.1`) checked as a DNS name is the confusion
             // behind CVE-2026-106069/-106072. An IP literal gets '': no SNI, and the certificate is checked against the IP.
             const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
+            // Before the request: creating it is what opens a new socket and starts its lookup.
+            phases?.mark('start');
             const req = transport(urlObj, {
                 ...reqOpts,
                 ...(this.#proxy ? { [kTunnelSignal]: tunnelSignal } : {}),
@@ -225,6 +229,8 @@ export class Http1Engine {
                     // Over plain http every address must also be loopback: a `*.localhost` name can resolve anywhere.
                     resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps, urlObj.protocol === 'http:')
                         .then(addresses => {
+                            // Only a new socket (or a tunnel, see TunnelAgent) looks up, and never an IP literal.
+                            phases?.mark('lookup');
                             // close() ran while DNS was pending: a socket opened now would outlive it, unpooled and unreachable.
                             if (this.#closed) throw clientClosed();
                             // With autoSelectFamily (Node's default) the socket asks for every address and races them
@@ -247,7 +253,26 @@ export class Http1Engine {
                 }, currentTimeoutMs);
             }
 
+            // Only while someone listens to the diagnostics events (see observeRequest): otherwise no listener is added.
+            if (phases) {
+                req.once('socket', socket => {
+                    // A pooled socket had no lookup nor connect of its own.
+                    if (req.reusedSocket) return phases.reused();
+                    // The lookup is marked by `lookup` below: it can answer before this event.
+                    if (socket.connecting) {
+                        socket.once('connect', () => phases.mark('connect'));
+                    } else {
+                        // A tunnel through the proxy, handed over once up: its lookup ran inside TunnelAgent.
+                        phases.mark('connect');
+                    }
+                    if (socket instanceof tls.TLSSocket) socket.once('secureConnect', () => phases.mark('secure'));
+                });
+                // The request and its body were flushed to the socket, which is up by then.
+                req.once('finish', () => phases.mark('sent'));
+            }
+
             req.on('response', (res: IncomingMessage) => {
+                phases?.mark('response');
                 const isRedirect = res.statusCode !== undefined && HTTP_CODES_REDIRECTS.has(res.statusCode);
                 const location = res.headers.location;
 
@@ -349,10 +374,11 @@ export class Http1Engine {
 
     /**
      * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
+     * @param timings - Where each hop records its phases; only while someone listens to the diagnostics events.
      */
-    public async request<T = unknown>(url: string, options: ResolvedRequestOptions): Promise<UltraTonResponse<T>>;
-    public async request(url: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }): Promise<UltraTonStreamResponse>;
-    public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: { maxBodySize?: number }): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
+    public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: undefined, timings?: TimingsCollector): Promise<UltraTonResponse<T>>;
+    public async request(url: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonStreamResponse>;
+    public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         const startTime = Date.now();
         let redirectCount = 0;
         let currentUrl = url;
@@ -378,7 +404,7 @@ export class Http1Engine {
             const currentTimeoutMs = remainingBudget(reqOpts.timeoutMs, startTime);
 
             const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0,
-                stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize });
+                stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize }, timings?.hop());
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirectCount);

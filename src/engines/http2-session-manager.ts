@@ -25,7 +25,9 @@ import { incompleteResponse } from "../helpers/response.ts";
 import { tunnelTo, type ProxyConfig } from "../proxy/tunnel.ts";
 import tls from "node:tls";
 import type { Duplex } from "node:stream";
+import { performance } from "node:perf_hooks";
 import { TLS_MIN_VERSION } from "../constants.ts";
+import type { HopTimings } from "../helpers/diagnostics.ts";
 
 interface SessionEntry {
   session: ClientHttp2Session;
@@ -44,6 +46,18 @@ export interface SessionTimings {
   readonly maxLifespanMs?: number;
 }
 
+/**
+ * When a connection attempt started, resolved its name and connected (`performance.now()`), for the diagnostics timings.
+ * Kept only when the caller that opened the attempt measures (someone listens); every caller that joins it gets them.
+ */
+interface AttemptTimes {
+  readonly start: number;
+  lookup?: number;
+  connect?: number;
+  /** Callers that got the session before it connected: marked when it does. */
+  readonly connecting: HopTimings[];
+}
+
 /** A DNS lookup plus connect in flight for one pool key, shared by every caller that arrives while it runs. */
 interface Attempt {
   promise: Promise<SessionEntry>;
@@ -51,6 +65,7 @@ interface Attempt {
   waiters: number;
   /** Aborted when the last waiter leaves: a proxy tunnel still being set up for nobody is torn down. */
   readonly abandoned: AbortController;
+  readonly times?: AttemptTimes;
 }
 
 /**
@@ -197,18 +212,23 @@ export class Http2SessionManager {
    * the pending map at once, so the next request resolves the host again instead of joining
    * a lookup that may never answer. A lookup that answers after that is used only by callers
    * still waiting for it; if there are none, it opens no connection.
+   *
+   * `phases`, given only while someone listens to the diagnostics events, learns whether the session was pooled or
+   * when its lookup and connect happened.
    */
   public async getSession(
     hostname: string,
     overrideOptions?: SecureClientSessionOptions,
     permitReservedIps: ReservedIpPolicy = false,
     signal?: AbortSignal,
+    phases?: HopTimings,
   ): Promise<ClientHttp2Session> {
     const { session, ips } = await this.#acquire(
       hostname,
       overrideOptions,
       permitReservedIps,
       signal,
+      phases,
     );
     for (const ip of ips) assertAllowedIp(ip, permitReservedIps, bareHostOf(hostname));
     return session;
@@ -219,6 +239,7 @@ export class Http2SessionManager {
     overrideOptions: SecureClientSessionOptions | undefined,
     permitReservedIps: ReservedIpPolicy,
     signal: AbortSignal | undefined,
+    phases: HopTimings | undefined,
   ): Promise<SessionEntry> {
     const key = poolKey(hostname, permitReservedIps);
     const entry = this.#sessions.get(key);
@@ -228,6 +249,7 @@ export class Http2SessionManager {
       const isExpired = Date.now() - createdAt > this.#maxLifespanMs;
 
       if (!session.destroyed && !session.closed && !isExpired) {
+        phases?.reused();
         return entry;
       }
 
@@ -246,9 +268,11 @@ export class Http2SessionManager {
 
     if (attempt === undefined) {
       const abandoned = new AbortController();
+      const times: AttemptTimes | undefined = phases && { start: performance.now(), connecting: [] };
       const created: Attempt = {
         waiters: 0,
         abandoned,
+        times,
         promise: this.#establishConnection(
           key,
           hostname,
@@ -257,6 +281,7 @@ export class Http2SessionManager {
           // Read after the DNS await, by which point this caller has registered as a waiter.
           () => created.waiters > 0,
           abandoned.signal,
+          times,
         ),
       };
       attempt = created;
@@ -273,9 +298,17 @@ export class Http2SessionManager {
 
     attempt.waiters++;
     try {
-      return await (signal
+      const established = await (signal
         ? untilAborted(attempt.promise, signal, opened ? forget : undefined)
         : attempt.promise);
+      const { times } = attempt;
+      if (phases && times) {
+        phases.mark("start", times.start);
+        if (times.lookup !== undefined) phases.mark("lookup", times.lookup);
+        if (times.connect !== undefined) phases.mark("connect", times.connect);
+        else times.connecting.push(phases);
+      }
+      return established;
     } finally {
       attempt.waiters--;
       // After a settled attempt this changes nothing; before, it stops a tunnel nobody will use.
@@ -290,6 +323,7 @@ export class Http2SessionManager {
     permitReservedIps: ReservedIpPolicy,
     wanted: () => boolean,
     abandoned: AbortSignal,
+    times: AttemptTimes | undefined,
   ): Promise<SessionEntry> {
     const bareHost = bareHostOf(hostname);
     // Taken now: a closeAll() during the DNS lookup below aborts this one, and replaces #closing for later attempts.
@@ -310,6 +344,8 @@ export class Http2SessionManager {
     const addresses = resolveHere
       ? await resolveAndPinAll(bareHost, permitReservedIps, target.protocol === "http:")
       : [];
+    // An IP literal is judged, not looked up: it has no lookup time.
+    if (times && resolveHere && isIP(bareHost) === 0) times.lookup = performance.now();
 
     // Through the proxy: a CONNECT tunnel to the validated addresses in order (or the name), then TLS to the target
     // over it, with ALPN h2 and the certificate checked against the name, as on a direct connection.
@@ -414,6 +450,12 @@ export class Http2SessionManager {
     // The connection window has no setting of its own: it is raised by a WINDOW_UPDATE once the session is up.
     newSession.on("connect", () => {
       if (!newSession.destroyed) newSession.setLocalWindowSize(H2_CONNECTION_WINDOW);
+      // TCP and TLS together (and the tunnel, through a proxy): Node reports the session up once, after both.
+      if (times) {
+        const at = performance.now();
+        times.connect = at;
+        for (const phases of times.connecting.splice(0)) phases.mark("connect", at);
+      }
     });
 
     newSession.setTimeout(this.#idleTimeoutMs);
