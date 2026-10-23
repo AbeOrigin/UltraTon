@@ -2,10 +2,7 @@ import zlib from 'node:zlib';
 import { pipeline, Transform, type Readable } from 'node:stream';
 import { SecureHttpError, UltraTonNetworkError } from '../errors.ts';
 import { incompleteResponse } from './response.ts';
-import { atLeastFixed, type FixedReleases } from './node-release.ts';
-
-/** The first release of each Node line whose Brotli decoder has the fix for CVE-2026-111497 (an out-of-bounds write). */
-const BROTLI_FIXED: FixedReleases = { 22: [23, 4], 24: [22, 1], 26: [12, 1] };
+import { atLeastFixed, NODE_OCT_2026_FIXES } from './node-release.ts';
 
 /**
  * Whether this Node's Brotli decoder is safe to feed a server's bytes. Lines after 26 carry the fix; 23 and 25 are
@@ -13,7 +10,7 @@ const BROTLI_FIXED: FixedReleases = { 22: [23, 4], 24: [22, 1], 26: [12, 1] };
  * sends as br anyway comes back raw, as any coding this runtime cannot decode does.
  */
 export function hasSafeBrotli(version: string = process.versions.node): boolean {
-    return atLeastFixed(BROTLI_FIXED, version);
+    return atLeastFixed(NODE_OCT_2026_FIXES, version);
 }
 
 const BROTLI = hasSafeBrotli();

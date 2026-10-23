@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP/2 server push is refused.** Sessions were opened with Node's default `enablePush: true`, and nothing in UltraTon reads a pushed stream, so a hostile server could park up to 200 pushed streams of 1 MiB each (the window UltraTon advertises) in the process per origin, outside `maxSessionMemory` and the idle timer, until `client.close()`. Every session now sets `enablePush: false`: a `PUSH_PROMISE` is a protocol error that fails the request as a network error. Found in an independent review.
+- **TLS 1.2 is the explicit floor of every connection**: direct, through a proxy tunnel, to a TLS proxy, and in the agents of `createSecureAgents()`, where it replaces whatever `minVersion` the library passes. Node's default is already TLS 1.2, but `tls.DEFAULT_MIN_VERSION` can be lowered by `--tls-min-v1.0`, `NODE_OPTIONS` or any module in the process; UltraTon no longer depends on it.
+
+### Changed
+
+- **`maxHeaderListPairs` on HTTP/2 sessions goes from 64 to 128**, Node's default. A legitimate response with many `set-cookie` and CDN headers could exceed 64 and fail with an opaque protocol error; `maxHeaderListSize` (16 KiB) is what bounds the memory and is unchanged.
+- SECURITY.md says that a Node build carrying a security fix under an older version number (a distribution backport) is treated as unfixed, and THREAT_MODEL.md gains rows for server push, the TLS floor and the Node-release gating, plus the error-code oracle (`ERR_ULTRATON_RESERVED_IP` against `ENOTFOUND`) as a residual risk.
+
 ### Added
 
+- Tests: a server that pushes streams, the TLS floor on every connection, and a Slowloris body (a byte every 50 ms) cut by `timeoutMs` in `get()` and left to the idle timer in `stream()`, on both engines. README and THREAT_MODEL.md now say the latter.
 - **A weekly soak test in CI.** `scripts/soak.ts` (workflow `soak.yml`, also on demand with a chosen length) runs 20 to 60 minutes of hostile and flaky server behaviour on loopback, on HTTP/1.1 and HTTP/2, directly and through a CONNECT proxy: redirects across origins, 503s with retries, dropped streams, aborts, idle timeouts, body-size overruns on the wire and after decompression, uploads and cancelled streams. It fails if RSS or heap end above the warm-up baseline by more than a margin, or if an HTTP/2 session, a socket or a handle is still open after `close()`.
 - **Signed build provenance on every GitHub release.** `publish.yml` attests the packed tarball with Sigstore (`actions/attest-build-provenance`) and attaches `ultraton-<version>.tgz` and its `.sigstore.json` bundle to the release, so OpenSSF Scorecard's Signed-Releases check no longer scores -1. SECURITY.md shows the `gh attestation verify` command.
 

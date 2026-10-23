@@ -9,7 +9,7 @@ import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
-import { HTTP_CODES_REDIRECTS } from '../constants.ts';
+import { HTTP_CODES_REDIRECTS, TLS_MIN_VERSION } from '../constants.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
@@ -69,7 +69,7 @@ class TunnelAgent extends https.Agent {
                 // ponytail: no TLS session resumption through the proxy (https.Agent's session cache lives in the
                 // createConnection this replaces); a full handshake per new tunnel, add the cache if that ever costs.
                 const { ca, cert, key, servername } = options;
-                callback(null, tls.connect({ socket: raw, host, ca, cert, key, servername, ALPNProtocols: ['http/1.1'] }));
+                callback(null, tls.connect({ socket: raw, host, ca, cert, key, servername, minVersion: TLS_MIN_VERSION, ALPNProtocols: ['http/1.1'] }));
             }, (err: Error) => callback(err));
         return undefined;
     }
@@ -116,8 +116,8 @@ export class Http1Engine {
                 // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
                 http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
                 https: this.#proxy
-                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }, this.#proxy, this.#closing.signal)
-                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...this.#tls }),
+                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }, this.#proxy, this.#closing.signal)
+                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }),
             };
             this.#agentsByPolicy.set(key, agents);
         }

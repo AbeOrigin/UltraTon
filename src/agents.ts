@@ -9,6 +9,7 @@ import { isLoopbackHost } from './helpers/url-parser.ts';
 import { KEEP_ALIVE } from './helpers/keep-alive.ts';
 import { pinnedLookup, resolveAndPinAll, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import type { TlsMaterial } from './types/request-options.types.ts';
+import { TLS_MIN_VERSION } from './constants.ts';
 
 /** The options of {@link createSecureAgents}. All optional; the defaults are the client's. */
 export interface UltraTonSecureAgentOptions {
@@ -148,6 +149,8 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
 
         override createConnection(connectOptions: any, callback?: Callback): undefined {
             // Certificate checks stay on: a library's rejectUnauthorized: false or no-op checkServerIdentity is ignored.
+            // (The agent's own options, minVersion among them, already win over the request's: Node's Agent merges
+            // them last.)
             const connect: Connect = opts => super.createConnection({ ...opts, rejectUnauthorized: true, checkServerIdentity: tls.checkServerIdentity }) as Duplex;
             secureConnect(connect, connectOptions, callback!, policy, false);
             return undefined;
@@ -157,7 +160,7 @@ export function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraT
     const agents = {
         // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
         http: new SecureHttpAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
-        https: new SecureHttpsAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, ...tlsMaterial }),
+        https: new SecureHttpsAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...tlsMaterial }),
     };
     if (!KEEP_ALIVE) {
         refuseSocketReuse(agents.http);

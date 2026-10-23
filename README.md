@@ -296,7 +296,7 @@ if (!res.ok) await res.body.cancel();
 else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'));
 ```
 
-`stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+`stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. `timeoutMs` ends when the headers arrive: a body that keeps moving may take longer than the budget, and only the idle timer guards it. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
 
 **Walk a paginated API.** `paginate()` yields one complete response per page, each a full `get()` with every check. By default the next page is the `rel="next"` link of the `Link` header (RFC 8288), as GitHub and many other APIs send it; `next(page)` reads it from somewhere else:
 

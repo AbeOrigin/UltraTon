@@ -1099,3 +1099,49 @@ describe("HTTP/2 never resolves a status-less or truncated response", () => {
     }
   });
 });
+
+describe("HTTP/2 server push is refused", () => {
+  it("a pushing server gets ERR_HTTP2_PUSH_DISABLED; the main response arrives and no pushed stream reaches the client", { timeout: 5000 }, async (t) => {
+    const pushErrors: NodeJS.ErrnoException[] = [];
+    const server = createServer();
+    server.on("session", (session) => session.on("error", () => {}));
+    server.on("stream", (stream) => {
+      stream.on("error", () => {});
+      // Node throws at once when the client disabled push; the callback form is for a later failure.
+      try {
+        stream.pushStream({ ":path": "/pushed" }, (err, pushed) => {
+          if (err) { pushErrors.push(err); return; }
+          pushed.on("error", () => {});
+          pushed.respond({ ":status": 200 });
+          pushed.end("EVIL");
+        });
+      } catch (err) {
+        pushErrors.push(err as NodeJS.ErrnoException);
+      }
+      stream.respond({ ":status": 200 });
+      stream.end("main");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    // The spy wraps the real connect so that the listener is on the session before its first request goes out.
+    let pushedToClient = 0;
+    const connect = t.mock.fn(((...args: Parameters<typeof nativeConnect>) => {
+      const session = nativeConnect(...args);
+      session.on("stream", () => pushedToClient++);
+      return session;
+    }) as typeof nativeConnect);
+    const manager = new Http2SessionManager({}, connect);
+    const client = new UltraTonClient({ http2: true, permitReservedIps: true, [kSessionManager]: manager } as any);
+    t.after(async () => {
+      manager.closeAll();
+      server.closeAllConnections?.();
+      await new Promise<void>((r) => server.close(() => r()));
+    });
+
+    const response = await client.get(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    assert.equal(response.text(), "main");
+    await new Promise((r) => setImmediate(r));
+    assert.equal(pushedToClient, 0, "no pushed stream reached the client");
+    assert.equal(pushErrors.length, 1);
+    assert.equal(pushErrors[0].code, "ERR_HTTP2_PUSH_DISABLED");
+  });
+});

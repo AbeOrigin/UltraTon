@@ -12,6 +12,7 @@ import {
   MAX_HEADER_LIST_PAIRS,
   MAX_HEADER_LIST_SIZE,
   MAX_SESSION_MEMORY_MB,
+  TLS_MIN_VERSION,
 } from "../src/constants.ts";
 
 /**
@@ -68,6 +69,8 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
     assert.strictEqual(options.settings.initialWindowSize, H2_STREAM_WINDOW);
     assert.strictEqual(options.maxSessionMemory, MAX_SESSION_MEMORY_MB);
     assert.strictEqual(options.maxHeaderListPairs, MAX_HEADER_LIST_PAIRS);
+    assert.strictEqual(options.settings.enablePush, false);
+    assert.strictEqual(options.minVersion, TLS_MIN_VERSION);
   });
 
   it("allows overriding paranoid limits via overrideOptions", async (t) => {
@@ -104,5 +107,8 @@ describe("Sprint 7 – Native Configuration Hardening", () => {
     assert.strictEqual(options.settings.maxHeaderListSize, 99999);
     assert.strictEqual(options.maxSessionMemory, 10);
     assert.strictEqual(options.maxHeaderListPairs, MAX_HEADER_LIST_PAIRS);
+    // Neither the push refusal nor the TLS floor can be lifted from here.
+    assert.strictEqual(options.settings.enablePush, false);
+    assert.strictEqual(options.minVersion, TLS_MIN_VERSION);
   });
 });

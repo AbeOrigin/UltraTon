@@ -5,7 +5,9 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
 
 // Paranoid limits to prevent RAM exhaustion on HTTP/2 sessions (HPACK bombs, memory leaks).
 export const MAX_HEADER_LIST_SIZE = 16384; // 16 KB
-export const MAX_HEADER_LIST_PAIRS = 64;
+// Node's default. MAX_HEADER_LIST_SIZE is what bounds the memory; at 64, a legitimate response with many set-cookie and
+// CDN headers failed with an opaque protocol error.
+export const MAX_HEADER_LIST_PAIRS = 128;
 export const MAX_SESSION_MEMORY_MB = 4; // 4 MB
 /**
  * HTTP/2 receive window of each stream: the most a server can send on it that nobody has read yet, so the memory a
@@ -19,6 +21,12 @@ export const H2_STREAM_WINDOW = 1024 * 1024;
  * wait on one shared window.
  */
 export const H2_CONNECTION_WINDOW = 16 * 1024 * 1024;
+
+/**
+ * The TLS floor of every connection UltraTon opens, set on each one rather than inherited from `tls.DEFAULT_MIN_VERSION`,
+ * which `--tls-min-v1.0` (also through NODE_OPTIONS) or any module in the process can lower.
+ */
+export const TLS_MIN_VERSION = 'TLSv1.2';
 
 export const IDLE_TIMEOUT = 10000;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;
