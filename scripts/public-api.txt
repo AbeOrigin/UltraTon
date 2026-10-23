@@ -40,6 +40,7 @@ export declare class UltraTonClient {
         readonly permitReservedIps?: ReservedIpPolicy;
     }): Promise<UltraTonExplanation>;
     close(): Promise<void>;
+    [Symbol.asyncDispose](): Promise<void>;
 }
 
 ## UltraTonClientOptions (types/request-options.types.d.ts)
@@ -95,6 +96,13 @@ export interface UltraTonExplanation {
     readonly code?: string;
     readonly reason?: string;
     readonly addresses: readonly UltraTonExplainedAddress[];
+}
+
+## UltraTonHttpError (errors.d.ts)
+export declare class UltraTonHttpError extends SecureHttpError {
+    readonly statusCode: number;
+    readonly response: UltraTonResponse | UltraTonStreamResponse;
+    constructor(statusCode: number, response: UltraTonResponse | UltraTonStreamResponse);
 }
 
 ## UltraTonMemoryError (errors.d.ts)
@@ -189,6 +197,7 @@ export interface UltraTonResponse<T = unknown> {
     readonly data: Buffer;
     json<R = T>(): R;
     text(): string;
+    assertOk(): UltraTonResponse<T>;
 }
 
 ## UltraTonRetryInfo (types/request-options.types.d.ts)
@@ -223,6 +232,7 @@ export interface UltraTonSecureAgentOptions {
 export interface UltraTonSecureAgents {
     readonly http: http.Agent;
     readonly https: https.Agent;
+    [Symbol.dispose](): void;
 }
 
 ## UltraTonStreamMethod (types/request-options.types.d.ts)
@@ -242,6 +252,7 @@ export interface UltraTonStreamResponse {
     readonly url: string;
     readonly redirected: boolean;
     readonly body: ReadableStream<Uint8Array>;
+    assertOk(): UltraTonStreamResponse;
 }
 
 ## error codes
@@ -249,6 +260,7 @@ ERR_ULTRATON_AGENT_KEEP_ALIVE
 ERR_ULTRATON_AGENT_PROXY
 ERR_ULTRATON_CONTENT_ENCODING
 ERR_ULTRATON_DOWNGRADE
+ERR_ULTRATON_HTTP_STATUS
 ERR_ULTRATON_MAX_PAGES
 ERR_ULTRATON_NON_CANONICAL_IP
 ERR_ULTRATON_PAGE_OUT_OF_SCOPE
