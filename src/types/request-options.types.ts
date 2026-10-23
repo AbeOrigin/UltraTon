@@ -8,13 +8,13 @@ export type { ReservedIpPolicy };
 /** A value of the `query` option: sent as its string form. */
 export type QueryValue = string | number | boolean;
 
+/** Which of the caller's headers follow a redirect to another origin. See {@link UltraTonRequestOptions.redirectHeaders}. */
+export type RedirectHeaders = 'all' | 'safe';
+
 /**
  * The options of one request, the same for every method and both engines. A closed list: anything else throws a
  * `TypeError` (with a hint for the common mistakes), it is never ignored.
  */
-/** Which of the caller's headers follow a redirect to another origin. See {@link UltraTonRequestOptions.redirectHeaders}. */
-export type RedirectHeaders = 'all' | 'safe';
-
 export interface UltraTonRequestOptions {
     /**
      * Key-value pairs for HTTP headers, as a plain object (a `Headers` or `Map` instance throws a `TypeError`).
