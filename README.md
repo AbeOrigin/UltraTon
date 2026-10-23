@@ -88,7 +88,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | Retries | opt-in, idempotent only | — | — (plugin) | on (2), idempotent | — |
 | Proxies | CONNECT and SOCKS5, opt-in, target pinned | `NODE_USE_ENV_PROXY` (recent Node) | from `HTTP_PROXY` by default | through an agent | through an agent |
 | HTTP/2 | `http2: true` | not by default | `httpVersion: 2` | `http2: true` | — |
-| Hooks / interceptors | `diagnostics_channel` (hooks planned) | — | interceptors | hooks | — |
+| Hooks / interceptors | `diagnostics_channel` (read-only) | — | interceptors | hooks | — |
 | Pagination | `paginate()`, same origin only | — | — | Yes | — |
 | Cookies, HTTP cache | — | — | — | Yes | — |
 | Upload streaming | Yes, with an optional size limit | Yes | Yes | Yes | Yes |
@@ -99,7 +99,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 **Where UltraTon is not the right choice:**
 - **Raw throughput against an API you trust:** Node's own `http.request` is about 1.3× faster. `fetch` is up to 1.4× faster than UltraTon over HTTP/1.1 with small bodies, and needs nothing installed.
 - **Other runtimes:** browsers, Bun or Deno.
-- **Features it does not have:** request-rewriting interceptors, a cookie jar or HTTP caching. Hooks are planned.
+- **Features it does not have:** request-rewriting interceptors or hooks, a cookie jar or HTTP caching. Anything that could rewrite a request after validation is left out on purpose.
 
 ## Options
 
@@ -397,7 +397,7 @@ diagnosticsChannel.subscribe('ultraton:request:error', (message) => {
 });
 ```
 
-Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Adding headers to outgoing requests (trace propagation such as `traceparent`) is planned with request hooks. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
+Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Subscribers cannot change the request: to add headers (trace propagation such as `traceparent`), pass them in `headers` on the client or the request. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
 
 ### Proxy
 

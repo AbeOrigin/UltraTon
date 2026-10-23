@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`maxHeaderListPairs` on HTTP/2 sessions goes from 64 to 128**, Node's default. A legitimate response with many `set-cookie` and CDN headers could exceed 64 and fail with an opaque protocol error; `maxHeaderListSize` (16 KiB) is what bounds the memory and is unchanged.
+- ROADMAP-HTTP1.md and ROADMAP-HTTP2.md are gone: they were the 1.x sprint plans, and this file is the history. The README no longer announces request hooks (a subscriber of `diagnostics_channel` cannot change a request; headers go in `headers`), CONTRIBUTING says CodeQL runs through GitHub's default setup, and the compat RESULTS files say which release they measure.
 - SECURITY.md says that a Node build carrying a security fix under an older version number (a distribution backport) is treated as unfixed, and THREAT_MODEL.md gains rows for server push, the TLS floor and the Node-release gating, plus the error-code oracle (`ERR_ULTRATON_RESERVED_IP` against `ENOTFOUND`) as a residual risk.
 
 ### Added
