@@ -204,3 +204,32 @@ describe('createSecureAgents', () => {
         }
     });
 });
+
+describe('createSecureAgents: the TLS name is the host the socket goes to', () => {
+    /** A TLS server with a certificate for the DNS name `localhost` only (no IP in its SANs). */
+    const dnsOnlyServer = async (t: TestContext) => {
+        const cert = fixture('dns-only-cert.pem');
+        const srv = https.createServer({ cert, key: fixture('dns-only-key.pem') }, (_req, res) => res.end('ok'));
+        const sockets = new Set<Socket>();
+        srv.on('secureConnection', (s: Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+        await new Promise<void>(r => srv.listen(0, '127.0.0.1', r));
+        t.after(async () => { for (const s of sockets) s.destroy(); await new Promise<void>(r => srv.close(() => r())); });
+        return { port: (srv.address() as AddressInfo).port, cert };
+    };
+    const certMismatch = (err: Error & { code?: string }) => err.code === 'ERR_TLS_CERT_ALTNAME_INVALID';
+
+    it("a library's servername or Host header never becomes the name the certificate is checked against", async (t) => {
+        const { port, cert } = await dnsOnlyServer(t);
+        const agents = agentsOf(t, { permitReservedIps: ['127.0.0.1'] });
+        // The socket goes to 127.0.0.1: the certificate is checked against that address, whatever the library says.
+        await assert.rejects(get(`https://127.0.0.1:${port}/`, agents.https, { ca: cert, servername: 'localhost' }), certMismatch);
+        await assert.rejects(get(`https://127.0.0.1:${port}/`, agents.https, { ca: cert, headers: { host: 'localhost' } }), certMismatch);
+    });
+
+    it('a DNS name in the URL is the name checked, as before', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')] });
+        const { port, cert } = await dnsOnlyServer(t);
+        const agents = agentsOf(t, { permitReservedIps: ['127.0.0.1'] });
+        assert.equal(await get(`https://localhost:${port}/`, agents.https, { ca: cert }), 'ok');
+    });
+});

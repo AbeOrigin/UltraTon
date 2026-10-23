@@ -156,6 +156,21 @@ describe('extend() leaves the base and its options untouched', () => {
     });
 });
 
+describe('extend() with a header named __proto__', () => {
+    it('keeps it a plain key: the variant builds, and the header is dropped as always', async (t) => {
+        const { url } = await serve(t, false);
+        const headers = JSON.parse('{"__proto__":"x","a":"1"}') as Record<string, string>;
+        const base = new UltraTonClient({ permitReservedIps: true, headers });
+        const v = base.extend({ headers: { b: '2' } });
+        t.after(async () => { await base.close(); await v.close(); });
+        const seen = (await v.get(`${url}/`)).json<Record<string, string>>();
+        assert.equal(seen.a, '1');
+        assert.equal(seen.b, '2');
+        assert.equal(Object.hasOwn(seen, '__proto__'), false);
+        assert.equal(Object.getPrototypeOf({}), Object.prototype, 'Object.prototype untouched');
+    });
+});
+
 describe('extend() with userAgent', () => {
     it('a userAgent in the variant replaces a user-agent header of the base without the "one or the other" error', async (t) => {
         const { url } = await serve(t, false);

@@ -28,7 +28,8 @@ function snapshot(value: unknown, depth: number): unknown {
     if (Array.isArray(value)) return value.map(item => snapshot(item, depth - 1));
     const proto: unknown = Object.getPrototypeOf(value);
     if (proto !== Object.prototype && proto !== null) return value;
-    const copy: Record<string, unknown> = {};
+    // No prototype: an own `__proto__` key (a header named so, from JSON) stays a plain key instead of setting one.
+    const copy: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(value)) copy[key] = snapshot((value as Record<string, unknown>)[key], depth - 1);
     return copy;
 }

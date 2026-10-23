@@ -589,6 +589,7 @@ The agents protect the **connection**. The rest stays with the library you plug 
 | Reserved IPs blocked, every address validated, DNS pinned | Yes | Yes |
 | Redirect hops checked | Yes (each new socket) | Yes |
 | TLS always verified | Yes | Yes |
+| TLS name taken from the host the socket goes to, never from a `servername` option or a `Host` header | Yes | Yes |
 | Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes |
 | https → http redirect rejected, credentials dropped across origins | No (the library decides) | Yes |
 | Body size limit, decompression bombs, truncated bodies | No | Yes |
