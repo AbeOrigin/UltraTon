@@ -32,28 +32,31 @@ describe('NODE_DEBUG=ultraton', () => {
     const child = fileURLToPath(new URL('./fixtures/debug-log-child.ts', import.meta.url));
     // --import takes a URL (a Windows path has a drive letter where a scheme goes); the script argument takes a path.
     const guard = new URL('./fixtures/loopback-only.ts', import.meta.url).href;
+    /**
+     * The ULTRATON lines the child wrote, as one string. Only those are ours to judge: Node itself writes to stderr too
+     * (an ExperimentalWarning on 22.12.0 where type stripping is behind a flag; megabytes about module loading with
+     * NODE_DEBUG=*).
+     */
     const run = async (env: Record<string, string | undefined>) => {
         const { NODE_DEBUG: _off, ULTRATON_DEBUG_PATHS: _paths, ...base } = process.env;
-        // NODE_DEBUG=* makes Node itself write megabytes about module loading: room for it.
         const { stderr } = await promisify(execFile)(process.execPath, ['--import', guard, child], { env: { ...base, ...env }, maxBuffer: 64 * 1024 * 1024 });
-        return stderr;
+        return stderr.split('\n').filter(line => line.startsWith('ULTRATON ')).join('\n');
     };
 
     it('logs the response and the error without any secret or path', { timeout: 20_000 }, async () => {
-        const stderr = await run({ NODE_DEBUG: 'ultraton' });
-        assert.match(stderr, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:\d+ -> 200 \(\d+ ms\)/);
-        assert.match(stderr, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:1 failed: UltraTonNetworkError ECONNREFUSED \(\d+ ms\)/);
-        assert.doesNotMatch(stderr, /s3cret|\/a|\/b|\/down/);
+        const ours = await run({ NODE_DEBUG: 'ultraton' });
+        assert.match(ours, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:\d+ -> 200 \(\d+ ms\)/);
+        assert.match(ours, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:1 failed: UltraTonNetworkError ECONNREFUSED \(\d+ ms\)/);
+        assert.doesNotMatch(ours, /s3cret|\/a|\/b|\/down/);
     });
 
     it('ULTRATON_DEBUG_PATHS=1 adds the path, still without secrets; NODE_DEBUG=* alone does not', { timeout: 20_000 }, async () => {
         const withPaths = await run({ NODE_DEBUG: 'ultraton', ULTRATON_DEBUG_PATHS: '1' });
         assert.match(withPaths, /GET http:\/\/127\.0\.0\.1:\d+\/a\/b -> 200/);
         assert.doesNotMatch(withPaths, /s3cret/);
-        // Node's own sections print a lot (module loading, http): only the ULTRATON lines are ours to judge.
-        const ours = (await run({ NODE_DEBUG: '*' })).split('\n').filter(line => line.startsWith('ULTRATON '));
-        assert.ok(ours.some(line => /GET http:\/\/127\.0\.0\.1:\d+ -> 200/.test(line)), ours.join('\n'));
-        assert.ok(ours.every(line => !line.includes('/a/b')), ours.join('\n'));
+        const star = await run({ NODE_DEBUG: '*' });
+        assert.match(star, /GET http:\/\/127\.0\.0\.1:\d+ -> 200/);
+        assert.doesNotMatch(star, /\/a\/b/);
     });
 
     it('without NODE_DEBUG nothing is written and nothing subscribes', { timeout: 20_000 }, async () => {
