@@ -25,7 +25,7 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 **Trusted:**
 - **The developer who configures the client.** Options are configuration, not input, but mistakes in them throw instead of being ignored.
 - **The operating system resolver.**
-- **Node.js itself** (its TLS stack and CA store, llhttp, nghttp2).
+- **Node.js itself** (its TLS stack and CA store, llhttp, nghttp2). On a release that lacks one of Node's own security fixes, the feature that fix covers is narrowed rather than trusted: no Brotli, no HTTP/1.1 keep-alive (see [SECURITY.md](SECURITY.md)).
 - **The operator's choice** of `permitReservedIps` and `proxy`.
 
 ## Defenses
@@ -40,7 +40,10 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 | A1: escaping `baseUrl` with the request path | The resolved path is judged the way lenient servers read it (repeated percent-decoding, NFKC, `..;/`, backslashes, fullwidth dots). Followed redirects are not bound to `baseUrl` (see residual risks) | `src/http-client.ts` | `client-facade` |
 | A1: header injection | CRLF/NUL and HTTP/2 pseudo-headers in headers throw before connecting | `src/helpers/request-options.ts` | `request-headers` |
 | A2: memory exhaustion, decompression bombs | `maxBodySize` on the wire and on decoded bytes; at most 2 content-encodings (Brotli's own working memory is a residual risk) | `src/helpers/body-reader.ts` | `decompress`, `http2-memory-shield` |
-| A2: hangs, slowloris | `timeoutMs` (one budget for DNS, every hop, every retry), `socketTimeoutMs` idle timer, HTTP/2 PING liveness | engines, `src/helpers/retry.ts` | `abort-and-idle`, `http2-session-lifetime`, `retry` |
+| A2: HTTP/2 server push | `enablePush: false` on every session: a `PUSH_PROMISE` is a protocol error that fails the request, so a server cannot park streams nobody reads (up to 200 × the 1 MiB window) in the process | `src/engines/http2-session-manager.ts` | `http2-security`, `http2-session-limits` |
+| A2: TLS downgrade | TLS 1.2 is the floor of every connection UltraTon opens (direct, through a tunnel, to a TLS proxy, and in the secure agents whatever the library asks), set per connection, not inherited from `tls.DEFAULT_MIN_VERSION` or `--tls-min-v1.0` | engines, `src/proxy/tunnel.ts`, `src/agents.ts` | `tls-min-version`, `http2-session-limits` |
+| A2 through Node: a release without one of Node's own security fixes | The feature the fix covers is turned off below the first fixed release of the line: `br` is neither requested nor decoded, HTTP/1.1 sockets are not reused; a prerelease or an unknown version counts as unfixed | `src/helpers/node-release.ts`, `body-reader.ts`, `keep-alive.ts` | `decompress`, `keep-alive`, `keepalive-guard` |
+| A2: hangs, slowloris | `timeoutMs` (one budget for DNS, every hop, every retry and a buffered body, however slowly it drips), `socketTimeoutMs` idle timer, HTTP/2 PING liveness. The body of `stream()` is guarded by the idle timer alone: it may legitimately outlive the budget | engines, `src/helpers/retry.ts` | `abort-and-idle`, `http2-session-lifetime`, `retry` |
 | A2: truncated or malformed responses | content-length checked against wire bytes; a reset, GOAWAY or abort mid-body is an error, never a short success | engines, `src/helpers/response.ts` | `response-shape`, `http2-parsing-fix` |
 | A2: prototype pollution | `json()` strips `__proto__`, `constructor`, `prototype`; options are read as own properties only | `src/helpers/response.ts`, `request-options.ts` | `json-parsing-fix`, pollution tests in several files |
 | A2: retry abuse (`Retry-After` loops, 503 floods) | Retries off by default; at most 10; a `Retry-After` above `maxDelayMs` or the budget is not waited; only idempotent methods unless the caller lists others in `retry.methods` | `src/helpers/retry.ts` | `retry` |
@@ -60,6 +63,7 @@ These are accepted and documented. Reports about them are not vulnerabilities (s
 - **SOCKS5 credentials travel in cleartext to the proxy**, as the protocol has no encryption.
 - **DNS lookups cannot be cancelled.** A timeout rejects the request on time, but `getaddrinfo` keeps a threadpool thread until the resolver answers.
 - **`error.cause` keeps Node's original error**, which may contain addresses: do not send it to untrusted sinks.
+- **Error codes tell a blocked name from an unknown one.** A name that resolves to a reserved address fails with `ERR_ULTRATON_RESERVED_IP`, one that does not resolve with `ENOTFOUND`. Whoever chose the URL and sees the code learns that an internal name exists, never what it resolves to. Any client that validates has this oracle; map both to one message for end users.
 - **The secure agents protect the connection only.** Body limits, timeouts and header validation stay with the library using them. Some library modes skip any agent: axios with a proxy for `https:` URLs, axios with `httpVersion: 2`, got with `createConnection` or `h2session`. The README makes `proxy: false` mandatory and forbids those modes. A failure to reach an *allowed* address surfaces Node's own error, which may name it.
 - **Request bodies have no size limit by default.** The caller controls what it sends: `maxRequestBodySize` caps it when the body comes from somewhere else (a stream that might not end). A `File` or `Blob` body is read whole into memory; a stream body is not. A stream body is never retried and never replayed on a 307/308, because it can only be read once.
 - **`json()` drops legitimate fields** named `__proto__`, `constructor` or `prototype`.

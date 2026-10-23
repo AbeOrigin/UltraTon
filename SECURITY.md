@@ -16,6 +16,8 @@ Run UltraTon on a Node.js release with the October 2026 security fixes: **22.23.
 - **CVE-2026-105481, a keep-alive socket can take a response written before the request:** on an unpatched release UltraTon turns HTTP/1.1 keep-alive off, so a socket serves one request and is then closed and never sits idle in a pool to be poisoned (a new TCP/TLS connection per request until you upgrade Node). The agents of `createSecureAgents()` also refuse to have `keepAlive` turned back on, or a `maxSockets` or `maxTotalSockets` limit set, there (`ERR_ULTRATON_AGENT_KEEP_ALIVE`): with a limit, Node hands a waiting request the socket a response just ended on, keep-alive or not. Regression tests (`__tests__/keepalive-guard.test.ts`) send a response glued to the previous one and one written while the socket sits idle, to `UltraTonClient` and to `createSecureAgents()` on every release line in CI, and fail if either is ever taken as the next answer. Pools are per origin, so only the server you are talking to could have done it.
 - **The eMudhra intermediate CA compromise:** fixed by the CA store of the patched releases, which UltraTon uses unless you pass your own `tls.ca`.
 
+UltraTon reads `process.versions.node` to tell a fixed release from an unfixed one. A Node build that carries a fix under an older version number (a distribution backport) is treated as unfixed: `br` and HTTP/1.1 keep-alive stay off there. That costs performance, not security, and there is no switch to force them back on.
+
 ## Reporting a vulnerability
 
 Please **do not open a public issue**. Report it privately through GitHub:

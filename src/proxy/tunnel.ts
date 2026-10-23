@@ -4,6 +4,7 @@ import type { Duplex } from 'node:stream';
 import { UltraTonNetworkError, toNetworkError } from '../errors.ts';
 import type { TlsMaterial } from '../types/request-options.types.ts';
 import { ipv6Groups } from '../security/dns-pinner.ts';
+import { TLS_MIN_VERSION } from '../constants.ts';
 
 /** `proxy` once validated (see proxyOption). */
 export interface ProxyConfig {
@@ -211,6 +212,7 @@ function openTunnel(proxy: ProxyConfig, host: string, port: number, signal: Abor
                 port: proxyPort,
                 ...(isIP(proxyHost) === 0 ? { servername: proxyHost } : {}),
                 ...(proxy.ca !== undefined ? { ca: proxy.ca } : {}),
+                minVersion: TLS_MIN_VERSION,
                 ALPNProtocols: ['http/1.1'],
             })
             : net.connect({ host: proxyHost, port: proxyPort });
