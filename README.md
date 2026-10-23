@@ -69,6 +69,20 @@ await api.close(); // when the client is no longer needed
 | Retries | **Off**. When on: idempotent methods only, `Retry-After` waited (or the response returned when it asks for too long), and policy, memory and redirect errors never retried. Every attempt is validated again. | `retry` (0–10, or `{ limit, methods, statusCodes, maxDelayMs, onRetry }`) |
 | Proxies | **Not used**, and never read from `HTTP_PROXY`/`HTTPS_PROXY`. When set, the proxy gets the validated IP (CONNECT or SOCKS5), never a name, and the target's certificate is still checked. | `proxy` (client option) |
 
+### Why was this blocked?
+
+`client.explain(url)` says what a request would do before connecting, without connecting: the URL as it would be sent (`baseUrl` applied, normalized), the addresses the host resolves to and how the policy judges each one, and the verdict with the `code` the request would reject with. The same functions decide here and in a request.
+
+```ts
+const client = new UltraTonClient({ permitReservedIps: ['10.0.0.0/8'] });
+const why = await client.explain('https://cache.internal/');
+// { href: 'https://cache.internal/', verdict: 'blocked', code: 'ERR_ULTRATON_RESERVED_IP',
+//   reason: 'UltraTon: Target resolves to a prohibited internal/reserved network IP. ...',
+//   addresses: [{ address: '192.168.1.20', family: 4, allowed: false }] }
+```
+
+It covers the first hop (not redirects), and with `resolve: 'proxy'` nothing is resolved locally. The result names resolved addresses: it is for the operator configuring the policy, never for whoever supplied the URL.
+
 ## Choosing a client
 
 UltraTon does not try to be the fastest HTTP client: Node's own `http.request` is about 1.3× faster, and it should be, with no checks to run. UltraTon is the client for code that sends requests to URLs it does not fully control, and for teams that want safe defaults without writing them by hand.
@@ -175,20 +189,22 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | `paginate()`: a next page is left after `maxPages` | `ERR_ULTRATON_MAX_PAGES` |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
 
-`UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, so test for the timeout first:
+`isUltraTonError(err, code?)` tells UltraTon's errors apart by shape (`name` and `code`), so it also recognizes them when two copies of the package are installed, and `code` autocompletes as `UltraTonErrorCode` (a misspelled code is a compile error):
 
 ```ts
-import { UltraTonNetworkTimeoutError, UltraTonNetworkError, SecureHttpError } from 'ultraton';
+import { isUltraTonError, UltraTonNetworkTimeoutError, UltraTonNetworkError } from 'ultraton';
 
 try {
   await api.get('reports/slow');
 } catch (err) {
-  if (err instanceof UltraTonNetworkTimeoutError) { /* retry later */ }
+  if (isUltraTonError(err, 'ERR_ULTRATON_RESERVED_IP')) { /* blocked target */ }
+  else if (err instanceof UltraTonNetworkTimeoutError) { /* retry later */ }
   else if (err instanceof UltraTonNetworkError) { /* connection problem, err.code */ }
-  else if (err instanceof SecureHttpError && err.code === 'ERR_ULTRATON_RESERVED_IP') { /* blocked target */ }
   else throw err;
 }
 ```
+
+`UltraTonNetworkTimeoutError` extends `UltraTonNetworkError`, so test for the timeout first when using `instanceof`.
 
 Error messages never contain the IP address or hostname, so they are safe to show to the user who supplied the URL. The original Node error is in `err.cause`, and it does contain them, so do not send `cause` to untrusted sinks.
 

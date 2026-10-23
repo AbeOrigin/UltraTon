@@ -14,9 +14,9 @@ import type {
   SecureUltraTonRequestOptions,
 } from "../types/request-options.types.ts";
 import {
-  UltraTonMemoryError,
   UltraTonNetworkTimeoutError,
   absoluteTimeout,
+  bodyTooLarge,
   clientClosed,
   idleTimeout,
   refusedStream,
@@ -428,10 +428,7 @@ export class Http2Engine {
             declaredLength: declaredBodyLength(String(pseudoHeaders[":method"]), status, responseHeaders),
             socketTimeoutMs,
             signal,
-            tooLarge: () =>
-              new UltraTonMemoryError(
-                `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${streaming.maxBodySize} bytes.`,
-              ),
+            tooLarge: () => bodyTooLarge(streaming.maxBodySize),
             idle: () => idleTimeout(socketTimeoutMs),
             mapError: (err) => {
               if (bodyError) return bodyError;
@@ -463,10 +460,7 @@ export class Http2Engine {
           maxBodySize,
           contentEncoding: headers["content-encoding"],
           decompress,
-          tooLarge: () =>
-            new UltraTonMemoryError(
-              `UltraTon: HTTP/2 response body exceeded the maximum allowed size of ${maxBodySize} bytes.`,
-            ),
+          tooLarge: () => bodyTooLarge(maxBodySize),
           // A decoding failure or a decoded overflow, reported after the chunk that caused it was taken.
           onError: (err) => {
             if (settled) return;

@@ -1,11 +1,14 @@
 import type * as http from 'node:http';
 import type * as https from 'node:https';
+import { isIP } from 'node:net';
 import { SecureHttpError, clientClosed } from './errors.ts';
 import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
+import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
 import { kSessionManager, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
@@ -16,7 +19,7 @@ import { observeRequest } from './helpers/diagnostics.ts';
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
 import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
-import type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+import type { UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
 interface InternalClientOptions extends UltraTonClientOptions {
@@ -124,6 +127,8 @@ export class UltraTonClient {
     readonly #engine: Http1Engine | Http2Engine;
     readonly #defaults: ClientDefaults;
     readonly #baseUrl?: URL;
+    /** With `proxy.resolve: 'proxy'` (or a `socks5h:` URL) names are resolved by the proxy, so explain() has no addresses to judge. */
+    readonly #proxyResolvesNames: boolean;
     #closed = false;
 
     /**
@@ -144,6 +149,7 @@ export class UltraTonClient {
         const resolved = resolveClientOptions(options, `ultraton/${VERSION}`);
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
+        this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
 
         // The seams are read only once the options validated as an object, and only as own properties.
         const internal = (options ?? {}) as InternalClientOptions;
@@ -270,6 +276,51 @@ export class UltraTonClient {
             // Under baseUrl the part below it goes through get() as a path, so the traversal checks of a path apply too.
             // './' keeps it relative and resolving to exactly `target` ('//x', 'users:search', '?q' included).
             page = await this.get<T>(base ? `./${target.href.slice(base.href.length)}` : target.href, later);
+        }
+    }
+
+    /**
+     * Says what a request to `url` would do before connecting, without connecting: the URL as it would be sent
+     * (`baseUrl` applied, normalized), the addresses its host resolves to and how the policy judges each one, and the
+     * verdict with the `code` and message the request would reject with. The same functions decide here and in a
+     * request, so the two cannot disagree. It covers the first hop only (not redirects), and with `resolve: 'proxy'`
+     * nothing is resolved here. For the operator configuring `permitReservedIps` or `baseUrl`: the result names resolved
+     * addresses, so never return it to whoever supplied the URL.
+     * @param url - As for `get()`: an absolute URL, or a path when `baseUrl` is set.
+     * @param options - `permitReservedIps` for this call; the client's default otherwise.
+     */
+    public async explain(url: string, options?: { readonly permitReservedIps?: ReservedIpPolicy }): Promise<UltraTonExplanation> {
+        const blocked = (err: unknown, href?: string): UltraTonExplanation => ({
+            href,
+            verdict: 'blocked',
+            code: typeof (err as { code?: unknown })?.code === 'string' ? (err as { code: string }).code : undefined,
+            reason: err instanceof Error ? err.message : String(err),
+            addresses: [],
+        });
+        let target: URL;
+        let policy: ReservedIpPolicy;
+        try {
+            target = parseSafeUrl(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url);
+            policy = buildSafeRequestOptions({ permitReservedIps: options?.permitReservedIps ?? this.#defaults.permitReservedIps }).permitReservedIps;
+        } catch (err) {
+            return blocked(err);
+        }
+        // Node never resolves an IP literal, and a hostname in brackets is an IPv6 literal.
+        const bareHost = target.hostname.replace(/^\[|\]$/g, '');
+        if (this.#proxyResolvesNames && isIP(bareHost) === 0) {
+            return { href: target.href, verdict: 'allowed', reason: 'The proxy resolves the name; UltraTon judges no address here.', addresses: [] };
+        }
+        try {
+            const judged = await judgeAddresses(bareHost, policy, target.protocol === 'http:');
+            const refused = judged.find(a => a.error?.code === 'ERR_ULTRATON_PLAIN_HTTP') ?? judged.find(a => !a.allowed);
+            return {
+                href: target.href,
+                verdict: refused ? 'blocked' : 'allowed',
+                ...(refused ? { code: refused.error?.code, reason: refused.error?.message } : {}),
+                addresses: judged.map(({ address, family, allowed }) => ({ address, family, allowed })),
+            };
+        } catch (err) {
+            return blocked(err, target.href);
         }
     }
 
