@@ -25,6 +25,7 @@ export {
 export type { UltraTonErrorCode } from './errors.ts';
 export type {
   UltraTonClientOptions,
+  UltraTonHeadersContext,
   UltraTonRequestOptions,
   RedirectHeaders,
   ReservedIpPolicy,

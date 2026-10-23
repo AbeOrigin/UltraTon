@@ -47,7 +47,7 @@ export declare class UltraTonClient {
 ## UltraTonClientOptions (types/request-options.types.d.ts)
 export interface UltraTonClientOptions {
     readonly baseUrl?: string;
-    readonly headers?: Record<string, string | string[] | undefined>;
+    readonly headers?: Record<string, string | string[] | undefined> | ((context: UltraTonHeadersContext) => Record<string, string | string[] | undefined>);
     readonly timeoutMs?: number;
     readonly socketTimeoutMs?: number;
     readonly decompress?: boolean;
@@ -97,6 +97,12 @@ export interface UltraTonExplanation {
     readonly code?: string;
     readonly reason?: string;
     readonly addresses: readonly UltraTonExplainedAddress[];
+}
+
+## UltraTonHeadersContext (types/request-options.types.d.ts)
+export interface UltraTonHeadersContext {
+    readonly method: string;
+    readonly url: string;
 }
 
 ## UltraTonHttpError (errors.d.ts)

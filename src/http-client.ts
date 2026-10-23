@@ -202,11 +202,11 @@ export class UltraTonClient {
 
     /**
      * A new client with this client's options and `options` on top: what `options` sets wins, headers merge
-     * case-insensitively (`options` wins), `retry` merges field by field when both are objects, and a `userAgent` or
-     * `user-agent` header here replaces whichever this client had. The variant shares this client's connection pools
-     * unless `options` sets `http2`, `tls` or `proxy`; pools are kept apart per `permitReservedIps` policy either way,
-     * so a variant never takes a socket judged under another policy. Closing either client leaves the other working;
-     * the pools close with the last one.
+     * case-insensitively (`options` wins; when either side is a function, into a function that calls both), `retry`
+     * merges field by field when both are objects, and a `userAgent` or `user-agent` header here replaces whichever this
+     * client had. The variant shares this client's connection pools unless `options` sets `http2`, `tls` or `proxy`;
+     * pools are kept apart per `permitReservedIps` policy either way, so a variant never takes a socket judged under
+     * another policy. Closing either client leaves the other working; the pools close with the last one.
      * @throws {SecureHttpError} If this client is closed.
      * @throws {TypeError} As the constructor: an unknown or invalid option.
      */
@@ -423,11 +423,15 @@ export class UltraTonClient {
         const retryPolicy = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
         Reflect.deleteProperty(requested, 'query');
         Reflect.deleteProperty(requested, 'retry');
+        // A `headers` function is called here, once per call: a retry or a redirect hop reuses its result. It is told the
+        // URL as the engine will parse it, which also rejects one with credentials before the function could see it.
+        const headersFn = this.#defaults.headersFn;
+        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method, url: parseSafeUrl(target).href })) } : this.#defaults;
         const pending = resolveRequestBody(requested);
         const body = pending instanceof Promise ? await pending : pending;
         // A stream can only be read once: a request with one is sent once, whatever the retry option says.
         const retry = body.options.body instanceof StreamedBody ? undefined : retryPolicy;
-        const merged = withAcceptEncoding(mergeClientDefaults(body.options, this.#defaults));
+        const merged = withAcceptEncoding(mergeClientDefaults(body.options, defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
         // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
         // Without it the engines get no timings to measure.

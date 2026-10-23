@@ -1,6 +1,6 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
-import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
+import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonHeadersContext, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
@@ -147,6 +147,27 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 
     return sanitized;
 }
+
+/** A client's `headers` function, as given: what it returns is only trusted once evaluateHeaders has checked it. */
+type HeadersFunction = (context: UltraTonHeadersContext) => unknown;
+
+/**
+ * Calls a client's `headers` function and puts what it returns through the checks static headers go through
+ * (assertPlainHeaders, then sanitizeHeaders), so a computed value can no more inject a header than a static one.
+ * @throws {TypeError} If the result is not an object (a Promise included: the function must be synchronous), and as
+ *   static headers throw: not a plain object, CRLF, an HTTP/2 pseudo-header. What the function throws propagates as is.
+ */
+function evaluateHeaders(fn: HeadersFunction, context: UltraTonHeadersContext): Record<string, string | string[]> {
+    const result = fn(context);
+    if (typeof result !== 'object' || result === null || Array.isArray(result) || typeof (result as { then?: unknown }).then === 'function') {
+        const received = result === null ? 'null' : Array.isArray(result) ? 'an array' : typeof result === 'object' ? 'a Promise; it must be synchronous' : typeof result;
+        throw new TypeError(`UltraTon: Expected the 'headers' function to return a plain object, received ${received}.`);
+    }
+    assertPlainHeaders(result);
+    return sanitizeHeaders(result as Record<string, unknown>);
+}
+
+const USER_AGENT_TWICE = "UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.";
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
 const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
@@ -621,7 +642,14 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
 
 /** The request options a client supplies when a request leaves them `undefined`. Headers are already sanitized (lowercase keys). */
 export interface ClientDefaults {
+    /** The static headers; with a `headers` function, only the user agent. */
     readonly headers: Readonly<Record<string, string | string[]>>;
+    /**
+     * With a `headers` function: the default headers of one call, the function's result validated as static headers are,
+     * plus the user agent unless the result sets one. The client calls it once per call, in place of `headers`.
+     * @throws {TypeError} As evaluateHeaders, or if the result sets a `user-agent` and so does the `userAgent` option.
+     */
+    readonly headersFn?: (context: UltraTonHeadersContext) => Readonly<Record<string, string | string[]>>;
     readonly timeoutMs?: number;
     readonly socketTimeoutMs?: number;
     readonly maxBodySize?: number;
@@ -788,6 +816,7 @@ function assertSocksAuth(auth: string): void {
  * values of the wrong type. The defaults go through the request firewall once here, so a bad header or allowlist fails
  * at construction, and an allowlist is copied and frozen so the caller cannot widen it later.
  * Symbol keys (the internal test seams) are not options: `Object.keys` skips them and the client reads them itself.
+ * A `headers` function cannot be checked now: it is kept, and what it returns is checked on every call (see headersFn).
  * @param defaultUserAgent - Sent as `user-agent` unless `userAgent` or a `user-agent` header is given.
  * @throws {TypeError} On an unknown key, a value of the wrong type, CRLF in a header, or a `tls` key other than ca/cert/key.
  * @throws {SecureHttpError} When `baseUrl` fails `parseSafeUrl` (protocol, credentials, malformed).
@@ -804,8 +833,9 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         throw new TypeError(`UltraTon: Unknown option '${key}'.${hint}`);
     }
 
+    const fn = typeof raw.headers === 'function' ? raw.headers as HeadersFunction : undefined;
     const safe = buildSafeRequestOptions({
-        headers: raw.headers as InternalRequestOptions['headers'],
+        headers: (fn ? undefined : raw.headers) as InternalRequestOptions['headers'],
         timeoutMs: raw.timeoutMs as number | undefined,
         socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
         maxBodySize: raw.maxBodySize as number | undefined,
@@ -820,12 +850,16 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
     const headers = { ...safe.headers } as Record<string, string | string[]>;
     validateType('userAgent', raw.userAgent, 'string');
     if (Object.hasOwn(headers, 'user-agent')) {
-        if (raw.userAgent !== undefined) {
-            throw new TypeError("UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.");
-        }
+        if (raw.userAgent !== undefined) throw new TypeError(USER_AGENT_TWICE);
     } else {
         Object.assign(headers, sanitizeHeaders({ 'user-agent': raw.userAgent ?? defaultUserAgent }));
     }
+    const userAgentSet = raw.userAgent !== undefined;
+    const headersFn = fn && ((context: UltraTonHeadersContext) => {
+        const own = evaluateHeaders(fn, context);
+        if (Object.hasOwn(own, 'user-agent') && userAgentSet) throw new TypeError(USER_AGENT_TWICE);
+        return { ...headers, ...own };
+    });
 
     const http2 = validateType('http2', raw.http2, 'boolean') && raw.http2 === true;
     const tls = tlsOptions(raw.tls);
@@ -851,6 +885,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         proxy,
         defaults: {
             headers,
+            headersFn,
             // Validated above (type and range). Kept as given, so `undefined` still means "use the request's own default".
             timeoutMs: raw.timeoutMs as number | undefined,
             socketTimeoutMs: raw.socketTimeoutMs as number | undefined,
@@ -894,23 +929,63 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
     };
 }
 
+/** A copy of `headers` with lowercase keys and no prototype, so that an own '__proto__' key stays a plain key. */
+function lowercaseKeys(headers: Record<string, unknown>): ClientDefaults['headers'] {
+    const lower: Record<string, unknown> = Object.create(null);
+    for (const name of Object.keys(headers)) lower[name.toLowerCase()] = headers[name];
+    return lower as ClientDefaults['headers'];
+}
+
+/**
+ * A `headers` function whose plain-object results go through `map`. Any other result is returned as is, for
+ * evaluateHeaders to reject with its usual message.
+ */
+function mapHeaders(fn: HeadersFunction, map: (headers: Record<string, unknown>) => unknown): HeadersFunction {
+    return context => {
+        const result = fn(context);
+        return isPlainObject(result) ? map(result) : result;
+    };
+}
+
+/**
+ * `base` and `extra` headers as one `headers` function, for when either is one: both are evaluated on every call (base
+ * first, each once) and merge as static headers do, `extra` winning case-insensitively. An object is copied now, so
+ * changing it later does not change the client.
+ */
+function composeHeaders(base: unknown, extra: unknown): HeadersFunction {
+    const asFunction = (headers: unknown): HeadersFunction => {
+        if (typeof headers === 'function') return headers as HeadersFunction;
+        const copy: unknown = Object.assign(Object.create(null), headers);
+        return () => copy;
+    };
+    const first = asFunction(base);
+    const second = asFunction(extra);
+    return context => {
+        const under = first(context);
+        if (!isPlainObject(under)) return under;
+        const over = second(context);
+        return isPlainObject(over) ? mergeHeaders(lowercaseKeys(under), over) : over;
+    };
+}
+
 /**
  * The options of a client derived from `base` with `extra` on top: what `extra` sets wins (an `undefined` value sets
- * nothing), headers merge case-insensitively with `extra` winning, `retry` merges field by field when both are
- * objects, and a `userAgent` or `user-agent` header in `extra` replaces whichever of the two `base` had. The
- * constructor validates the result as it validates any options.
+ * nothing), headers merge case-insensitively with `extra` winning (when either is a function, into a function that
+ * calls both), `retry` merges field by field when both are objects, and a `userAgent` or `user-agent` header in `extra`
+ * replaces whichever of the two `base` had. The constructor validates the result as it validates any options.
  * @throws {TypeError} If `extra` is not a plain object.
  */
 export function mergeClientOptions(base: UltraTonClientOptions, extra: unknown): UltraTonClientOptions {
     const own = ownOptions(extra as object) as Record<string, unknown>;
     const merged: Record<string, unknown> = { ...base };
+    const isHeaders = (value: unknown) => isPlainObject(value) || typeof value === 'function';
     for (const key of Object.keys(own)) {
         const value = own[key];
         if (value === undefined) continue;
         if (key === 'headers' && isPlainObject(value) && isPlainObject(merged.headers)) {
-            const lower: Record<string, unknown> = {};
-            for (const name of Object.keys(merged.headers)) lower[name.toLowerCase()] = merged.headers[name];
-            merged.headers = mergeHeaders(lower as ClientDefaults['headers'], value);
+            merged.headers = mergeHeaders(lowercaseKeys(merged.headers), value);
+        } else if (key === 'headers' && isHeaders(value) && isHeaders(merged.headers)) {
+            merged.headers = composeHeaders(merged.headers, value);
         } else if (key === 'retry' && isPlainObject(value) && isPlainObject(merged.retry)) {
             merged.retry = { ...merged.retry, ...value };
         } else {
@@ -924,6 +999,23 @@ export function mergeClientOptions(base: UltraTonClientOptions, extra: unknown):
         merged.headers = headers;
     }
     if (isPlainObject(own.headers) && Object.keys(own.headers).some(name => name.toLowerCase() === 'user-agent')) delete merged.userAgent;
+    // With a `headers` function, whether it sets a user agent is only known per call, so the same rule applies there.
+    if (typeof merged.headers === 'function') {
+        const fn = merged.headers as HeadersFunction;
+        if (own.userAgent !== undefined) {
+            // extra's `userAgent` replaces a `user-agent` the function returns.
+            merged.headers = mapHeaders(fn, headers => {
+                const rest: Record<string, unknown> = Object.create(null);
+                for (const name of Object.keys(headers)) if (name.toLowerCase() !== 'user-agent') rest[name] = headers[name];
+                return rest;
+            });
+        } else if (typeof own.headers === 'function' && merged.userAgent !== undefined) {
+            // base's `userAgent` becomes the function's lowest default, so a `user-agent` from extra's function replaces it.
+            const userAgent = merged.userAgent;
+            delete merged.userAgent;
+            merged.headers = mapHeaders(fn, headers => mergeHeaders({ 'user-agent': userAgent as string }, headers));
+        }
+    }
     return merged as UltraTonClientOptions;
 }
 
