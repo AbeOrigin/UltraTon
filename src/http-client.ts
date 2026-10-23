@@ -20,6 +20,17 @@ import type { UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOpt
 import type { UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
+/** A copy of `value` with its arrays and plain objects copied down to `depth` levels; anything else (a Buffer, a function) as is. */
+function snapshot(value: unknown, depth: number): unknown {
+    if (depth === 0 || typeof value !== 'object' || value === null) return value;
+    if (Array.isArray(value)) return value.map(item => snapshot(item, depth - 1));
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return value;
+    const copy: Record<string, unknown> = {};
+    for (const key of Object.keys(value)) copy[key] = snapshot((value as Record<string, unknown>)[key], depth - 1);
+    return copy;
+}
+
 /** An engine and the number of clients using it: the last one to close closes the engine. */
 interface SharedEngine {
     readonly engine: Http1Engine | Http2Engine;
@@ -126,7 +137,10 @@ function resolveAgainstBase(path: unknown, base: URL): string {
 /**
  * The UltraTon client. Configure it once; every request is validated, merged with the client's defaults and sent over
  * HTTP/1.1 or, with `http2: true`, HTTP/2. Each client owns its connection pools: two clients never share a socket or a
- * session, so a permissive `permitReservedIps` or a custom `tls` never reaches another client. Call `close()` when done.
+ * session, so a permissive `permitReservedIps` or a custom `tls` never reaches another client. The one exception is a
+ * variant made with `extend()`, which shares the pools of the client it came from; inside them, sockets are still kept
+ * apart per `permitReservedIps` policy, and a variant with its own `tls`, `proxy` or `http2` gets pools of its own.
+ * Call `close()` when done.
  */
 export class UltraTonClient {
     readonly #engine: Http1Engine | Http2Engine;
@@ -159,10 +173,11 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
         this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
-        // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out.
-        const copy: Record<string, unknown> = {};
-        for (const key of Object.keys(options ?? {})) copy[key] = (options as Record<string, unknown>)[key];
-        this.#options = copy as UltraTonClientOptions;
+        // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out, and the copy goes two
+        // levels down so that a caller mutating their arrays or objects later (the permitReservedIps list, headers,
+        // tls material) changes neither this client nor a variant made from it: the policy a variant gets is the one
+        // this client was built with.
+        this.#options = snapshot(options ?? {}, 2) as UltraTonClientOptions;
 
         // The seams are read only once the options validated as an object, and only as own properties.
         const internal = (options ?? {}) as InternalClientOptions;

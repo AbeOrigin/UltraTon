@@ -918,7 +918,10 @@ export function mergeClientOptions(base: UltraTonClientOptions, extra: unknown):
         }
     }
     if (own.userAgent !== undefined && isPlainObject(merged.headers)) {
-        for (const name of Object.keys(merged.headers)) if (name.toLowerCase() === 'user-agent') delete merged.headers[name];
+        // A copy: without an extra `headers` this is still the base's own object, which must stay as it was.
+        const headers: Record<string, unknown> = { ...merged.headers };
+        for (const name of Object.keys(headers)) if (name.toLowerCase() === 'user-agent') delete headers[name];
+        merged.headers = headers;
     }
     if (isPlainObject(own.headers) && Object.keys(own.headers).some(name => name.toLowerCase() === 'user-agent')) delete merged.userAgent;
     return merged as UltraTonClientOptions;

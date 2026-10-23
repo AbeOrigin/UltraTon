@@ -133,6 +133,29 @@ describe('extend() shares the engine (HTTP/2, through the session manager seam)'
     });
 });
 
+describe('extend() leaves the base and its options untouched', () => {
+    it('a userAgent variant does not delete the base user-agent header', async (t) => {
+        const { url } = await serve(t, false);
+        const headers = { 'User-Agent': 'base/1', a: '1' };
+        const base = new UltraTonClient({ permitReservedIps: true, headers });
+        const v = base.extend({ userAgent: 'variant/2' });
+        const again = base.extend({});
+        t.after(async () => { for (const c of [base, v, again]) await c.close(); });
+        assert.deepEqual(headers, { 'User-Agent': 'base/1', a: '1' }, "the caller's object is untouched");
+        assert.equal((await again.get(`${url}/`)).json<Record<string, string>>()['user-agent'], 'base/1');
+    });
+
+    it('a variant takes the policy the base was built with, not the array as the caller mutated it later', async (t) => {
+        const list = ['10.0.0.1'];
+        const base = new UltraTonClient({ permitReservedIps: list });
+        list.push('10.0.0.0/8');
+        const v = base.extend({});
+        t.after(async () => { await base.close(); await v.close(); });
+        assert.equal((await base.explain('https://10.9.9.9/')).code, 'ERR_ULTRATON_RESERVED_IP');
+        assert.equal((await v.explain('https://10.9.9.9/')).code, 'ERR_ULTRATON_RESERVED_IP');
+    });
+});
+
 describe('extend() with userAgent', () => {
     it('a userAgent in the variant replaces a user-agent header of the base without the "one or the other" error', async (t) => {
         const { url } = await serve(t, false);
