@@ -62,6 +62,6 @@ Before Node 22.18, `npm test` needs `NODE_OPTIONS=--experimental-strip-types`.
 - Add an entry to [CHANGELOG.md](CHANGELOG.md) under `[Unreleased]` for anything a user can notice.
 - Update the README when an option, default or error changes, and [THREAT_MODEL.md](THREAT_MODEL.md) when a defense or a documented risk changes.
 - See [SUPPORT.md](SUPPORT.md#what-counts-as-a-breaking-change) for what counts as a breaking change.
-- CI runs the tests on every supported Node line, the compat and SSRF corpus tests, CodeQL and the package checks. All of them must pass.
+- CI runs the tests on every supported Node line, the compat and SSRF corpus tests and the package checks. CodeQL runs through GitHub's default setup (there is no workflow file for it in the repo). All of them must pass.
 
 By contributing, you agree that your contribution is licensed under the [MIT License](LICENSE).
