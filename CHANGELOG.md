@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`headers` as a function on the client.** `new UltraTonClient({ headers: ({ method, url }) => ({ traceparent: current() }) })` is called once per call (not per retry or redirect hop) and its result goes through the same validation as static headers. Only headers: it cannot change the URL, the method, the policy or the response.
+
 ### Security
 
 - **`createSecureAgents()` checks the certificate against the host the socket goes to**, as the client does: never against a `servername` the library set or one Node derived from its `Host` header, and an IP literal is checked as itself with no SNI. Before, a library could connect to `127.0.0.1` with `Host: localhost` and a certificate for `localhost` only was accepted (the CVE-2026-106069 pattern, outside the threat model's adversaries since libraries derive `Host` from the URL, but a gap against what SECURITY.md promised for the client). Found by an adversarial audit of 2.7.0, which found no bypass of any documented defense.

@@ -137,7 +137,8 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
-| `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; headers and `retry` are merged key by key. |
+| `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
+| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -519,7 +520,7 @@ diagnosticsChannel.subscribe('ultraton:request:error', (message) => {
 });
 ```
 
-Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Subscribers cannot change the request: to add headers (trace propagation such as `traceparent`), pass them in `headers` on the client or the request. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
+Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Subscribers cannot change the request: to add headers (trace propagation such as `traceparent`), pass them in `headers` on the request, or on the client, where a function (`headers: () => ({ traceparent: currentTraceparent() })`) gives each call its own value. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
 
 ### Proxy
 
@@ -638,7 +639,7 @@ Four defaults change when you migrate, on purpose: **redirects are not followed*
 | Retries | plugin | `retry` | — | `retry` (opt-in, idempotent methods only) |
 | Proxy | env vars by default, `proxy` | an agent | `NODE_USE_ENV_PROXY` | `proxy` (never env vars) |
 | Base URL | `baseURL` | `prefixUrl` | — | `baseUrl` (cannot be escaped) |
-| Interceptors / hooks | interceptors | hooks | — | none, on purpose; `diagnostics_channel` to observe |
+| Interceptors / hooks | interceptors | hooks | — | none, on purpose; a `headers` function for per-request headers, `diagnostics_channel` to observe |
 | Cookies, HTTP cache | — | yes | — | — (not supported) |
 
 Keep the client you have and add only the SSRF protection: see [Protect the client you already use](#protect-the-client-you-already-use).

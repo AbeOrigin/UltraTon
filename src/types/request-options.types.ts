@@ -251,6 +251,14 @@ export interface TlsOptions {
     readonly key?: TlsMaterial;
 }
 
+/** What a `headers` function of the client is told about the call it is producing headers for. */
+export interface UltraTonHeadersContext {
+    /** The HTTP method. */
+    readonly method: string;
+    /** The absolute URL the call will request (`baseUrl` and `query` applied), before any redirect. URLs with credentials are rejected before this, so it never carries them. */
+    readonly url: string;
+}
+
 /**
  * The options of `new UltraTonClient(options)`. A closed list, validated like the per-request options: an unknown key or
  * a value of the wrong type throws a `TypeError`. `headers`, `timeoutMs`, `socketTimeoutMs`, `maxBodySize`,
@@ -266,8 +274,15 @@ export interface UltraTonClientOptions {
      */
     readonly baseUrl?: string;
 
-    /** Headers sent with every request, as a plain object. A request header with the same name (any case) replaces it. */
-    readonly headers?: Record<string, string | string[] | undefined>;
+    /**
+     * Headers sent with every request: a plain object, or a function that returns one, for values that change per
+     * request (`headers: () => ({ traceparent: currentTraceparent() })`). The function is called once per call (each
+     * page of `paginate()` is a call; a retry or a redirect hop is not), synchronously, with the method and URL of the
+     * call; what it returns is validated as static headers are, and a function that throws rejects the call with that
+     * error before connecting. It can only set headers. A request header with the same name (any case) replaces one
+     * from either form.
+     */
+    readonly headers?: Record<string, string | string[] | undefined> | ((context: UltraTonHeadersContext) => Record<string, string | string[] | undefined>);
 
     /** Default `timeoutMs` for every request. See {@link UltraTonRequestOptions.timeoutMs}. */
     readonly timeoutMs?: number;
