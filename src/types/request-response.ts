@@ -51,3 +51,30 @@ export interface UltraTonStreamResponse {
      */
     readonly body: ReadableStream<Uint8Array>;
 }
+
+/** One address a host resolved to, as the client's policy judges it. See {@link UltraTonExplanation}. */
+export interface UltraTonExplainedAddress {
+    /** The IP address, as the resolver returned it (or the literal in the URL). */
+    readonly address: string;
+    /** 4 or 6. */
+    readonly family: 4 | 6;
+    /** Whether a request may connect to it under the client's (or the call's) `permitReservedIps`. */
+    readonly allowed: boolean;
+}
+
+/**
+ * What a request to a URL would do before connecting: the result of `UltraTonClient.explain()`. For the operator who
+ * configures the policy: it names resolved addresses, so never return it to whoever supplied the URL.
+ */
+export interface UltraTonExplanation {
+    /** The URL as the request would send it (`baseUrl` applied, normalized). Absent when the URL itself is rejected. */
+    readonly href?: string;
+    /** `'allowed'`: a request would connect. `'blocked'`: it would reject before connecting, with `code` and `reason`. */
+    readonly verdict: 'allowed' | 'blocked';
+    /** The `code` of the error the request would reject with: an UltraTon code, or a resolver's such as `ENOTFOUND`. */
+    readonly code?: string;
+    /** The message the request would reject with, or a note on what was not checked here. */
+    readonly reason?: string;
+    /** The addresses the host resolves to (an IP literal is listed as itself), each with the policy's judgement; empty when nothing was resolved. */
+    readonly addresses: readonly UltraTonExplainedAddress[];
+}

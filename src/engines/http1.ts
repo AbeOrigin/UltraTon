@@ -1,5 +1,5 @@
 import { IncomingMessage, ClientRequest } from "node:http";
-import { UltraTonMemoryError, absoluteTimeout, clientClosed, idleTimeout, remainingBudget, toNetworkError } from "../errors.ts";
+import { absoluteTimeout, bodyTooLarge, clientClosed, idleTimeout, remainingBudget, toNetworkError } from "../errors.ts";
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
@@ -132,7 +132,7 @@ export class Http1Engine {
             maxBodySize: reqOpts.maxBodySize,
             contentEncoding: res.headers['content-encoding'],
             decompress: reqOpts.decompress,
-            tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${reqOpts.maxBodySize} bytes`),
+            tooLarge: () => bodyTooLarge(reqOpts.maxBodySize),
             onError: () => req.destroy(),
         });
 
@@ -285,7 +285,7 @@ export class Http1Engine {
                             declaredLength: declaredBodyLength(reqOpts.method, res.statusCode as number, res.headers),
                             socketTimeoutMs: reqOpts.socketTimeoutMs,
                             signal: reqOpts.signal,
-                            tooLarge: () => new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${stream.maxBodySize} bytes`),
+                            tooLarge: () => bodyTooLarge(stream.maxBodySize),
                             idle: () => idleTimeout(reqOpts.socketTimeoutMs),
                             mapError: err => bodyError ?? (this.#closed ? clientClosed() : toNetworkError(err)),
                             onSourceEnd: stopUpload,

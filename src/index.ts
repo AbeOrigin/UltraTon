@@ -18,7 +18,9 @@ export {
   UltraTonMemoryError,
   UltraTonParseError,
   UltraTonRedirectError,
+  isUltraTonError,
 } from './errors.ts';
+export type { UltraTonErrorCode } from './errors.ts';
 export type {
   UltraTonClientOptions,
   UltraTonRequestOptions,
@@ -32,4 +34,4 @@ export type {
   UltraTonProxyOptions,
   QueryValue,
 } from './types/request-options.types.ts';
-export type { UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+export type { UltraTonExplainedAddress, UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';

@@ -21,6 +21,7 @@ const VALUES = [
   'UltraTonParseError',
   'UltraTonRedirectError',
   'createSecureAgents',
+  'isUltraTonError',
 ];
 const TYPES = [
   'ReservedIpPolicy',

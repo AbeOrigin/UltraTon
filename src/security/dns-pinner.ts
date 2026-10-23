@@ -245,37 +245,58 @@ export const pinnedLookup = (addresses: readonly PinnedAddress[]): LookupFunctio
 const resolutionFailed = (code: string) =>
     new UltraTonNetworkError(`UltraTon: Hostname resolution failed (${code}).`, { code });
 
+/** One address of a host as the policy judges it; `error` is what a request would reject with. Not public. */
+export interface JudgedAddress extends PinnedAddress {
+    allowed: boolean;
+    error?: SecureHttpError;
+}
+
 /**
- * Every address `hostname` resolves to, each one judged by `policy`. If any of them is reserved and not allowed, the
- * whole lookup is rejected (fail closed), so a caller that lets Node pick any address of the result (Happy Eyeballs)
- * can only ever reach validated ones. An empty answer, or an entry that is not an IP address, is a resolution failure.
- * An IP literal is judged as itself and never resolved, like Node itself never resolves one.
- * With `plainHttp` (the hop is `http:`) every address must also be loopback (see `assertLoopbackIp`).
+ * Every address `hostname` resolves to, each one judged by `policy` and, with `plainHttp` (the hop is `http:`), by the
+ * loopback rule first (see `assertLoopbackIp`). The one place that decides: resolveAndPinAll enforces it and
+ * `client.explain()` reports it. An IP literal is judged as itself and never resolved, like Node itself never resolves
+ * one. An empty answer, or an entry that is not an IP address, is a resolution failure and throws.
+ */
+export async function judgeAddresses(hostname: string, policy: ReservedIpPolicy = false, plainHttp = false): Promise<JudgedAddress[]> {
+    const literal = isIP(hostname);
+    let pinned: PinnedAddress[];
+    if (literal !== 0) {
+        pinned = [{ address: hostname, family: literal as 4 | 6 }];
+    } else {
+        const answer: unknown = await dnsPromises.lookup(hostname, { all: true }).catch((err: NodeJS.ErrnoException) => {
+            throw resolutionFailed(err.code || 'UNKNOWN_DNS_ERROR');
+        });
+        if (!Array.isArray(answer) || answer.length === 0) throw resolutionFailed('ENODATA');
+        pinned = [];
+        for (const entry of answer) {
+            const address = (entry as { address?: unknown } | null)?.address;
+            // isReservedIp() calls a non-IP "not reserved": never let one through as if it were a public address.
+            const family = typeof address === 'string' ? isIP(address) : 0;
+            if (family === 0) throw resolutionFailed('EBADRESP');
+            pinned.push({ address: address as string, family: family as 4 | 6 });
+        }
+    }
+    // Only once the whole answer is known to be well formed.
+    return pinned.map(entry => {
+        try {
+            if (plainHttp) assertLoopbackIp(entry.address);
+            assertAllowedIp(entry.address, policy, hostname);
+            return { ...entry, allowed: true };
+        } catch (err) {
+            return { ...entry, allowed: false, error: err as SecureHttpError };
+        }
+    });
+}
+
+/**
+ * Every address `hostname` resolves to, validated (see judgeAddresses). If any of them is refused, the whole lookup is
+ * rejected (fail closed), so a caller that lets Node pick any address of the result (Happy Eyeballs) can only ever
+ * reach validated ones: all of it, or nothing. The loopback rule wins over the whole answer: a non-loopback address
+ * over http is refused as such, whatever the policy says about another address.
  */
 export async function resolveAndPinAll(hostname: string, policy: ReservedIpPolicy = false, plainHttp = false): Promise<PinnedAddress[]> {
-    const literal = isIP(hostname);
-    if (literal !== 0) {
-        if (plainHttp) assertLoopbackIp(hostname);
-        assertAllowedIp(hostname, policy, hostname);
-        return [{ address: hostname, family: literal as 4 | 6 }];
-    }
-
-    const answer: unknown = await dnsPromises.lookup(hostname, { all: true }).catch((err: NodeJS.ErrnoException) => {
-        throw resolutionFailed(err.code || 'UNKNOWN_DNS_ERROR');
-    });
-    if (!Array.isArray(answer) || answer.length === 0) throw resolutionFailed('ENODATA');
-
-    const pinned: PinnedAddress[] = [];
-    for (const entry of answer) {
-        const address = (entry as { address?: unknown } | null)?.address;
-        // isReservedIp() calls a non-IP "not reserved": never let one through as if it were a public address.
-        const family = typeof address === 'string' ? isIP(address) : 0;
-        if (family === 0) throw resolutionFailed('EBADRESP');
-        pinned.push({ address: address as string, family: family as 4 | 6 });
-    }
-    // Only once the whole answer is known to be well formed, and before anything is returned: all of it, or nothing.
-    // The loopback rule first, over the whole answer: a non-loopback address over http is refused as such, whatever the policy.
-    if (plainHttp) for (const { address } of pinned) assertLoopbackIp(address);
-    for (const { address } of pinned) assertAllowedIp(address, policy, hostname);
-    return pinned;
+    const judged = await judgeAddresses(hostname, policy, plainHttp);
+    const refused = judged.find(a => a.error?.code === 'ERR_ULTRATON_PLAIN_HTTP') ?? judged.find(a => !a.allowed);
+    if (refused) throw refused.error;
+    return judged.map(({ address, family }) => ({ address, family }));
 }

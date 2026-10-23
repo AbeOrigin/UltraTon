@@ -1,6 +1,9 @@
 ## createSecureAgents (agents.d.ts)
 export declare function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraTonSecureAgents;
 
+## isUltraTonError (errors.d.ts)
+export declare function isUltraTonError(err: unknown, code?: UltraTonErrorCode): err is SecureHttpError;
+
 ## QueryValue (types/request-options.types.d.ts)
 export type QueryValue = string | number | boolean;
 
@@ -12,10 +15,10 @@ export type ReservedIpPolicy = boolean | readonly string[];
 
 ## SecureHttpError (errors.d.ts)
 export declare class SecureHttpError extends Error {
-    readonly code?: string;
+    readonly code?: UltraTonErrorCode | (string & {});
     constructor(message: string, options?: {
         cause?: unknown;
-        code?: string;
+        code?: UltraTonErrorCode | (string & {});
     });
 }
 
@@ -33,6 +36,9 @@ export declare class UltraTonClient {
     options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
     paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
+    explain(url: string, options?: {
+        readonly permitReservedIps?: ReservedIpPolicy;
+    }): Promise<UltraTonExplanation>;
     close(): Promise<void>;
 }
 
@@ -70,6 +76,25 @@ export interface UltraTonDiagnosticsRequest {
     readonly method: string;
     readonly origin: string;
     readonly path: string;
+}
+
+## UltraTonErrorCode (errors.d.ts)
+export type UltraTonErrorCode = (typeof ERROR_CODES)[number];
+
+## UltraTonExplainedAddress (types/request-response.d.ts)
+export interface UltraTonExplainedAddress {
+    readonly address: string;
+    readonly family: 4 | 6;
+    readonly allowed: boolean;
+}
+
+## UltraTonExplanation (types/request-response.d.ts)
+export interface UltraTonExplanation {
+    readonly href?: string;
+    readonly verdict: 'allowed' | 'blocked';
+    readonly code?: string;
+    readonly reason?: string;
+    readonly addresses: readonly UltraTonExplainedAddress[];
 }
 
 ## UltraTonMemoryError (errors.d.ts)
