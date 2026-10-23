@@ -151,6 +151,7 @@ export interface UltraTonRequestErrorMessage {
     readonly request: UltraTonDiagnosticsRequest;
     readonly error: UltraTonDiagnosticsError;
     readonly durationMs: number;
+    readonly timings: UltraTonTimings;
 }
 
 ## UltraTonRequestOptions (types/request-options.types.d.ts)
@@ -178,6 +179,7 @@ export interface UltraTonRequestResponseMessage {
     readonly request: UltraTonDiagnosticsRequest;
     readonly statusCode: number;
     readonly durationMs: number;
+    readonly timings: UltraTonTimings;
 }
 
 ## UltraTonRequestRetryMessage (helpers/diagnostics.d.ts)
@@ -260,6 +262,16 @@ export interface UltraTonStreamResponse {
     readonly redirected: boolean;
     readonly body: ReadableStream<Uint8Array>;
     assertOk(): UltraTonStreamResponse;
+}
+
+## UltraTonTimings (helpers/diagnostics.d.ts)
+export interface UltraTonTimings {
+    readonly dnsMs?: number;
+    readonly connectMs?: number;
+    readonly tlsMs?: number;
+    readonly firstByteMs?: number;
+    readonly totalMs: number;
+    readonly reusedConnection: boolean;
 }
 
 ## error codes

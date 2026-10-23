@@ -459,12 +459,13 @@ Every attempt is a full request: a new connection resolves and validates DNS aga
 
 ### Observability
 
-For a quick look without code, run with `NODE_DEBUG=ultraton`: one line on stderr per response, retry and error, with the method, the origin, the status or error code and the duration. Query strings, credentials, headers, bodies and resolved IPs are never written. Paths are off by default, because APIs put secrets in them: `ULTRATON_DEBUG_PATHS=1` adds them (`NODE_DEBUG=*` does not).
+For a quick look without code, run with `NODE_DEBUG=ultraton`: one line on stderr per response, retry and error, with the method, the origin, the status or error code, the duration and, in brackets, where it went (the `timings` below; ttfb is the time to the first byte). Query strings, credentials, headers, bodies and resolved IPs are never written. Paths are off by default, because APIs put secrets in them: `ULTRATON_DEBUG_PATHS=1` adds them (`NODE_DEBUG=*` does not).
 
 ```text
-ULTRATON 4242: GET https://api.example.com -> 200 (38 ms)
+ULTRATON 4242: GET https://api.example.com -> 200 (84 ms) [dns 3 ms, connect 12 ms, tls 28 ms, ttfb 40 ms]
+ULTRATON 4242: GET https://api.example.com -> 200 (10 ms) [reused, ttfb 9 ms]
 ULTRATON 4242: POST https://hooks.example.net retry 1 in 300 ms (503)
-ULTRATON 4242: GET https://api.example.com failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (5001 ms)
+ULTRATON 4242: GET https://api.example.com failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (5001 ms) [reused]
 ```
 
 UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_channel.html) events for every client call (`get`, `post`, …, `stream()`, `fetch()`), so tracing and metrics tools can see requests without wrapping the client. The debug lines above are a subscriber of these events. Publishing costs nothing when nobody subscribes.
@@ -473,10 +474,19 @@ UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_ch
 |---|---|---|
 | `ultraton:request:start` | The options are valid and the request starts | `{ request }` |
 | `ultraton:request:retry` | Before each wait of `retry` | `{ request, attempt, delayMs, statusCode?, error? }` |
-| `ultraton:request:response` | A response arrived (for `stream()`: its headers) | `{ request, statusCode, durationMs }` |
-| `ultraton:request:error` | The call failed (policy, network, timeout, abort, …) | `{ request, error, durationMs }` |
+| `ultraton:request:response` | A response arrived (for `stream()`: its headers) | `{ request, statusCode, durationMs, timings }` |
+| `ultraton:request:error` | The call failed (policy, network, timeout, abort, …) | `{ request, error, durationMs, timings }` |
 
-`request` is `{ method, origin, path }`, frozen, and **the same object** on every event of one call, so it can key a span or a timer. `error` is `{ name, code }`. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
+`request` is `{ method, origin, path }`, frozen, and **the same object** on every event of one call, so it can key a span or a timer. `error` is `{ name, code }`. `timings` (`UltraTonTimings`) says where the time of a slow call went, in milliseconds:
+
+- `dnsMs`: name resolution, when a new connection was opened (none for an IP literal).
+- `connectMs`: the TCP connect. On HTTP/2 it includes the TLS handshake, which Node reports together with it; through a proxy it includes the tunnel.
+- `tlsMs`: the TLS handshake, on HTTP/1.1 only.
+- `firstByteMs`: from the request being sent (its body included) to the response headers: mostly the server's own time.
+- `totalMs`: the whole call, every redirect and retry included; the same as `durationMs`.
+- `reusedConnection`: whether the request went over a pooled socket or HTTP/2 session, which had no DNS, connect or TLS of its own. HTTP/1.1 sockets are pooled only on a Node with its keep-alive fix (see [SECURITY.md](SECURITY.md)).
+
+The phases are those of the last hop: after a redirect, the last request; after a retry, the attempt that produced the response or the final error. A phase the request never went through, or never finished (a refused connection has no `connectMs`), is `undefined`. They are measured only while someone subscribes to an UltraTon channel, and hold numbers and one boolean, nothing else. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
 
 > **Warning:** **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
 
@@ -520,7 +530,7 @@ diagnosticsChannel.subscribe('ultraton:request:error', (message) => {
 });
 ```
 
-Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Subscribers cannot change the request: to add headers (trace propagation such as `traceparent`), pass them in `headers` on the request, or on the client, where a function (`headers: () => ({ traceparent: currentTraceparent() })`) gives each call its own value. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest` and `UltraTonDiagnosticsError`.
+Subscribers run synchronously inside the request. As with any `diagnostics_channel` subscriber, one that throws raises an uncaught exception (the request itself is unaffected), so keep them simple. Subscribers cannot change the request: to add headers (trace propagation such as `traceparent`), pass them in `headers` on the request, or on the client, where a function (`headers: () => ({ traceparent: currentTraceparent() })`) gives each call its own value. The message types are exported: `UltraTonRequestStartMessage`, `UltraTonRequestRetryMessage`, `UltraTonRequestResponseMessage`, `UltraTonRequestErrorMessage`, `UltraTonDiagnosticsRequest`, `UltraTonDiagnosticsError` and `UltraTonTimings`.
 
 ### Proxy
 

@@ -26,6 +26,21 @@ describe('formatDebugLine', () => {
         assert.equal(formatDebugLine('error', { request, error: { name: 'UltraTonNetworkError', code: 'ECONNREFUSED' }, durationMs: 3.2 }, false), 'GET https://a.example failed: UltraTonNetworkError ECONNREFUSED (3 ms)');
         assert.equal(formatDebugLine('error', { request, error: { name: 'AbortError', code: undefined }, durationMs: 0.4 }, false), 'GET https://a.example failed: AbortError (0 ms)');
     });
+
+    it('ends the response and error lines with the phases of the timings, leaving out those not gone through', () => {
+        const fresh = { dnsMs: 2.6, connectMs: 12.2, tlsMs: 28, firstByteMs: 40.4, totalMs: 84.3, reusedConnection: false };
+        assert.equal(formatDebugLine('response', { request, statusCode: 200, durationMs: 84.3, timings: fresh }, false),
+            'GET https://a.example -> 200 (84 ms) [dns 3 ms, connect 12 ms, tls 28 ms, ttfb 40 ms]');
+        const reused = { firstByteMs: 9.2, totalMs: 10, reusedConnection: true };
+        assert.equal(formatDebugLine('response', { request, statusCode: 200, durationMs: 10, timings: reused }, false),
+            'GET https://a.example -> 200 (10 ms) [reused, ttfb 9 ms]');
+        const refused = { connectMs: undefined, totalMs: 3.2, reusedConnection: false };
+        assert.equal(formatDebugLine('error', { request, error: { name: 'UltraTonNetworkError', code: 'ECONNREFUSED' }, durationMs: 3.2, timings: refused }, false),
+            'GET https://a.example failed: UltraTonNetworkError ECONNREFUSED (3 ms)');
+        const literal = { connectMs: 1.4, totalMs: 3.2, reusedConnection: false };
+        assert.equal(formatDebugLine('error', { request, error: { name: 'UltraTonNetworkTimeoutError', code: 'ERR_ULTRATON_TIMEOUT' }, durationMs: 3.2, timings: literal }, false),
+            'GET https://a.example failed: UltraTonNetworkTimeoutError ERR_ULTRATON_TIMEOUT (3 ms) [connect 1 ms]');
+    });
 });
 
 describe('NODE_DEBUG=ultraton', () => {
@@ -46,6 +61,8 @@ describe('NODE_DEBUG=ultraton', () => {
     it('logs the response and the error without any secret or path', { timeout: 20_000 }, async () => {
         const ours = await run({ NODE_DEBUG: 'ultraton' });
         assert.match(ours, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:\d+ -> 200 \(\d+ ms\)/);
+        // A new connection to an IP literal: no lookup, no TLS.
+        assert.match(ours, /-> 200 \(\d+ ms\) \[connect \d+ ms, ttfb \d+ ms\]/);
         assert.match(ours, /ULTRATON \d+: GET http:\/\/127\.0\.0\.1:1 failed: UltraTonNetworkError ECONNREFUSED \(\d+ ms\)/);
         assert.doesNotMatch(ours, /s3cret|\/a|\/b|\/down/);
     });
