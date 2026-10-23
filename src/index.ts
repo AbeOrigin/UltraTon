@@ -22,6 +22,7 @@ export {
 export type {
   UltraTonClientOptions,
   UltraTonRequestOptions,
+  RedirectHeaders,
   ReservedIpPolicy,
   UltraTonStreamOptions,
   UltraTonPaginateOptions,

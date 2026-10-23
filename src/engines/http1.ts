@@ -10,6 +10,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { HTTP_CODES_REDIRECTS, TLS_MIN_VERSION } from '../constants.ts';
+import { headersForNextHop } from '../helpers/redirect-headers.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
@@ -419,16 +420,9 @@ export class Http1Engine {
                     throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.', { code: 'ERR_ULTRATON_DOWNGRADE' });
                 }
 
-                // sanitizeHeaders already lowercased every key
-                const nextHeaders = { ...reqOpts.headers } as Record<string, string | string[] | undefined>;
-
-                if (urlObj.origin !== nextUrlObj.origin) {
-                    currentOptions = { ...currentOptions, auth: undefined };
-                    delete nextHeaders['authorization'];
-                    delete nextHeaders['cookie'];
-                    delete nextHeaders['proxy-authorization'];
-                    delete nextHeaders['host'];
-                }
+                const crossOrigin = urlObj.origin !== nextUrlObj.origin;
+                if (crossOrigin) currentOptions = { ...currentOptions, auth: undefined };
+                const nextHeaders = headersForNextHop(reqOpts.headers, crossOrigin, reqOpts.redirectHeaders);
 
                 let nextMethod = reqOpts.method;
                 let nextBody = currentOptions.body;

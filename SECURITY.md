@@ -33,7 +33,7 @@ UltraTon's job is to keep a request from reaching somewhere it should not, and t
 
 - **Reaching a reserved address with the default policy, or outside an allowlist.** This covers IP-literal spellings, DNS answers, rebinding and redirects.
 - **Plain `http:` reaching a non-loopback address**, or a redirect from https to http being followed.
-- **A credential (`authorization`, `cookie`, `proxy-authorization`, `auth`) sent to another origin** after a redirect.
+- **A credential (`authorization`, `cookie`, `proxy-authorization`, `auth`) sent to another origin** after a redirect, or any header outside `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` with `redirectHeaders: 'safe'`.
 - **A request path escaping `baseUrl`.**
 - **Header injection**, meaning CRLF/NUL or pseudo-headers reaching the wire.
 - **Resource exhaustion**: memory beyond `maxBodySize`, a hang beyond `timeoutMs`/`socketTimeoutMs`, or superlinear CPU on attacker-controlled input.

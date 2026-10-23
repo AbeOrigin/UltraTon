@@ -37,6 +37,7 @@ import {
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
 import { isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
+import { headersForNextHop } from "../helpers/redirect-headers.ts";
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -227,18 +228,7 @@ export class Http2Engine {
             );
           }
 
-          // sanitizeHeaders already lowercased every key
-          const nextHeaders = { ...reqOpts.headers } as Record<
-            string,
-            string | string[] | undefined
-          >;
-
-          if (parsedUrl.origin !== nextUrl.origin) {
-            delete nextHeaders["authorization"];
-            delete nextHeaders["cookie"];
-            delete nextHeaders["proxy-authorization"];
-            delete nextHeaders["host"];
-          }
+          const nextHeaders = headersForNextHop(reqOpts.headers, parsedUrl.origin !== nextUrl.origin, reqOpts.redirectHeaders);
 
           let nextMethod = method;
           let nextBody = currentOptions.body;

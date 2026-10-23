@@ -56,7 +56,7 @@ await api.close(); // when the client is no longer needed
 | Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | — (use `https:`) |
 | Redirects | **Not followed**. The 3xx comes back as a response. | `maxRedirects` (0–20) |
 | https → http redirect | **Rejected**. | — |
-| Credentials on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped. | — |
+| Headers on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped; every other header follows, as with `fetch`. | `redirectHeaders: 'safe'` lets only `accept*`, `user-agent` and the body framing follow |
 | Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
 | Compressed responses (gzip, deflate, br) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. br only on a Node release with the Brotli fix (see [Security](#security)). | `decompress: false` |
 | Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
@@ -131,6 +131,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `maxRequestBodySize` | integer bytes | None. A larger buffered body throws before connecting; a stream is aborted as it goes past it. |
 | `decompress` | `boolean` | `true`: sends `accept-encoding` (unless you set one) and decodes the body. `false` leaves `data` as received. |
 | `maxRedirects` | integer 0–20 | `0` |
+| `redirectHeaders` | `'all' \| 'safe'` | `'all'`: on a redirect to another origin, every header but the credential ones follows. `'safe'`: only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` do, so an `x-api-key` stays behind. A same-origin redirect keeps every header. |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
 | `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
 
@@ -193,10 +194,10 @@ Error messages never contain the IP address or hostname, so they are safe to sho
 
 ## Recipes
 
-**Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small; every hop is still checked against the SSRF policy:
+**Fetch a URL a user gave you (webhooks, link previews).** The defaults are already right. Keep the redirect count small; every hop is still checked against the SSRF policy. With `redirectHeaders: 'safe'`, a server that redirects cannot carry your custom headers (an `x-api-key`) to another origin:
 
 ```ts
-const client = new UltraTonClient({ maxRedirects: 3, maxBodySize: 512 * 1024, timeoutMs: 5000 });
+const client = new UltraTonClient({ maxRedirects: 3, redirectHeaders: 'safe', maxBodySize: 512 * 1024, timeoutMs: 5000 });
 const res = await client.get(untrustedUrl);
 ```
 

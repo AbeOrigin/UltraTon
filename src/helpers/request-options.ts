@@ -1,6 +1,6 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
-import type { InternalRequestOptions, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
+import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
@@ -150,12 +150,12 @@ function sanitizeHeaders(rawHeaders: Record<string, unknown>): Record<string, st
 }
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -608,6 +608,12 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
     safeOptions.socketTimeoutMs = intOption('socketTimeoutMs', options.socketTimeoutMs, 10_000);
     safeOptions.timeoutMs = intOption('timeoutMs', options.timeoutMs, DEFAULT_TIMEOUT_MS);
     safeOptions.maxRedirects = intOption('maxRedirects', options.maxRedirects, 0, MAX_REDIRECTS_CEILING);
+    if (options.redirectHeaders !== undefined && options.redirectHeaders !== 'all' && options.redirectHeaders !== 'safe') {
+        const value: unknown = options.redirectHeaders;
+        const received = value === null ? 'null' : typeof value === 'string' ? `'${value}'` : typeof value;
+        throw new TypeError(`UltraTon: Expected 'redirectHeaders' to be 'all' or 'safe', received ${received}.`);
+    }
+    safeOptions.redirectHeaders = options.redirectHeaders ?? 'all';
     // Strict fallback: block SSRF
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
@@ -622,6 +628,7 @@ export interface ClientDefaults {
     readonly maxBodySize?: number;
     readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
+    readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
     readonly retry?: RetryInput;
@@ -805,6 +812,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         maxBodySize: raw.maxBodySize as number | undefined,
         maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
         maxRedirects: raw.maxRedirects as number | undefined,
+        redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
         permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
         decompress: raw.decompress as boolean | undefined,
     });
@@ -850,6 +858,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             maxBodySize: raw.maxBodySize as number | undefined,
             maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
             maxRedirects: raw.maxRedirects as number | undefined,
+            redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
             retry: retryOption(raw.retry),
@@ -877,6 +886,7 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         maxBodySize: or(own.maxBodySize, defaults.maxBodySize),
         maxRequestBodySize: or(own.maxRequestBodySize, defaults.maxRequestBodySize),
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
+        redirectHeaders: or(own.redirectHeaders, defaults.redirectHeaders),
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
         decompress: or(own.decompress, defaults.decompress),
         signal: own.signal,
