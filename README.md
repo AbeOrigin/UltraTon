@@ -209,7 +209,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | `paginate()`: a next page is left after `maxPages` | `ERR_ULTRATON_MAX_PAGES` |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
 
-`isUltraTonError(err, code?)` tells UltraTon's errors apart by shape (`name` and `code`), so it also recognizes them when two copies of the package are installed, and `code` autocompletes as `UltraTonErrorCode` (a misspelled code is a compile error):
+`isUltraTonError(err, code?)` tells UltraTon's errors apart by shape (`name` and `code`), so it also recognizes them when two copies of the package are installed, and `code` autocompletes as `UltraTonErrorCode` (a misspelled code is a compile error). `ERR_ULTRATON_OPTION_RANGE` is the exception: it comes on a `TypeError`, so test `err.code` for it:
 
 ```ts
 import { isUltraTonError, UltraTonNetworkTimeoutError, UltraTonNetworkError } from 'ultraton';

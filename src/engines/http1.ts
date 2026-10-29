@@ -414,7 +414,7 @@ export class Http1Engine {
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirects.length, this.#allowPlainHttp);
-                redirects.push(Object.freeze({ url: currentUrl, statusCode: hop.statusCode }));
+                redirects.push(Object.freeze({ url: urlObj.href, statusCode: hop.statusCode }));
                 currentUrl = next.url;
                 currentOptions = next.options;
                 reqOpts = buildSafeRequestOptions(currentOptions);

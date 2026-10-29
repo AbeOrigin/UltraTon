@@ -203,7 +203,7 @@ export class Http2Engine {
       ) {
         if (reqOpts.maxRedirects > 0) {
           const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirects.length, this.#sessionManager.allowPlainHttp);
-          redirects.push(Object.freeze({ url: currentUrl, statusCode }));
+          redirects.push(Object.freeze({ url: parsedUrl.href, statusCode }));
           currentUrl = next.url;
           currentOptions = next.options;
           reqOpts = this.#buildRequestOptions(currentOptions);

@@ -46,6 +46,12 @@ for (const http2 of [false, true]) {
             assert.ok(Object.isFrozen(res.redirects) && Object.isFrozen(res.redirects[0]));
         });
 
+        it('records every URL in its normalized form, the first one included', async (t) => {
+            const base = await server(t, http2);
+            const res = await clientOf(t, http2, 5).get(`${base}/x/../a`);
+            assert.equal(res.redirects[0].url, `${base}/a`);
+        });
+
         it('is empty when no redirect was followed, and a returned redirect is the response', async (t) => {
             const base = await server(t, http2);
             const direct = await clientOf(t, http2, 5).get(`${base}/c`);

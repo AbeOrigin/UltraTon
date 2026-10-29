@@ -189,17 +189,18 @@ export interface RequestObserver {
 /**
  * Starts the diagnostics of one client call (`get`, `stream()`, `fetch()`, ...) and publishes `ultraton:request:start`.
  * `undefined`, at no cost, when nobody listens to any UltraTon channel or the URL does not parse (the engine rejects it).
- * `collector` is the call's own when it asked for timings, so the response and the events report the same ones.
+ * `own` is the call's collector when it asked for timings, so the response and the events report the same ones.
  * Payloads hold the method, origin and path (no query), status, durations, retry attempt and the error's name and
  * code: never headers, bodies, credentials, `error.cause` or resolved addresses, since APMs ship events off the host.
  * The timings are numbers and one boolean; nothing creates or measures them when this returns `undefined`.
  */
-export function observeRequest(method: string, url: string, collector = new TimingsCollector()): RequestObserver | undefined {
+export function observeRequest(method: string, url: string, own?: TimingsCollector): RequestObserver | undefined {
     if (!(start.hasSubscribers || response.hasSubscribers || failure.hasSubscribers || retry.hasSubscribers)) return undefined;
     if (!URL.canParse(url)) return undefined;
     const parsed = new URL(url);
     // ;params dropped per segment (/a;jsessionid=x/b is /a/b): servers often carry session ids in them.
     const path = parsed.pathname.split('/').map(segment => segment.split(';', 1)[0]).join('/');
+    const collector = own ?? new TimingsCollector();
     const request: UltraTonDiagnosticsRequest = Object.freeze({ method, origin: parsed.origin, path });
     if (start.hasSubscribers) start.publish({ request });
     return {

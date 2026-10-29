@@ -2,7 +2,7 @@
 export declare function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraTonSecureAgents;
 
 ## isUltraTonError (errors.d.ts)
-export declare function isUltraTonError(err: unknown, code?: UltraTonErrorCode): err is SecureHttpError;
+export declare function isUltraTonError(err: unknown, code?: Exclude<UltraTonErrorCode, 'ERR_ULTRATON_OPTION_RANGE'>): err is SecureHttpError;
 
 ## QueryValue (types/request-options.types.d.ts)
 export type QueryValue = string | number | boolean;

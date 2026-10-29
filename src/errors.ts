@@ -129,9 +129,11 @@ const ERROR_NAMES = new Set(['SecureHttpError', 'UltraTonNetworkError', 'UltraTo
 /**
  * Whether `err` is an error UltraTon raised, optionally one with the given `code`. Judged by shape (`name` and `code`),
  * not by class, so it also recognizes errors from another copy of the package in `node_modules`. Never throws: anything
- * that is not an object, has another `name`, or whose properties cannot be read is not one.
+ * that is not an object, has another `name`, or whose properties cannot be read is not one. `ERR_ULTRATON_OPTION_RANGE`
+ * is not accepted as `code`: it is raised on a `TypeError` (see optionRange), never on a `SecureHttpError`, so test
+ * `err.code` for it.
  */
-export function isUltraTonError(err: unknown, code?: UltraTonErrorCode): err is SecureHttpError {
+export function isUltraTonError(err: unknown, code?: Exclude<UltraTonErrorCode, 'ERR_ULTRATON_OPTION_RANGE'>): err is SecureHttpError {
     if (typeof err !== 'object' || err === null) return false;
     try {
         const { name, code: actual } = err as { name?: unknown; code?: unknown };
