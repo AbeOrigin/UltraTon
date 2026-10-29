@@ -22,6 +22,7 @@ What Ultraman, the first application built on UltraTon (an API testing tool that
 
 ### Changed
 
+- SUPPORT.md states the stability period: from 2.8.0 (2026-10-23) and for at least three months, patch releases only, with the public API snapshot frozen and enforced by CI; the one exception is a security fix that needs a new option. `redirectHeaders: 'safe'` as the default is recorded as a candidate for a later major.
 - `stream()` accepts any uppercase method token, TRACE included, instead of only the seven; the `method` and `retry.methods` types widen to `UltraTonStreamMethod | (string & {})` (`UltraTonStreamMethod` itself is unchanged).
 - `stream()`'s `maxBodySize` and `paginate()`'s `maxPages` given a non-number now say "to be a number", as every other option does, instead of naming the range.
 
