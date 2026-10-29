@@ -176,7 +176,7 @@ const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs',
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -205,6 +205,7 @@ const OPTION_HINTS = new Map<string, string>([
     ['http2', " 'http2' is an option of the client constructor, not of a request."],
     ['userAgent', " Set a 'user-agent' header, or 'userAgent' in the client constructor."],
     ['proxy', " 'proxy' is an option of the client constructor, not of a request."],
+    ['allowPlainHttp', " 'allowPlainHttp' is an option of the client constructor, not of a request."],
 ]);
 const perRequestOnly = (key: string) => ` '${key}' is a per-request option, not a client option.`;
 const CLIENT_OPTION_HINTS = new Map<string, string>([
@@ -675,6 +676,8 @@ export interface ResolvedClientOptions {
     readonly http2: boolean;
     readonly tls: TlsOptions;
     readonly proxy?: ProxyConfig;
+    /** Plain http to any host; the address policy still applies. Never with `proxy`. */
+    readonly allowPlainHttp: boolean;
     /** Calls in flight per origin at most; `undefined` for no limit. */
     readonly maxConcurrency?: number;
     readonly defaults: ClientDefaults;
@@ -874,10 +877,15 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
     const tls = tlsOptions(raw.tls);
     const proxy = proxyOption(raw.proxy);
     const maxConcurrency = raw.maxConcurrency === undefined ? undefined : intOption('maxConcurrency', raw.maxConcurrency, 0, INT32_MAX, 1);
+    const allowPlainHttp = validateType('allowPlainHttp', raw.allowPlainHttp, 'boolean') && raw.allowPlainHttp === true;
+    // Plain http never goes through the proxy: allowed to any host, it would be a way around it.
+    if (allowPlainHttp && proxy) {
+        throw new TypeError("UltraTon: 'allowPlainHttp' cannot be combined with 'proxy': plain http requests do not go through the proxy.");
+    }
 
     let baseUrl: URL | undefined;
     if (validateType('baseUrl', raw.baseUrl, 'string')) {
-        baseUrl = parseSafeUrl(raw.baseUrl as string);
+        baseUrl = parseSafeUrl(raw.baseUrl as string, undefined, allowPlainHttp);
         if (baseUrl.search !== '' || baseUrl.hash !== '') {
             throw new TypeError("UltraTon: 'baseUrl' cannot contain a query string or fragment.");
         }
@@ -894,6 +902,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         tls,
         proxy,
         maxConcurrency,
+        allowPlainHttp,
         defaults: {
             headers,
             headersFn,

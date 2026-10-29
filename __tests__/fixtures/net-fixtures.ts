@@ -69,7 +69,8 @@ export async function tcpCounter(t: TestContext) {
 export function clientFor(t: TestContext, http2: boolean, options: Record<string, unknown> = {}) {
     if (http2) {
         const connect = t.mock.fn(nativeConnect);
-        const manager = new Http2SessionManager({}, connect);
+        // The client's own allowPlainHttp reaches the session manager it would build; an injected one is given it here.
+        const manager = new Http2SessionManager({}, connect, undefined, undefined, options.allowPlainHttp === true);
         const client = new UltraTonClient({ http2: true, ...options, [kSessionManager]: manager } as any);
         t.after(() => client.close());
         return { client, opened: () => connect.mock.callCount() };

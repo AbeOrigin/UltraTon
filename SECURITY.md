@@ -32,7 +32,7 @@ You can expect an acknowledgement within 7 days. A fix and an advisory follow on
 UltraTon's job is to keep a request from reaching somewhere it should not, and to keep a response from exhausting the process. These count as vulnerabilities:
 
 - **Reaching a reserved address with the default policy, or outside an allowlist.** This covers IP-literal spellings, DNS answers, rebinding and redirects.
-- **Plain `http:` reaching a non-loopback address**, or a redirect from https to http being followed.
+- **Plain `http:` reaching a non-loopback address** without `allowPlainHttp`, or a redirect from https to http being followed (with or without it).
 - **A credential (`authorization`, `cookie`, `proxy-authorization`, `auth`) sent to another origin** after a redirect, or any header outside `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` with `redirectHeaders: 'safe'`.
 - **A request path escaping `baseUrl`.**
 - **Header injection**, meaning CRLF/NUL or pseudo-headers reaching the wire.

@@ -59,6 +59,7 @@ export interface UltraTonClientOptions {
     readonly retry?: number | UltraTonRetryOptions;
     readonly timings?: boolean;
     readonly http2?: boolean;
+    readonly allowPlainHttp?: boolean;
     readonly tls?: {
         readonly ca?: TlsMaterial;
         readonly cert?: TlsMaterial;

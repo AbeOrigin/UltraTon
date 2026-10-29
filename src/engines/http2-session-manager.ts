@@ -151,6 +151,8 @@ export class Http2SessionManager {
   readonly #idleTimeoutMs: number;
   readonly #maxLifespanMs: number;
   readonly #proxy?: ProxyConfig;
+  /** The client's `allowPlainHttp`: h2c to any host, not only loopback. Read by Http2Engine for its URLs and redirects. */
+  readonly allowPlainHttp: boolean;
   /** Aborted by closeAll(): a tunnel still being set up through the proxy is torn down with it. */
   #closing = new AbortController();
 
@@ -159,10 +161,12 @@ export class Http2SessionManager {
     connectFn: typeof nativeConnect = nativeConnect,
     timings: SessionTimings = {},
     proxy?: ProxyConfig,
+    allowPlainHttp = false,
   ) {
     this.#tlsConfig = tlsConfig;
     this.#connectFn = connectFn;
     this.#proxy = proxy;
+    this.allowPlainHttp = allowPlainHttp;
     this.#idleTimeoutMs = timings.idleTimeoutMs ?? IDLE_TIMEOUT;
     this.#maxLifespanMs = timings.maxLifespanMs ?? MAX_SESSION_LIFESPAN;
   }
@@ -333,16 +337,18 @@ export class Http2SessionManager {
     // busy until the OS answers, and every later request starts another lookup. Upgrade path: a dns.Resolver with a
     // timeout (c-ares), not done here because it ignores /etc/hosts.
     // Every address is validated (an IP literal is judged as itself): one disallowed address rejects the lookup.
-    // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback.
+    // The origin's scheme is part of the pool key, so an h2c session only ever holds addresses checked as loopback
+    // (unless the client set `allowPlainHttp`, which lifts that rule for every session of its pool).
     const connectUrl = hostname.includes("://") ? hostname : `https://${hostname}`;
     const target = new URL(connectUrl);
-    // Plain http goes to loopback only and never through the proxy. With resolve: 'proxy' the proxy resolves the name,
-    // so nothing is looked up here; an IP literal is still judged as itself.
+    // Plain http goes to loopback only (anywhere with `allowPlainHttp`, which a proxy excludes) and never through the
+    // proxy. With resolve: 'proxy' the proxy resolves the name, so nothing is looked up here; an IP literal is still
+    // judged as itself.
     const proxy = target.protocol === "https:" ? this.#proxy : undefined;
     const resolveHere = proxy?.resolve !== "proxy" || isIP(bareHost) !== 0;
     // Parsed, not compared as text: a scheme in any case ("HTTP://") is still plain http.
     const addresses = resolveHere
-      ? await resolveAndPinAll(bareHost, permitReservedIps, target.protocol === "http:")
+      ? await resolveAndPinAll(bareHost, permitReservedIps, target.protocol === "http:" && !this.allowPlainHttp)
       : [];
     // An IP literal is judged, not looked up: it has no lookup time.
     if (times && resolveHere && isIP(bareHost) === 0) times.lookup = performance.now();

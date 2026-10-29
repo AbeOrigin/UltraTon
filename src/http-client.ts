@@ -160,6 +160,8 @@ export class UltraTonClient {
     readonly #proxyResolvesNames: boolean;
     /** With `maxConcurrency`: this client's own slots per origin, never shared with a variant from `extend()`. */
     readonly #limiter?: OriginLimiter;
+    /** `allowPlainHttp`: plain http to any host. Its engine has the same setting (a variant with another gets its own). */
+    readonly #allowPlainHttp: boolean;
     #closed = false;
 
     /**
@@ -181,6 +183,7 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
         this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
+        this.#allowPlainHttp = resolved.allowPlainHttp;
         if (resolved.maxConcurrency !== undefined) this.#limiter = new OriginLimiter(resolved.maxConcurrency);
         // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out, and the copy goes two
         // levels down so that a caller mutating their arrays or objects later (the permitReservedIps list, headers,
@@ -199,8 +202,8 @@ export class UltraTonClient {
         } else {
             // An injected session manager (test seam) brings its own TLS and proxy settings; `proxy` applies to the default one.
             const engine = resolved.http2
-                ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy))
-                : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy);
+                ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy, resolved.allowPlainHttp))
+                : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy, resolved.allowPlainHttp);
             this.#shared = { engine, refs: 1 };
         }
         this.#engine = this.#shared.engine;
@@ -210,9 +213,9 @@ export class UltraTonClient {
      * A new client with this client's options and `options` on top: what `options` sets wins, headers merge
      * case-insensitively (`options` wins; when either side is a function, into a function that calls both), `retry`
      * merges field by field when both are objects, and a `userAgent` or `user-agent` header here replaces whichever this
-     * client had. The variant shares this client's connection pools unless `options` sets `http2`, `tls` or `proxy`;
-     * pools are kept apart per `permitReservedIps` policy either way, so a variant never takes a socket judged under
-     * another policy. Closing either client leaves the other working; the pools close with the last one.
+     * client had. The variant shares this client's connection pools unless `options` sets `http2`, `tls`, `proxy` or
+     * `allowPlainHttp`; pools are kept apart per `permitReservedIps` policy either way, so a variant never takes a socket
+     * judged under another policy. Closing either client leaves the other working; the pools close with the last one.
      * @throws {SecureHttpError} If this client is closed.
      * @throws {TypeError} As the constructor: an unknown or invalid option.
      */
@@ -220,13 +223,14 @@ export class UltraTonClient {
         if (this.#closed) throw clientClosed();
         const merged = mergeClientOptions(this.#options, options ?? {});
         const extra = options as Record<string, unknown> | undefined;
-        const ownEngine = ['http2', 'tls', 'proxy'].some(key => extra !== undefined && Object.hasOwn(extra, key) && extra[key] !== undefined);
+        const ownEngine = ['http2', 'tls', 'proxy', 'allowPlainHttp'].some(key => extra !== undefined && Object.hasOwn(extra, key) && extra[key] !== undefined);
         return new UltraTonClient(ownEngine ? merged : { ...merged, [kSharedEngine]: this.#shared } as UltraTonClientOptions);
     }
 
     /**
      * Sends a GET request. Every method works the same way; only the HTTP method differs.
-     * @param url - An absolute `https:` URL (plain `http:` only to loopback), or a relative path when `baseUrl` is set.
+     * @param url - An absolute `https:` URL (plain `http:` only to loopback, unless `allowPlainHttp`), or a relative path
+     *   when `baseUrl` is set.
      * @param options - Per-request options; they override the client's defaults. See {@link UltraTonRequestOptions}.
      * @returns The response, for any status code: check `ok` or `statusCode`. Not-followed redirects resolve too.
      * @throws {TypeError} Before connecting, on an unknown or mistyped option, or with `baseUrl` a path that is absolute,
@@ -363,7 +367,7 @@ export class UltraTonClient {
         let target: URL;
         let policy: ReservedIpPolicy;
         try {
-            target = parseSafeUrl(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url);
+            target = parseSafeUrl(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url, undefined, this.#allowPlainHttp);
             policy = buildSafeRequestOptions({ permitReservedIps: options?.permitReservedIps ?? this.#defaults.permitReservedIps }).permitReservedIps;
         } catch (err) {
             return blocked(err);
@@ -374,7 +378,7 @@ export class UltraTonClient {
             return { href: target.href, verdict: 'allowed', reason: 'The proxy resolves the name; UltraTon judges no address here.', addresses: [] };
         }
         try {
-            const judged = await judgeAddresses(bareHost, policy, target.protocol === 'http:');
+            const judged = await judgeAddresses(bareHost, policy, target.protocol === 'http:' && !this.#allowPlainHttp);
             const refused = judged.find(a => a.error?.code === 'ERR_ULTRATON_PLAIN_HTTP') ?? judged.find(a => !a.allowed);
             return {
                 href: target.href,
@@ -437,7 +441,7 @@ export class UltraTonClient {
         // A `headers` function is called here, once per call: a retry or a redirect hop reuses its result. It is told the
         // URL as the engine will parse it, which also rejects one with credentials before the function could see it.
         const headersFn = this.#defaults.headersFn;
-        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method, url: parseSafeUrl(target).href })) } : this.#defaults;
+        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method, url: parseSafeUrl(target, undefined, this.#allowPlainHttp).href })) } : this.#defaults;
         const pending = resolveRequestBody(requested);
         const body = pending instanceof Promise ? await pending : pending;
         // A stream can only be read once: a request with one is sent once, whatever the retry option says.
@@ -487,7 +491,7 @@ export class UltraTonClient {
     ): Promise<R> {
         // Checked as the engine checks them, before waiting: a malformed timeoutMs or URL throws now, not after the queue.
         const budget = buildSafeRequestOptions(options).timeoutMs;
-        const origin = parseSafeUrl(target).origin;
+        const origin = parseSafeUrl(target, undefined, this.#allowPlainHttp).origin;
         let release = limiter.tryAcquire(origin);
         let attempt = options;
         if (!release) {

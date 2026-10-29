@@ -64,7 +64,7 @@ Not sure why something was blocked? `await client.explain(url)` tells you before
 |---|---|---|
 | Private, loopback, link-local, cloud-metadata and other reserved IPs | **Blocked**. This covers IP literals in every spelling, DNS answers, and every redirect hop. | `permitReservedIps: true` or an allowlist such as `['10.0.0.0/8']` |
 | DNS rebinding | **Blocked**. Every address is validated once and the connection is pinned to it. | — |
-| Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | — (use `https:`) |
+| Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | `allowPlainHttp: true` on the client, for an internal service without TLS (the address policy still applies) |
 | Redirects | **Not followed**. The 3xx comes back as a response. | `maxRedirects` (0–20) |
 | https → http redirect | **Rejected**. | — |
 | Headers on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped; every other header follows, as with `fetch`. | `redirectHeaders: 'safe'` lets only `accept*`, `user-agent` and the body framing follow |
@@ -134,6 +134,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 |---|---|---|
 | `baseUrl` | `string` | Relative request paths resolve under it and can never escape it (see [baseUrl](#baseurl)). |
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
+| `allowPlainHttp` | `boolean` | Plain `http:` to any host, not only loopback: for an internal service without TLS (`http://api.staging.internal`). Every address is still judged by `permitReservedIps`, an https→http redirect is still refused, and nothing is encrypted. Cannot be combined with `proxy`. Default `false`. |
 | `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
@@ -187,7 +188,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `TypeError` | Unknown options or wrong option types, a body on GET/HEAD, and with `baseUrl` a request path that is absolute, malformed or escapes it. Thrown before any connection. | — |
 | `SecureHttpError` | A malformed URL, a scheme other than http(s), or credentials in the URL (request URL, `baseUrl` or redirect target) | — |
 | `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
-| `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
+| `SecureHttpError` | Plain `http:` to a host or address that is not loopback, without `allowPlainHttp` | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
 | `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
 | `SecureHttpError` | `createSecureAgents()`, on a Node.js release without the keep-alive fix (see [SECURITY.md](SECURITY.md)): `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. Thrown by the assignment. | `ERR_ULTRATON_AGENT_KEEP_ALIVE` |
@@ -232,7 +233,7 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | Code | What happened | What to change |
 |---|---|---|
 | `ERR_ULTRATON_RESERVED_IP` | The host is, or resolves to, a private, loopback, link-local or otherwise reserved address that `permitReservedIps` does not allow. | For a local or internal target, allow it in `permitReservedIps` (an IP, a CIDR or the exact hostname). `client.explain(url)` shows the addresses. |
-| `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. Plain http is only for local development. |
+| `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. For an internal service without TLS that you trust, `allowPlainHttp: true` on the client (plus `permitReservedIps` for its private address). |
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
 | `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
@@ -559,7 +560,7 @@ const client = new UltraTonClient({
 - **Credentials** in `auth` go on the CONNECT only, as `proxy-authorization`, and never reach a target. Credentials in the URL are rejected.
 - **An `https:` proxy** (TLS to the proxy itself) is checked against the system CAs, or against `proxy.ca`. The `tls.ca` you set for targets is never trusted for the proxy, and `proxy.ca` is never trusted for targets.
 - **Refusals** (407, 403, 502, …) reject with `UltraTonNetworkError` and code `ERR_ULTRATON_PROXY`. The message carries the status and never the proxy address. `retry` does not retry them; a connection to the proxy that drops (`ECONNRESET`, `ETIMEDOUT`) is retried like any other. A proxy that cannot be reached at all fails at once instead of being tried for every address.
-- **Plain `http:` targets** (loopback only) never use the proxy. Proxies are never read from `HTTP_PROXY`/`HTTPS_PROXY`. For internal hosts that must not go through the proxy, use a second client without it.
+- **Plain `http:` targets** (loopback only) never use the proxy, which is why `allowPlainHttp` cannot be combined with `proxy`. Proxies are never read from `HTTP_PROXY`/`HTTPS_PROXY`. For internal hosts that must not go through the proxy, use a second client without it.
 
 **Proxies that filter by hostname.** Squid ACLs or Smokescreen allowlists reject a CONNECT by IP. `resolve: 'proxy'` sends the name instead:
 
@@ -614,7 +615,7 @@ The agents protect the **connection**. The rest stays with the library you plug 
 | Redirect hops checked | Yes (each new socket) | Yes |
 | TLS always verified | Yes | Yes |
 | TLS name taken from the host the socket goes to, never from a `servername` option or a `Host` header | Yes | Yes |
-| Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes |
+| Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes (unless `allowPlainHttp`) |
 | https → http redirect rejected, credentials dropped across origins | No (the library decides) | Yes |
 | Body size limit, decompression bombs, truncated bodies | No | Yes |
 | Total and idle timeouts | No | Yes |

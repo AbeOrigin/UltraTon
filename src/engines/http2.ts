@@ -127,7 +127,7 @@ export class Http2Engine {
       if (this.#closed) throw clientClosed();
       // Before anything is resolved or opened; throws the signal's reason (an AbortError when it had none).
       reqOpts.signal?.throwIfAborted();
-      const parsedUrl = parseSafeUrl(currentUrl);
+      const parsedUrl = parseSafeUrl(currentUrl, undefined, this.#sessionManager.allowPlainHttp);
       const origin = parsedUrl.origin;
       const path = parsedUrl.pathname + parsedUrl.search;
 
@@ -200,7 +200,7 @@ export class Http2Engine {
         !(body instanceof StreamedBody && (statusCode === 307 || statusCode === 308))
       ) {
         if (reqOpts.maxRedirects > 0) {
-          const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirectCount);
+          const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirectCount, this.#sessionManager.allowPlainHttp);
           redirectCount++;
           currentUrl = next.url;
           currentOptions = next.options;

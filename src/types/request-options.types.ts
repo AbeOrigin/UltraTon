@@ -331,6 +331,15 @@ export interface UltraTonClientOptions {
     readonly http2?: boolean;
 
     /**
+     * Allows plain `http:` to any host, for an internal service without TLS (a staging API on the private network).
+     * Without it, plain http only reaches loopback names that resolve to loopback addresses. It lifts only that scheme
+     * rule: every address is still judged by `permitReservedIps`, a redirect from https to http is still refused
+     * (`ERR_ULTRATON_DOWNGRADE`), and nothing sent over plain http is encrypted, credentials included. Cannot be
+     * combined with `proxy` (plain http never goes through it). Default false.
+     */
+    readonly allowPlainHttp?: boolean;
+
+    /**
      * Extra trust and client certificates: `ca` (PEM CAs to trust, e.g. a private CA, in place of the system list),
      * `cert` and `key` (a client certificate for mutual TLS). Nothing else is accepted: certificate verification can not
      * be turned off (`rejectUnauthorized`), and SNI and hostname checks are not configurable.

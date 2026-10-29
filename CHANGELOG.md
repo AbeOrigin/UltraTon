@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`timings` option: per-phase timings on the response.** `timings: true`, on the client or on one request, puts `timings` (`UltraTonTimings`: `dnsMs`, `connectMs`, `tlsMs`, `firstByteMs`, `queuedMs`, `totalMs`, `reusedConnection`) on the response of that call, on both engines and on `stream()` (measured until the headers). The `diagnostics_channel` events are global to the process, so with several calls in flight a subscriber could not tell whose timings it got; on the response each call reads its own, and the event of that call carries the same object. Off by default: measuring costs a few microseconds per call.
+- **`allowPlainHttp` client option: plain http to hosts that are not loopback**, for an internal service without TLS (`http://api.staging.internal`), on both engines (h2c included) and in `baseUrl` and `explain()`. It lifts only the scheme rule, as the option of the same name in `createSecureAgents()` does: every address is still judged by `permitReservedIps`, a redirect from https to http is still `ERR_ULTRATON_DOWNGRADE`, and it cannot be combined with `proxy`, since plain http never goes through it. Off by default; a request cannot set it. A variant from `extend()` that changes it gets pools of its own.
 
 ## [2.8.0] - 2026-10-23
 
