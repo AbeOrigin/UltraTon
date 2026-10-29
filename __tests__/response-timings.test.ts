@@ -14,9 +14,8 @@ import { KEEP_ALIVE } from '../src/helpers/keep-alive.ts';
 /** A loopback server (HTTP/1.1 or h2c) that answers `/slow` after `delayMs` and anything else at once. */
 async function server(t: TestContext, http2: boolean, delayMs = 150) {
     const handler = (req: http.IncomingMessage | any, res: http.ServerResponse | any) => {
-        const answer = () => res.end(req.url);
-        if (req.url === '/slow') setTimeout(answer, delayMs);
-        else answer();
+        if (req.url === '/slow') setTimeout(() => res.end('slow'), delayMs);
+        else res.end('fast');
     };
     const srv = http2 ? createH2Server(handler) : http.createServer(handler);
     const sockets = new Set<Socket>();
@@ -61,7 +60,8 @@ for (const http2 of [false, true]) {
             const base = await server(t, http2, 200);
             const client = clientOf(t, http2, { timings: true });
             const [slow, fast] = await Promise.all([client.get(`${base}/slow`), client.get(`${base}/fast`)]);
-            assert.equal(slow.text(), '/slow');
+            assert.equal(slow.text(), 'slow');
+            assert.equal(fast.text(), 'fast');
             assert.ok(slow.timings!.firstByteMs! >= 150, `slow: ${JSON.stringify(slow.timings)}`);
             assert.ok(fast.timings!.firstByteMs! < 150, `fast: ${JSON.stringify(fast.timings)}`);
             assert.ok(slow.timings!.totalMs > fast.timings!.totalMs);

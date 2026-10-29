@@ -15,7 +15,7 @@ async function server(t: TestContext, http2: boolean) {
         if (req.url === '/a') res.writeHead(301, { location: '/b' });
         else if (req.url === '/b') res.writeHead(307, { location: '/c?x=1' });
         else res.writeHead(200);
-        res.end(req.url);
+        res.end(req.url === '/c?x=1' ? 'c' : '');
     };
     const srv = http2 ? createH2Server(handler as any) : http.createServer(handler);
     const sockets = new Set<Socket>();
@@ -36,7 +36,7 @@ for (const http2 of [false, true]) {
         it('lists every hop followed, in order, with its URL and status', async (t) => {
             const base = await server(t, http2);
             const res = await clientOf(t, http2, 5).get(`${base}/a`);
-            assert.equal(res.text(), '/c?x=1');
+            assert.equal(res.text(), 'c');
             assert.equal(res.url, `${base}/c?x=1`);
             assert.equal(res.redirected, true);
             assert.deepEqual(res.redirects, [
