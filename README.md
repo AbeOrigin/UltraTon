@@ -45,7 +45,7 @@ await api.close(); // when the client is no longer needed; or `await using api =
 ```
 
 - Create **one client and reuse it**. Each client has its own connection pool.
-- Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`.
+- Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`. Any other method (`PROPFIND`, `PURGE`, `REPORT`, ...) goes through `request(method, url, options)`, in uppercase.
 - **A non-2xx response resolves.** Check `res.ok` or `res.statusCode`. The promise only rejects when no complete response arrives, or when a policy or a limit stops the request.
 
 ### The first five minutes
@@ -431,7 +431,7 @@ if (!res.ok) await res.body.cancel();
 else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'));
 ```
 
-`stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. `timeoutMs` ends when the headers arrive: a body that keeps moving may take longer than the budget, and only the idle timer guards it. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+`stream(url, { method: 'POST', json, … })` takes the method as an option, any method in uppercase as for `request()`. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. `timeoutMs` ends when the headers arrive: a body that keeps moving may take longer than the budget, and only the idle timer guards it. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
 
 **Walk a paginated API.** `paginate()` yields one complete response per page, each a full `get()` with every check. By default the next page is the `rel="next"` link of the `Link` header (RFC 8288), as GitHub and many other APIs send it; `next(page)` reads it from somewhere else:
 
@@ -456,7 +456,7 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 
 Off by default. `retry: n` retries up to `n` times (at most 10) with these rules:
 
-- **Methods:** GET, PUT, DELETE, HEAD and OPTIONS. POST and PATCH are never retried unless you list them in `methods`, because the server may have already acted on them.
+- **Methods:** GET, PUT, DELETE, HEAD and OPTIONS. POST, PATCH and methods of your own (`request('PURGE', …)`) are never retried unless you list them in `methods`, because the server may have already acted on them.
 - **Statuses:** 408, 429, 502, 503 and 504. `statusCodes` replaces the list; 500 is not in it by default. When the retries run out, you get the last response, not an error.
 - **Network failures:** `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE` and the idle timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`). Policy errors, `maxBodySize`, `maxRedirects`, invalid input, the `timeoutMs` timeout and an abort are never retried.
 - **Waits:** exponential backoff with full jitter (300 ms base, at most `maxDelayMs`, default 30 s). A `Retry-After` (seconds or an HTTP date) is waited exactly; if it asks for more than `maxDelayMs` or than what is left of `timeoutMs`, that response is returned instead.

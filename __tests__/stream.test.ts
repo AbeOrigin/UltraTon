@@ -285,10 +285,11 @@ describe('client.stream() validation', () => {
     });
 
     it('validates the method', async () => {
-        for (const method of ['get', 'TRACE', 'CONNECT', '', 1]) {
+        for (const method of ['get', 'GE T', '', 1]) {
             await assert.rejects(client.stream('https://example.com/', { method } as any), (err: Error) =>
-                err instanceof TypeError && /^UltraTon: Expected 'method' to be one of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS/.test(err.message));
+                err instanceof TypeError && /^UltraTon: Expected 'method' to be an HTTP method in uppercase/.test(err.message));
         }
+        await assert.rejects(client.stream('https://example.com/', { method: 'CONNECT' }), { name: 'TypeError', message: /CONNECT is not supported/ });
         await assert.rejects(client.stream('https://example.com/', { json: {} }), { message: 'UltraTon: GET and HEAD requests cannot have a body.' });
     });
 });

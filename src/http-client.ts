@@ -273,12 +273,23 @@ export class UltraTonClient {
     }
 
     /**
+     * Sends a request with any method: one of the seven above or one of your own (`PROPFIND`, `PURGE`, `REPORT`, ...),
+     * with every check and option of the other methods. A body is accepted on any method but GET and HEAD. A method of
+     * your own is not retried unless `retry.methods` lists it, and a 301 or 302 turns it into a GET, as for PUT.
+     * @param method - An HTTP method token in uppercase. CONNECT is refused: it opens a tunnel, not a request.
+     * @throws {TypeError} As the other methods, and for a method that is not an uppercase token, or CONNECT.
+     */
+    public async request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>(method, url, options) as Promise<UltraTonResponse<T>>;
+    }
+
+    /**
      * Sends a request and resolves as soon as the response headers arrive, with the body as a `ReadableStream`. Every
      * check of the other methods applies (SSRF, redirects, credentials, `timeoutMs` until the headers), and the body
      * keeps its limits as it is read: `maxBodySize` (here up to Number.MAX_SAFE_INTEGER), content-length, decoding,
      * `socketTimeoutMs` while waiting on the server, abort and `close()`. Read the body to the end or cancel it.
-     * @param options - The request options plus `method` (default 'GET').
-     * @throws {TypeError} As the other methods, and for a method outside GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+     * @param options - The request options plus `method` (default 'GET'; any uppercase method, as for `request()`).
+     * @throws {TypeError} As the other methods, and for a method that is not an uppercase token, or CONNECT.
      */
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);

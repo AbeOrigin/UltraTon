@@ -35,6 +35,7 @@ export declare class UltraTonClient {
     delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
     paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
     explain(url: string, options?: {
@@ -232,7 +233,7 @@ export interface UltraTonRetryInfo {
 ## UltraTonRetryOptions (types/request-options.types.d.ts)
 export interface UltraTonRetryOptions {
     readonly limit?: number;
-    readonly methods?: readonly UltraTonStreamMethod[];
+    readonly methods?: readonly (UltraTonStreamMethod | (string & {}))[];
     readonly statusCodes?: readonly number[];
     readonly maxDelayMs?: number;
     readonly onRetry?: (info: UltraTonRetryInfo) => void;
@@ -261,7 +262,7 @@ export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' |
 
 ## UltraTonStreamOptions (types/request-options.types.d.ts)
 export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
-    readonly method?: UltraTonStreamMethod;
+    readonly method?: UltraTonStreamMethod | (string & {});
     readonly maxBodySize?: number;
 }
 

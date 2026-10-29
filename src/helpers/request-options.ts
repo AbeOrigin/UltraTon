@@ -298,18 +298,38 @@ function ownOptions<T extends object>(options: T): T {
     return own as T;
 }
 
+/** An RFC 9110 method token in uppercase: GET, PROPFIND, M-SEARCH. */
+const METHOD_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Z]+$/;
+const isMethod = (value: unknown): value is string => typeof value === 'string' && METHOD_TOKEN.test(value) && value !== 'CONNECT';
+
+/**
+ * An HTTP method as a request sends it: any token in uppercase, the seven of the client methods or one of your own
+ * (`PROPFIND`, `PURGE`, `REPORT`). Uppercase only: Node sends every method in uppercase, so a lowercase one would go
+ * on the wire as a method other than the one the checks here (HEAD has no body, GET none either) saw.
+ * @throws {TypeError} For anything else, and for CONNECT, which opens a tunnel rather than sending a request.
+ */
+export function methodOption(value: unknown, name = 'method'): string {
+    if (value === 'CONNECT') throw new TypeError("UltraTon: CONNECT is not supported: it opens a tunnel, not a request. Tunnels go through the 'proxy' option.");
+    if (!isMethod(value)) {
+        const received = typeof value === 'string' ? `'${value}'` : describeValue(value);
+        throw new TypeError(`UltraTon: Expected '${name}' to be an HTTP method in uppercase (GET, PROPFIND, PURGE, ...), received ${received}.`);
+    }
+    return value;
+}
+
 /**
  * Builds the options of one request from what a client method (`get`, `post`, ...) received: the caller's options object
- * plus the method. A caller-supplied `method` throws instead of being silently overridden, and so does an `options` that
- * is not an object (typically the old `post(url, body)` call shape).
+ * plus the method, validated by methodOption. A caller-supplied `method` throws instead of being silently overridden, and
+ * so does an `options` that is not an object (typically the old `post(url, body)` call shape).
  */
 export function withMethod(method: string, options: unknown): InternalRequestOptions {
+    methodOption(method);
     if (options === undefined) return ownOptions({ method });
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
         throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json }, { form } or { body }.");
     }
     if (Object.hasOwn(options, 'method')) {
-        throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
+        throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options, or request(method, url)).");
     }
     // Copied from the caller's object itself, so a non-plain one is refused before a spread could flatten it.
     return Object.assign(ownOptions(options), { method });
@@ -390,23 +410,20 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedBod
     return { options: withResolvedBody(options, Buffer.from(serialized)) };
 }
 
-const STREAM_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-
 /**
  * Takes `method` and `maxBodySize` out of the options of `client.stream()`, validated. The rest goes through the usual
  * request firewall; `maxBodySize` stays out of it because a stream may go past the 2 GiB a buffered body is held to.
- * @throws {TypeError} If the method is not one of STREAM_METHODS (uppercase) or maxBodySize is not a safe integer >= 0.
+ * @throws {TypeError} If the method is not an uppercase method token (see methodOption) or maxBodySize is not a safe
+ *   integer >= 0.
  */
 export function splitStreamOptions(options: unknown): { method: string; maxBodySize?: number; rest: unknown } {
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
     const own = ownOptions(options as Record<string, unknown>);
     const { method = 'GET', maxBodySize, ...rest } = own;
-    if (typeof method !== 'string' || !STREAM_METHODS.includes(method)) {
-        throw new TypeError(`UltraTon: Expected 'method' to be one of ${STREAM_METHODS.join(', ')}, received ${describeValue(method)}.`);
-    }
+    methodOption(method);
     if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
-    return { method, maxBodySize: maxBodySize as number | undefined, rest };
+    return { method: method as string, maxBodySize: maxBodySize as number | undefined, rest };
 }
 
 /** How many pages `client.paginate()` fetches unless `maxPages` says otherwise. */
@@ -478,7 +495,7 @@ export function retryOption(value: unknown): RetryInput | undefined {
     if (raw.limit !== undefined) retry.limit = intOption('retry.limit', raw.limit, 0, MAX_RETRIES);
     if (raw.maxDelayMs !== undefined) retry.maxDelayMs = intOption('retry.maxDelayMs', raw.maxDelayMs, 0);
     if (raw.methods !== undefined) {
-        retry.methods = listOption('retry.methods', raw.methods, m => typeof m === 'string' && STREAM_METHODS.includes(m), `an array of ${STREAM_METHODS.join(', ')}`);
+        retry.methods = listOption('retry.methods', raw.methods, isMethod, 'an array of HTTP methods in uppercase');
     }
     if (raw.statusCodes !== undefined) {
         retry.statusCodes = listOption('retry.statusCodes', raw.statusCodes, c => Number.isInteger(c) && (c as number) >= 400 && (c as number) <= 599, 'an array of integers from 400 to 599');
