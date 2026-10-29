@@ -7,7 +7,7 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, timingsOption, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
@@ -15,7 +15,7 @@ import { kSessionManager, kSharedEngine, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
-import { observeRequest, type TimingsCollector } from './helpers/diagnostics.ts';
+import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
 import { createStreamResponse } from './helpers/response.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
@@ -160,6 +160,8 @@ export class UltraTonClient {
     readonly #proxyResolvesNames: boolean;
     /** With `maxConcurrency`: this client's own slots per origin, never shared with a variant from `extend()`. */
     readonly #limiter?: OriginLimiter;
+    /** `allowPlainHttp`: plain http to any host. Its engine has the same setting (a variant with another gets its own). */
+    readonly #allowPlainHttp: boolean;
     #closed = false;
 
     /**
@@ -181,6 +183,7 @@ export class UltraTonClient {
         this.#defaults = resolved.defaults;
         this.#baseUrl = resolved.baseUrl;
         this.#proxyResolvesNames = resolved.proxy?.resolve === 'proxy';
+        this.#allowPlainHttp = resolved.allowPlainHttp;
         if (resolved.maxConcurrency !== undefined) this.#limiter = new OriginLimiter(resolved.maxConcurrency);
         // Validated as a plain object above. Object.keys leaves the symbol-keyed seams out, and the copy goes two
         // levels down so that a caller mutating their arrays or objects later (the permitReservedIps list, headers,
@@ -199,8 +202,8 @@ export class UltraTonClient {
         } else {
             // An injected session manager (test seam) brings its own TLS and proxy settings; `proxy` applies to the default one.
             const engine = resolved.http2
-                ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy))
-                : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy);
+                ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy, resolved.allowPlainHttp))
+                : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy, resolved.allowPlainHttp);
             this.#shared = { engine, refs: 1 };
         }
         this.#engine = this.#shared.engine;
@@ -210,9 +213,9 @@ export class UltraTonClient {
      * A new client with this client's options and `options` on top: what `options` sets wins, headers merge
      * case-insensitively (`options` wins; when either side is a function, into a function that calls both), `retry`
      * merges field by field when both are objects, and a `userAgent` or `user-agent` header here replaces whichever this
-     * client had. The variant shares this client's connection pools unless `options` sets `http2`, `tls` or `proxy`;
-     * pools are kept apart per `permitReservedIps` policy either way, so a variant never takes a socket judged under
-     * another policy. Closing either client leaves the other working; the pools close with the last one.
+     * client had. The variant shares this client's connection pools unless `options` sets `http2`, `tls`, `proxy` or
+     * `allowPlainHttp`; pools are kept apart per `permitReservedIps` policy either way, so a variant never takes a socket
+     * judged under another policy. Closing either client leaves the other working; the pools close with the last one.
      * @throws {SecureHttpError} If this client is closed.
      * @throws {TypeError} As the constructor: an unknown or invalid option.
      */
@@ -220,13 +223,14 @@ export class UltraTonClient {
         if (this.#closed) throw clientClosed();
         const merged = mergeClientOptions(this.#options, options ?? {});
         const extra = options as Record<string, unknown> | undefined;
-        const ownEngine = ['http2', 'tls', 'proxy'].some(key => extra !== undefined && Object.hasOwn(extra, key) && extra[key] !== undefined);
+        const ownEngine = ['http2', 'tls', 'proxy', 'allowPlainHttp'].some(key => extra !== undefined && Object.hasOwn(extra, key) && extra[key] !== undefined);
         return new UltraTonClient(ownEngine ? merged : { ...merged, [kSharedEngine]: this.#shared } as UltraTonClientOptions);
     }
 
     /**
      * Sends a GET request. Every method works the same way; only the HTTP method differs.
-     * @param url - An absolute `https:` URL (plain `http:` only to loopback), or a relative path when `baseUrl` is set.
+     * @param url - An absolute `https:` URL (plain `http:` only to loopback, unless `allowPlainHttp`), or a relative path
+     *   when `baseUrl` is set.
      * @param options - Per-request options; they override the client's defaults. See {@link UltraTonRequestOptions}.
      * @returns The response, for any status code: check `ok` or `statusCode`. Not-followed redirects resolve too.
      * @throws {TypeError} Before connecting, on an unknown or mistyped option, or with `baseUrl` a path that is absolute,
@@ -269,12 +273,23 @@ export class UltraTonClient {
     }
 
     /**
+     * Sends a request with any method: one of the seven above or one of your own (`PROPFIND`, `PURGE`, `REPORT`, ...),
+     * with every check and option of the other methods. A body is accepted on any method but GET and HEAD. A method of
+     * your own is not retried unless `retry.methods` lists it, and a 301 or 302 turns it into a GET, as for PUT.
+     * @param method - An HTTP method token in uppercase. CONNECT is refused: it opens a tunnel, not a request.
+     * @throws {TypeError} As the other methods, and for a method that is not an uppercase token, or CONNECT.
+     */
+    public async request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>> {
+        return this.#request<T>(method, url, options) as Promise<UltraTonResponse<T>>;
+    }
+
+    /**
      * Sends a request and resolves as soon as the response headers arrive, with the body as a `ReadableStream`. Every
      * check of the other methods applies (SSRF, redirects, credentials, `timeoutMs` until the headers), and the body
      * keeps its limits as it is read: `maxBodySize` (here up to Number.MAX_SAFE_INTEGER), content-length, decoding,
      * `socketTimeoutMs` while waiting on the server, abort and `close()`. Read the body to the end or cancel it.
-     * @param options - The request options plus `method` (default 'GET').
-     * @throws {TypeError} As the other methods, and for a method outside GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS.
+     * @param options - The request options plus `method` (default 'GET'; any uppercase method, as for `request()`).
+     * @throws {TypeError} As the other methods, and for a method that is not an uppercase token, or CONNECT.
      */
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);
@@ -363,7 +378,7 @@ export class UltraTonClient {
         let target: URL;
         let policy: ReservedIpPolicy;
         try {
-            target = parseSafeUrl(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url);
+            target = parseSafeUrl(this.#baseUrl ? resolveAgainstBase(url, this.#baseUrl) : url, undefined, this.#allowPlainHttp);
             policy = buildSafeRequestOptions({ permitReservedIps: options?.permitReservedIps ?? this.#defaults.permitReservedIps }).permitReservedIps;
         } catch (err) {
             return blocked(err);
@@ -374,7 +389,7 @@ export class UltraTonClient {
             return { href: target.href, verdict: 'allowed', reason: 'The proxy resolves the name; UltraTon judges no address here.', addresses: [] };
         }
         try {
-            const judged = await judgeAddresses(bareHost, policy, target.protocol === 'http:');
+            const judged = await judgeAddresses(bareHost, policy, target.protocol === 'http:' && !this.#allowPlainHttp);
             const refused = judged.find(a => a.error?.code === 'ERR_ULTRATON_PLAIN_HTTP') ?? judged.find(a => !a.allowed);
             return {
                 href: target.href,
@@ -424,17 +439,20 @@ export class UltraTonClient {
         // The caller's own options are validated (unknown keys, json/form/body, body type) and the body encoded before any
         // client default is merged in. The content-type comes last: a client default one is kept for json, replaced by
         // the one a form, FormData, URLSearchParams or typed Blob implies.
-        // `query` is applied here, after baseUrl's path check, and `retry` wraps the engine call: neither reaches the engines.
-        // withMethod returns a null-prototype object: both are deleted from it, never destructured into a plain one.
+        // `query` is applied here, after baseUrl's path check, `retry` wraps the engine call and `timings` is measured
+        // around it: none of them reaches the engines.
+        // withMethod returns a null-prototype object: they are deleted from it, never destructured into a plain one.
         const requested = withMethod(method, options);
         const target = withQuery(resolved, requested.query);
         const retryPolicy = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
+        const measure = timingsOption(requested.timings) ?? this.#defaults.timings;
         Reflect.deleteProperty(requested, 'query');
         Reflect.deleteProperty(requested, 'retry');
+        Reflect.deleteProperty(requested, 'timings');
         // A `headers` function is called here, once per call: a retry or a redirect hop reuses its result. It is told the
         // URL as the engine will parse it, which also rejects one with credentials before the function could see it.
         const headersFn = this.#defaults.headersFn;
-        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method, url: parseSafeUrl(target).href })) } : this.#defaults;
+        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method, url: parseSafeUrl(target, undefined, this.#allowPlainHttp).href })) } : this.#defaults;
         const pending = resolveRequestBody(requested);
         const body = pending instanceof Promise ? await pending : pending;
         // A stream can only be read once: a request with one is sent once, whatever the retry option says.
@@ -442,9 +460,10 @@ export class UltraTonClient {
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
         // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
-        // Without it the engines get no timings to measure.
-        const observer = observeRequest(method, target);
-        const timings = observer?.timings;
+        // Without it, and without `timings`, the engines get no timings to measure.
+        const own = measure ? new TimingsCollector() : undefined;
+        const observer = observeRequest(method, target, own);
+        const timings = observer?.timings ?? own;
         const observed = observer && retry && {
             ...retry,
             // The caller's hook first: when it throws there is no retry, so no retry event either.
@@ -459,9 +478,11 @@ export class UltraTonClient {
             return policy ? withRetry(send, policy, options.timeoutMs, options.signal) : send();
         };
         // Without maxConcurrency nothing is queued nor measured: the call goes straight to the engine, as it always did.
-        const result = this.#limiter
+        const sent = this.#limiter
             ? this.#limited(this.#limiter, target, resolvedOptions, stream !== undefined && method !== 'HEAD', timings, call)
             : call(resolvedOptions);
+        // Set on the response itself, which assertOk() returns and UltraTonHttpError carries.
+        const result = own ? sent.then(res => Object.assign(res, { timings: own.snapshot() })) : sent;
         return observer ? observer.track(result) : result;
     }
 
@@ -481,7 +502,7 @@ export class UltraTonClient {
     ): Promise<R> {
         // Checked as the engine checks them, before waiting: a malformed timeoutMs or URL throws now, not after the queue.
         const budget = buildSafeRequestOptions(options).timeoutMs;
-        const origin = parseSafeUrl(target).origin;
+        const origin = parseSafeUrl(target, undefined, this.#allowPlainHttp).origin;
         let release = limiter.tryAcquire(origin);
         let attempt = options;
         if (!release) {
@@ -516,6 +537,6 @@ export class UltraTonClient {
         }
         // A new response around the new body, so that assertOk() cancels that one (and gives the slot back with it).
         const res = response as UltraTonStreamResponse;
-        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirected) as R;
+        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirects) as R;
     }
 }

@@ -25,15 +25,17 @@ UltraTon supports every Node.js line from 22.12 on that is still maintained upst
 
 When a new major ships, the previous one keeps getting **security fixes for 6 months**, then stops.
 
-## Stability period: 2.8.0 to 2027-01-23
+## Stability period: 2.9.0 to 2027-01-29
 
-2.0.0 to 2.8.0 shipped in five days. Each release is documented and tested, but an API that moves that fast is not one you can build on, so from 2.8.0 (2026-10-23) and **for at least three months**:
+2.0.0 to 2.8.0 shipped in five days. Each release is documented and tested, but an API that moves that fast is not one you can build on, so from 2.9.0 (2026-10-29) and **for at least three months**:
 
-- **Only patch releases (2.8.x).** Bug fixes, security fixes and documentation. No new options, methods, exports or error codes, and no change of behaviour that is not a fix.
+- **Only patch releases (2.9.x).** Bug fixes, security fixes and documentation. No new options, methods, exports or error codes, and no change of behaviour that is not a fix.
 - **The public API is frozen and CI enforces it.** `scripts/public-api.txt` is the snapshot of every exported type and signature, and of every error code; a change fails CI unless the snapshot is updated on purpose, and in this period it is not.
 - **The one exception is a security fix that cannot be made without a new option.** It ships in a minor, the CHANGELOG says why under "Security", and nothing else comes with it.
 
-What the period is for: feedback on the 2.7 and 2.8 additions (`explain()`, `extend()`, `assertOk()`, `redirectHeaders`, `maxConcurrency`, the `headers` function, the diagnostics timings) before anything is built on top of them, and a track record an adopter can check: the CHANGELOG and the API snapshot between two dates. Candidates for a later major are listed in the CHANGELOG as they come up (today: `redirectHeaders: 'safe'` as the default), and none of them ships before the period ends.
+**The period was first announced from 2.8.0 (2026-10-23), and 2.9.0 broke it six days later.** Ultraman, the first application built on UltraTon, found six gaps it could only work around (timings per response, plain http to internal services, self-signed dev servers, the redirect chain, a code for out-of-range options, custom methods), and fixing them in the first week cost less than three months of workarounds in the first adopter. Every change in 2.9.0 is opt-in or additive and no default moved; one is a type change that can break code that compiled (`redirects` is required on the response types), which the CHANGELOG lists. The period restarts from 2.9.0 instead of keeping a date it no longer earns, and this is the one time: an adopter's request that needs a new option waits until the period ends.
+
+What the period is for: feedback on the 2.7 to 2.9 additions (`explain()`, `extend()`, `assertOk()`, `redirectHeaders`, `maxConcurrency`, the `headers` function, the diagnostics timings, `timings` and `redirects` on the response, `allowPlainHttp`, `client.request()`) before anything is built on top of them, and a track record an adopter can check: the CHANGELOG and the API snapshot between two dates. Candidates for a later major are listed in the CHANGELOG as they come up (today: `redirectHeaders: 'safe'` as the default), and none of them ships before the period ends.
 
 ## What counts as a breaking change
 

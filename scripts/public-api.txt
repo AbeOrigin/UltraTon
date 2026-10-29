@@ -2,7 +2,7 @@
 export declare function createSecureAgents(options?: UltraTonSecureAgentOptions): UltraTonSecureAgents;
 
 ## isUltraTonError (errors.d.ts)
-export declare function isUltraTonError(err: unknown, code?: UltraTonErrorCode): err is SecureHttpError;
+export declare function isUltraTonError(err: unknown, code?: Exclude<UltraTonErrorCode, 'ERR_ULTRATON_OPTION_RANGE'>): err is SecureHttpError;
 
 ## QueryValue (types/request-options.types.d.ts)
 export type QueryValue = string | number | boolean;
@@ -35,6 +35,7 @@ export declare class UltraTonClient {
     delete<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     head<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
+    request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
     paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
     explain(url: string, options?: {
@@ -57,7 +58,9 @@ export interface UltraTonClientOptions {
     readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
+    readonly timings?: boolean;
     readonly http2?: boolean;
+    readonly allowPlainHttp?: boolean;
     readonly tls?: {
         readonly ca?: TlsMaterial;
         readonly cert?: TlsMaterial;
@@ -143,6 +146,12 @@ export interface UltraTonProxyOptions {
     readonly resolve?: 'local' | 'proxy';
 }
 
+## UltraTonRedirect (types/request-response.d.ts)
+export interface UltraTonRedirect {
+    readonly url: string;
+    readonly statusCode: number;
+}
+
 ## UltraTonRedirectError (errors.d.ts)
 export declare class UltraTonRedirectError extends SecureHttpError {
 }
@@ -173,6 +182,7 @@ export interface UltraTonRequestOptions {
     readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
+    readonly timings?: boolean;
 }
 
 ## UltraTonRequestResponseMessage (helpers/diagnostics.d.ts)
@@ -204,7 +214,9 @@ export interface UltraTonResponse<T = unknown> {
     readonly headers: IncomingHttpHeaders;
     readonly url: string;
     readonly redirected: boolean;
+    readonly redirects: readonly UltraTonRedirect[];
     readonly data: Buffer;
+    readonly timings?: UltraTonTimings;
     json<R = T>(): R;
     text(): string;
     assertOk(): UltraTonResponse<T>;
@@ -221,7 +233,7 @@ export interface UltraTonRetryInfo {
 ## UltraTonRetryOptions (types/request-options.types.d.ts)
 export interface UltraTonRetryOptions {
     readonly limit?: number;
-    readonly methods?: readonly UltraTonStreamMethod[];
+    readonly methods?: readonly (UltraTonStreamMethod | (string & {}))[];
     readonly statusCodes?: readonly number[];
     readonly maxDelayMs?: number;
     readonly onRetry?: (info: UltraTonRetryInfo) => void;
@@ -250,7 +262,7 @@ export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' |
 
 ## UltraTonStreamOptions (types/request-options.types.d.ts)
 export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
-    readonly method?: UltraTonStreamMethod;
+    readonly method?: UltraTonStreamMethod | (string & {});
     readonly maxBodySize?: number;
 }
 
@@ -261,7 +273,9 @@ export interface UltraTonStreamResponse {
     readonly headers: IncomingHttpHeaders;
     readonly url: string;
     readonly redirected: boolean;
+    readonly redirects: readonly UltraTonRedirect[];
     readonly body: ReadableStream<Uint8Array>;
+    readonly timings?: UltraTonTimings;
     assertOk(): UltraTonStreamResponse;
 }
 
@@ -284,6 +298,7 @@ ERR_ULTRATON_DOWNGRADE
 ERR_ULTRATON_HTTP_STATUS
 ERR_ULTRATON_MAX_PAGES
 ERR_ULTRATON_NON_CANONICAL_IP
+ERR_ULTRATON_OPTION_RANGE
 ERR_ULTRATON_PAGE_OUT_OF_SCOPE
 ERR_ULTRATON_PLAIN_HTTP
 ERR_ULTRATON_PROXY

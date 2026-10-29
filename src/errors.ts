@@ -9,6 +9,7 @@ export const ERROR_CODES = [
     'ERR_ULTRATON_HTTP_STATUS',
     'ERR_ULTRATON_MAX_PAGES',
     'ERR_ULTRATON_NON_CANONICAL_IP',
+    'ERR_ULTRATON_OPTION_RANGE',
     'ERR_ULTRATON_PAGE_OUT_OF_SCOPE',
     'ERR_ULTRATON_PLAIN_HTTP',
     'ERR_ULTRATON_PROXY',
@@ -68,6 +69,14 @@ export function remainingBudget(timeoutMs: number, startedAt: number): number {
     if (remaining <= 0) throw absoluteTimeout(timeoutMs);
     return remaining;
 }
+/**
+ * A number option that is not an integer within its range (`timeoutMs: 3e9`, `maxRedirects: 21`, `retry.limit: 1.5`).
+ * A `TypeError`, like every invalid option, thrown before connecting; for a caller to say it in its own words it
+ * carries `code` `ERR_ULTRATON_OPTION_RANGE`, the option's name as `option` (`'timeoutMs'`, `'retry.limit'`) and the
+ * accepted bounds as `min` and `max`.
+ */
+export const optionRange = (option: string, received: string, min: number, max: number): TypeError =>
+    Object.assign(new TypeError(`UltraTon: Expected '${option}' to be an integer from ${min} to ${max}, received ${received}.`), { code: 'ERR_ULTRATON_OPTION_RANGE', option, min, max });
 /** The request (or a step of it) ran into `close()`. */
 export const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
 /**
@@ -120,9 +129,11 @@ const ERROR_NAMES = new Set(['SecureHttpError', 'UltraTonNetworkError', 'UltraTo
 /**
  * Whether `err` is an error UltraTon raised, optionally one with the given `code`. Judged by shape (`name` and `code`),
  * not by class, so it also recognizes errors from another copy of the package in `node_modules`. Never throws: anything
- * that is not an object, has another `name`, or whose properties cannot be read is not one.
+ * that is not an object, has another `name`, or whose properties cannot be read is not one. `ERR_ULTRATON_OPTION_RANGE`
+ * is not accepted as `code`: it is raised on a `TypeError` (see optionRange), never on a `SecureHttpError`, so test
+ * `err.code` for it.
  */
-export function isUltraTonError(err: unknown, code?: UltraTonErrorCode): err is SecureHttpError {
+export function isUltraTonError(err: unknown, code?: Exclude<UltraTonErrorCode, 'ERR_ULTRATON_OPTION_RANGE'>): err is SecureHttpError {
     if (typeof err !== 'object' || err === null) return false;
     try {
         const { name, code: actual } = err as { name?: unknown; code?: unknown };

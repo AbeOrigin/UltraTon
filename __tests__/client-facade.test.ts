@@ -589,7 +589,7 @@ describe('UltraTonClient constructor validation', () => {
         rejects({ json: {} }, /'json' is a per-request option/);
         rejects({ isolatePool: true }, /^UltraTon: Unknown option 'isolatePool'\. Every client has its own connection pool\.$/);
         rejects({ tlsSettings: {} }, /^UltraTon: Unknown option 'tlsSettings'\. Use 'tls' \(\{ ca, cert, key \}\)\.$/);
-        rejects({ bogus: 3 }, /^UltraTon: Unknown option 'bogus'\. Valid options: baseUrl, headers, timeoutMs, socketTimeoutMs, maxBodySize, maxRequestBodySize, decompress, maxRedirects, redirectHeaders, permitReservedIps, retry, http2, tls, userAgent, proxy, maxConcurrency\.$/);
+        rejects({ bogus: 3 }, /^UltraTon: Unknown option 'bogus'\. Valid options: baseUrl, headers, timeoutMs, socketTimeoutMs, maxBodySize, maxRequestBodySize, decompress, maxRedirects, redirectHeaders, permitReservedIps, retry, http2, tls, userAgent, proxy, maxConcurrency, timings, allowPlainHttp\.$/);
         rejects({ whatever: undefined }, /Unknown option 'whatever'/);
     });
 

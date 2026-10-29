@@ -442,7 +442,7 @@ describe('retry option validation', () => {
         [null, /^UltraTon: Expected 'retry' to be a number or a plain object, received null\.$/],
         [{ limit: 11 }, /'retry\.limit' to be an integer from 0 to 10/],
         [{ maxDelayMs: -1 }, /'retry\.maxDelayMs' to be an integer from 0 to 2147483647/],
-        [{ methods: ['post'] }, /^UltraTon: Expected 'retry\.methods' to be an array of GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS/],
+        [{ methods: ['post'] }, /^UltraTon: Expected 'retry\.methods' to be an array of HTTP methods in uppercase, received 'post'\.$/],
         [{ methods: 'GET' }, /'retry\.methods' to be an array/],
         [{ statusCodes: [200] }, /^UltraTon: Expected 'retry\.statusCodes' to be an array of integers from 400 to 599/],
         [{ statusCodes: [503.5] }, /'retry\.statusCodes' to be an array of integers from 400 to 599/],

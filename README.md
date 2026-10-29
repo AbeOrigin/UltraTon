@@ -45,7 +45,7 @@ await api.close(); // when the client is no longer needed; or `await using api =
 ```
 
 - Create **one client and reuse it**. Each client has its own connection pool.
-- Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`.
+- Every method is `(url, options)`: `get`, `post`, `put`, `patch`, `delete`, `head` and `options`. Any other method (`PROPFIND`, `PURGE`, `REPORT`, ...) goes through `request(method, url, options)`, in uppercase.
 - **A non-2xx response resolves.** Check `res.ok` or `res.statusCode`. The promise only rejects when no complete response arrives, or when a policy or a limit stops the request.
 
 ### The first five minutes
@@ -64,7 +64,7 @@ Not sure why something was blocked? `await client.explain(url)` tells you before
 |---|---|---|
 | Private, loopback, link-local, cloud-metadata and other reserved IPs | **Blocked**. This covers IP literals in every spelling, DNS answers, and every redirect hop. | `permitReservedIps: true` or an allowlist such as `['10.0.0.0/8']` |
 | DNS rebinding | **Blocked**. Every address is validated once and the connection is pinned to it. | — |
-| Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | — (use `https:`) |
+| Plain `http:` | Only to loopback hosts, and only if they resolve to loopback addresses. | `allowPlainHttp: true` on the client, for an internal service without TLS (the address policy still applies) |
 | Redirects | **Not followed**. The 3xx comes back as a response. | `maxRedirects` (0–20) |
 | https → http redirect | **Rejected**. | — |
 | Headers on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped; every other header follows, as with `fetch`. | `redirectHeaders: 'safe'` lets only `accept*`, `user-agent` and the body framing follow |
@@ -134,12 +134,13 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 |---|---|---|
 | `baseUrl` | `string` | Relative request paths resolve under it and can never escape it (see [baseUrl](#baseurl)). |
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
-| `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
+| `allowPlainHttp` | `boolean` | Plain `http:` to any host, not only loopback: for an internal service without TLS (`http://api.staging.internal`). Every address is still judged by `permitReservedIps`, an https→http redirect is still refused, and nothing is encrypted. Cannot be combined with `proxy`. Default `false`. |
+| `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA (or a dev server's self-signed certificate, see [Recipes](#recipes)), or a client certificate for mTLS. `ca` replaces the system roots. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
 | `maxConcurrency` | integer from 1 | At most this many calls in flight at once per origin; the rest wait in order, and the wait counts against `timeoutMs`. Unset: no limit. See [Limits and things to know](#limits-and-things-to-know). |
-| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
+| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry`, `timings` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -161,6 +162,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `redirectHeaders` | `'all' \| 'safe'` | `'all'`: on a redirect to another origin, every header but the credential ones follows. `'safe'`: only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` do, so an `x-api-key` stays behind. A same-origin redirect keeps every header. |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
 | `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
+| `timings` | `boolean` | `false`. `true` puts `timings` on the response: where the time of that call went (see [Observability](#observability)). |
 
 **Response:**
 
@@ -171,7 +173,9 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `headers` | `IncomingHttpHeaders` | Never contains HTTP/2 pseudo-headers. |
 | `url` | `string` | The final URL, after any redirect that was followed. |
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
+| `redirects` | `readonly { url, statusCode }[]` | The redirects followed, in order: the URL that answered each one and its status (where it led is the next entry's `url`, or the response's). Empty when none was followed. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
+| `timings` | `UltraTonTimings \| undefined` | With the `timings` option: DNS, connect, TLS, first byte, queue and total of this call, in ms (see [Observability](#observability)). `totalMs` runs until the body was read (on `stream()`, until the headers). |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |
 | `text()` | `string` | Decodes the body as UTF-8. A leading BOM is skipped, as with `fetch`; `data` keeps it. |
 | `assertOk()` | the response | Returns the response when `ok`, otherwise throws `UltraTonHttpError` (`statusCode`, `response`). On `stream()` it cancels the body first. A redirect that was not followed is not `ok`. |
@@ -183,9 +187,10 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | Error | When | `code` |
 |---|---|---|
 | `TypeError` | Unknown options or wrong option types, a body on GET/HEAD, and with `baseUrl` a request path that is absolute, malformed or escapes it. Thrown before any connection. | — |
+| `TypeError` | A number option that is not an integer within its range (`timeoutMs` above 2147483647, `maxRedirects: 21`, `retry.limit: 1.5`). Thrown before any connection, with the option's name and bounds as `err.option`, `err.min` and `err.max`. | `ERR_ULTRATON_OPTION_RANGE` |
 | `SecureHttpError` | A malformed URL, a scheme other than http(s), or credentials in the URL (request URL, `baseUrl` or redirect target) | — |
 | `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
-| `SecureHttpError` | Plain `http:` to a host or address that is not loopback | `ERR_ULTRATON_PLAIN_HTTP` |
+| `SecureHttpError` | Plain `http:` to a host or address that is not loopback, without `allowPlainHttp` | `ERR_ULTRATON_PLAIN_HTTP` |
 | `SecureHttpError` | A redirect from https to http | `ERR_ULTRATON_DOWNGRADE` |
 | `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
 | `SecureHttpError` | `createSecureAgents()`, on a Node.js release without the keep-alive fix (see [SECURITY.md](SECURITY.md)): `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. Thrown by the assignment. | `ERR_ULTRATON_AGENT_KEEP_ALIVE` |
@@ -204,7 +209,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | `paginate()`: a next page is left after `maxPages` | `ERR_ULTRATON_MAX_PAGES` |
 | `UltraTonParseError` | `json()` on an invalid body. The `SyntaxError` is in `cause`. | — |
 
-`isUltraTonError(err, code?)` tells UltraTon's errors apart by shape (`name` and `code`), so it also recognizes them when two copies of the package are installed, and `code` autocompletes as `UltraTonErrorCode` (a misspelled code is a compile error):
+`isUltraTonError(err, code?)` tells UltraTon's errors apart by shape (`name` and `code`), so it also recognizes them when two copies of the package are installed, and `code` autocompletes as `UltraTonErrorCode` (a misspelled code is a compile error). `ERR_ULTRATON_OPTION_RANGE` is the exception: it comes on a `TypeError`, so test `err.code` for it:
 
 ```ts
 import { isUltraTonError, UltraTonNetworkTimeoutError, UltraTonNetworkError } from 'ultraton';
@@ -230,8 +235,9 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | Code | What happened | What to change |
 |---|---|---|
 | `ERR_ULTRATON_RESERVED_IP` | The host is, or resolves to, a private, loopback, link-local or otherwise reserved address that `permitReservedIps` does not allow. | For a local or internal target, allow it in `permitReservedIps` (an IP, a CIDR or the exact hostname). `client.explain(url)` shows the addresses. |
-| `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. Plain http is only for local development. |
+| `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. For an internal service without TLS that you trust, `allowPlainHttp: true` on the client (plus `permitReservedIps` for its private address). |
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
+| `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
 | `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
 | `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |
@@ -245,7 +251,7 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_AGENT_KEEP_ALIVE` | `createSecureAgents()`, on a Node release without the keep-alive fix: `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. | Upgrade Node (see SECURITY.md); the agents cannot pool sockets safely before that. |
 | `ERR_ULTRATON_NON_CANONICAL_IP` | `createSecureAgents()`: a host such as `127.1` or `0x7f.0.0.1`. | Write the IP in its canonical dotted form. |
 | `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND` | Node's own network codes: nothing listens there, the connection dropped, the name does not resolve. | The server or the network. `retry` covers the transient ones. |
-| `ERR_TLS_CERT_ALTNAME_INVALID` and other TLS codes | The certificate does not match the host, or is not trusted. | A private CA goes in `tls: { ca }`; verification cannot be turned off. |
+| `ERR_TLS_CERT_ALTNAME_INVALID` and other TLS codes | The certificate does not match the host, or is not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT`, `SELF_SIGNED_CERT_IN_CHAIN`: a self-signed one). | A private CA, or a dev server's self-signed certificate, goes in `tls: { ca }` (see [Recipes](#recipes)); verification cannot be turned off. |
 
 ## Recipes
 
@@ -346,6 +352,18 @@ const h2 = new UltraTonClient({ http2: true, baseUrl: 'https://api.example.com/'
 const mtls = new UltraTonClient({ tls: { cert: fs.readFileSync('client.pem'), key: fs.readFileSync('client.key') } });
 ```
 
+**A development server with a self-signed certificate.** Verification cannot be turned off, but it can trust that one certificate: pass it (or the CA that signed it, as with mkcert) in `tls.ca`. This works for a self-signed CA certificate and for a self-signed leaf (`CA:FALSE`, as Vite's and ASP.NET's dev certificates are), on both engines. `ca` replaces the system roots, so add them back if the same client also calls public hosts. A variant with its own `tls` gets pools of its own:
+
+```ts
+import tls from 'node:tls';
+
+const api = new UltraTonClient({ permitReservedIps: ['localhost'] });
+const dev = api.extend({ tls: { ca: [...tls.rootCertificates, fs.readFileSync('dev-server.pem')] } });
+await dev.get('https://localhost:8443/health');
+```
+
+The certificate must still name the host you call (`localhost`, `127.0.0.1`, ...): a name mismatch is `ERR_TLS_CERT_ALTNAME_INVALID` whatever `ca` says.
+
 **Cancel a request:**
 
 ```ts
@@ -413,7 +431,7 @@ if (!res.ok) await res.body.cancel();
 else await pipeline(Readable.fromWeb(res.body), fs.createWriteStream('big.csv'));
 ```
 
-`stream(url, { method: 'POST', json, … })` takes the method as an option. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. `timeoutMs` ends when the headers arrive: a body that keeps moving may take longer than the budget, and only the idle timer guards it. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
+`stream(url, { method: 'POST', json, … })` takes the method as an option, any method in uppercase as for `request()`. The body fails, never ends early, if it is cut short, too large, corrupt, aborted or the client is closed. `socketTimeoutMs` only counts while you are waiting for data, so a slow consumer never times out. `timeoutMs` ends when the headers arrive: a body that keeps moving may take longer than the budget, and only the idle timer guards it. Read the body to the end or `cancel()` it: until then it holds its connection and keeps the process alive.
 
 **Walk a paginated API.** `paginate()` yields one complete response per page, each a full `get()` with every check. By default the next page is the `rel="next"` link of the `Link` header (RFC 8288), as GitHub and many other APIs send it; `next(page)` reads it from somewhere else:
 
@@ -438,7 +456,7 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 
 Off by default. `retry: n` retries up to `n` times (at most 10) with these rules:
 
-- **Methods:** GET, PUT, DELETE, HEAD and OPTIONS. POST and PATCH are never retried unless you list them in `methods`, because the server may have already acted on them.
+- **Methods:** GET, PUT, DELETE, HEAD and OPTIONS. POST, PATCH and methods of your own (`request('PURGE', …)`) are never retried unless you list them in `methods`, because the server may have already acted on them.
 - **Statuses:** 408, 429, 502, 503 and 504. `statusCodes` replaces the list; 500 is not in it by default. When the retries run out, you get the last response, not an error.
 - **Network failures:** `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE` and the idle timeout (`ERR_ULTRATON_SOCKET_TIMEOUT`). Policy errors, `maxBodySize`, `maxRedirects`, invalid input, the `timeoutMs` timeout and an abort are never retried.
 - **Waits:** exponential backoff with full jitter (300 ms base, at most `maxDelayMs`, default 30 s). A `Retry-After` (seconds or an HTTP date) is waited exactly; if it asks for more than `maxDelayMs` or than what is left of `timeoutMs`, that response is returned instead.
@@ -489,7 +507,15 @@ UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_ch
 - `totalMs`: the whole call, every redirect and retry included; the same as `durationMs`.
 - `reusedConnection`: whether the request went over a pooled socket or HTTP/2 session, which had no DNS, connect or TLS of its own. HTTP/1.1 sockets are pooled only on a Node with its keep-alive fix (see [SECURITY.md](SECURITY.md)).
 
-The phases are those of the last hop: after a redirect, the last request; after a retry, the attempt that produced the response or the final error. A phase the request never went through, or never finished (a refused connection has no `connectMs`), is `undefined`. They are measured only while someone subscribes to an UltraTon channel, and hold numbers and one boolean, nothing else. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
+The phases are those of the last hop: after a redirect, the last request; after a retry, the attempt that produced the response or the final error. A phase the request never went through, or never finished (a refused connection has no `connectMs`), is `undefined`. They are measured only while someone subscribes to an UltraTon channel or the call asked for them, and hold numbers and one boolean, nothing else.
+
+**On the response, per call.** The events are global to the process, so with several calls in flight a subscriber cannot tell which result a measurement belongs to. `timings: true` (on the client or on one request) puts the same object on the response itself, so each call reads its own. It costs a few microseconds per call, which is why it is off by default; the event of that call carries the very same object.
+
+```ts
+const client = new UltraTonClient({ timings: true });
+const [a, b] = await Promise.all([client.get(urlA), client.get(urlB)]);
+console.log(a.timings?.firstByteMs, b.timings?.firstByteMs); // each one its own
+``` The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
 
 > **Warning:** **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
 
@@ -549,7 +575,7 @@ const client = new UltraTonClient({
 - **Credentials** in `auth` go on the CONNECT only, as `proxy-authorization`, and never reach a target. Credentials in the URL are rejected.
 - **An `https:` proxy** (TLS to the proxy itself) is checked against the system CAs, or against `proxy.ca`. The `tls.ca` you set for targets is never trusted for the proxy, and `proxy.ca` is never trusted for targets.
 - **Refusals** (407, 403, 502, …) reject with `UltraTonNetworkError` and code `ERR_ULTRATON_PROXY`. The message carries the status and never the proxy address. `retry` does not retry them; a connection to the proxy that drops (`ECONNRESET`, `ETIMEDOUT`) is retried like any other. A proxy that cannot be reached at all fails at once instead of being tried for every address.
-- **Plain `http:` targets** (loopback only) never use the proxy. Proxies are never read from `HTTP_PROXY`/`HTTPS_PROXY`. For internal hosts that must not go through the proxy, use a second client without it.
+- **Plain `http:` targets** (loopback only) never use the proxy, which is why `allowPlainHttp` cannot be combined with `proxy`. Proxies are never read from `HTTP_PROXY`/`HTTPS_PROXY`. For internal hosts that must not go through the proxy, use a second client without it.
 
 **Proxies that filter by hostname.** Squid ACLs or Smokescreen allowlists reject a CONNECT by IP. `resolve: 'proxy'` sends the name instead:
 
@@ -604,7 +630,7 @@ The agents protect the **connection**. The rest stays with the library you plug 
 | Redirect hops checked | Yes (each new socket) | Yes |
 | TLS always verified | Yes | Yes |
 | TLS name taken from the host the socket goes to, never from a `servername` option or a `Host` header | Yes | Yes |
-| Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes |
+| Plain http only to loopback | Yes (unless `allowPlainHttp`) | Yes (unless `allowPlainHttp`) |
 | https → http redirect rejected, credentials dropped across origins | No (the library decides) | Yes |
 | Body size limit, decompression bombs, truncated bodies | No | Yes |
 | Total and idle timeouts | No | Yes |
@@ -690,7 +716,7 @@ The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, wha
 
 ## Support and contributing
 
-[SUPPORT.md](SUPPORT.md) lists the supported Node.js and UltraTon versions, how long an old major gets security fixes, what counts as a breaking change, and the current stability period (patches only from 2.8.0 to at least 2027-01-23). [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and send a change.
+[SUPPORT.md](SUPPORT.md) lists the supported Node.js and UltraTon versions, how long an old major gets security fixes, what counts as a breaking change, and the current stability period (patches only from 2.9.0 to at least 2027-01-29). [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and send a change.
 
 ## License
 

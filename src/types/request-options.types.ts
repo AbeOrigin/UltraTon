@@ -142,9 +142,19 @@ export interface UltraTonRequestOptions {
      * by field, and `retry: 0` turns retries off for that request. Never used by `client.fetch()`.
      */
     readonly retry?: number | UltraTonRetryOptions;
+
+    /**
+     * Measure where the time of the call went and put it on the response as `timings` (DNS, connect, TLS, first byte,
+     * total, ...: see {@link UltraTonTimings}). Each response carries its own, so calls in flight at the same time never
+     * mix them. Default false: nothing is measured unless asked for here or by a `diagnostics_channel` subscriber.
+     */
+    readonly timings?: boolean;
 }
 
-/** The HTTP methods `client.stream()` accepts. */
+/**
+ * The HTTP methods of the client methods. `client.stream()`, `client.request()` and `retry.methods` also take a method
+ * of your own (`PROPFIND`, `PURGE`, `REPORT`): any token in uppercase but CONNECT.
+ */
 export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
 /**
@@ -161,8 +171,11 @@ export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' |
 export interface UltraTonRetryOptions {
     /** The most retries, an integer from 0 to 10. Default 2 once `retry` is an object (inherited from the client's). */
     readonly limit?: number;
-    /** The methods that may be retried. Default GET, PUT, DELETE, HEAD and OPTIONS: never POST or PATCH unless listed. */
-    readonly methods?: readonly UltraTonStreamMethod[];
+    /**
+     * The methods that may be retried, in uppercase. Default GET, PUT, DELETE, HEAD and OPTIONS: never POST, PATCH or a
+     * method of your own unless listed.
+     */
+    readonly methods?: readonly (UltraTonStreamMethod | (string & {}))[];
     /** The statuses that are retried, integers from 400 to 599. Replaces the default 408, 429, 502, 503 and 504. */
     readonly statusCodes?: readonly number[];
     /**
@@ -192,8 +205,8 @@ export interface UltraTonRetryInfo {
 
 /** The options of `client.stream()`: the request options plus the method, and a `maxBodySize` that may go past 2 GiB. */
 export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
-    /** The HTTP method. Default 'GET'. */
-    readonly method?: UltraTonStreamMethod;
+    /** The HTTP method, in uppercase: one of the seven or one of your own (`PROPFIND`), but not CONNECT. Default 'GET'. */
+    readonly method?: UltraTonStreamMethod | (string & {});
     /**
      * The maximum size of the body in bytes, counted as it is read (decoded bytes included): an integer from 0 to
      * Number.MAX_SAFE_INTEGER. There is no "unlimited": a large download sets a large, explicit limit. Default as for
@@ -317,8 +330,20 @@ export interface UltraTonClientOptions {
      */
     readonly retry?: number | UltraTonRetryOptions;
 
+    /** Default `timings` for every request. See {@link UltraTonRequestOptions.timings}. */
+    readonly timings?: boolean;
+
     /** Use HTTP/2 (TLS with ALPN `h2`, or h2c over plain http to a loopback name). Default false: HTTP/1.1. */
     readonly http2?: boolean;
+
+    /**
+     * Allows plain `http:` to any host, for an internal service without TLS (a staging API on the private network).
+     * Without it, plain http only reaches loopback names that resolve to loopback addresses. It lifts only that scheme
+     * rule: every address is still judged by `permitReservedIps`, a redirect from https to http is still refused
+     * (`ERR_ULTRATON_DOWNGRADE`), and nothing sent over plain http is encrypted, credentials included. Cannot be
+     * combined with `proxy` (plain http never goes through it). Default false.
+     */
+    readonly allowPlainHttp?: boolean;
 
     /**
      * Extra trust and client certificates: `ca` (PEM CAs to trust, e.g. a private CA, in place of the system list),

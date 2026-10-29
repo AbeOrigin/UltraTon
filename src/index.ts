@@ -37,4 +37,4 @@ export type {
   UltraTonProxyOptions,
   QueryValue,
 } from './types/request-options.types.ts';
-export type { UltraTonExplainedAddress, UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+export type { UltraTonExplainedAddress, UltraTonExplanation, UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';

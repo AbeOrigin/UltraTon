@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonHeadersContext, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
+import { optionRange } from "../errors.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
 import { discardBody, isStreamBody, StreamedBody } from './request-body.ts';
 
@@ -27,15 +28,14 @@ function validateType(propName: string, value: unknown, expectedType: 'string' |
 /**
  * An integer from `min` (0 by default) up to `max` (INT32_MAX by default, the most a timer accepts), or `fallback`
  * when `undefined`.
- * @throws {TypeError} For a wrong type, and for a too small, fractional or too large number, naming the allowed range:
- *   an out-of-range value is a mistake to report, never something to replace silently with the default.
+ * @throws {TypeError} For a wrong type, and for a too small, fractional or too large number, naming the allowed range
+ *   (with code `ERR_ULTRATON_OPTION_RANGE`, see optionRange): an out-of-range value is a mistake to report, never
+ *   something to replace silently with the default or the bound.
  */
 function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX, min = 0): number {
     if (!validateType(propName, value, 'number')) return fallback;
     const n = value as number;
-    if (!Number.isInteger(n) || n < min || n > max) {
-        throw new TypeError(`UltraTon: Expected '${propName}' to be an integer from ${min} to ${max}, received ${n}.`);
-    }
+    if (!Number.isInteger(n) || n < min || n > max) throw optionRange(propName, String(n), min, max);
     return n;
 }
 
@@ -171,12 +171,12 @@ function evaluateHeaders(fn: HeadersFunction, context: UltraTonHeadersContext): 
 const USER_AGENT_TWICE = "UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.";
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -205,6 +205,7 @@ const OPTION_HINTS = new Map<string, string>([
     ['http2', " 'http2' is an option of the client constructor, not of a request."],
     ['userAgent', " Set a 'user-agent' header, or 'userAgent' in the client constructor."],
     ['proxy', " 'proxy' is an option of the client constructor, not of a request."],
+    ['allowPlainHttp', " 'allowPlainHttp' is an option of the client constructor, not of a request."],
 ]);
 const perRequestOnly = (key: string) => ` '${key}' is a per-request option, not a client option.`;
 const CLIENT_OPTION_HINTS = new Map<string, string>([
@@ -297,18 +298,38 @@ function ownOptions<T extends object>(options: T): T {
     return own as T;
 }
 
+/** An RFC 9110 method token in uppercase: GET, PROPFIND, M-SEARCH. */
+const METHOD_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Z]+$/;
+const isMethod = (value: unknown): value is string => typeof value === 'string' && METHOD_TOKEN.test(value) && value !== 'CONNECT';
+
+/**
+ * An HTTP method as a request sends it: any token in uppercase, the seven of the client methods or one of your own
+ * (`PROPFIND`, `PURGE`, `REPORT`). Uppercase only: Node sends every method in uppercase, so a lowercase one would go
+ * on the wire as a method other than the one the checks here (HEAD has no body, GET none either) saw.
+ * @throws {TypeError} For anything else, and for CONNECT, which opens a tunnel rather than sending a request.
+ */
+export function methodOption(value: unknown, name = 'method'): string {
+    if (value === 'CONNECT') throw new TypeError("UltraTon: CONNECT is not supported: it opens a tunnel, not a request. Tunnels go through the 'proxy' option.");
+    if (!isMethod(value)) {
+        const received = typeof value === 'string' ? `'${value}'` : describeValue(value);
+        throw new TypeError(`UltraTon: Expected '${name}' to be an HTTP method in uppercase (GET, PROPFIND, PURGE, ...), received ${received}.`);
+    }
+    return value;
+}
+
 /**
  * Builds the options of one request from what a client method (`get`, `post`, ...) received: the caller's options object
- * plus the method. A caller-supplied `method` throws instead of being silently overridden, and so does an `options` that
- * is not an object (typically the old `post(url, body)` call shape).
+ * plus the method, validated by methodOption. A caller-supplied `method` throws instead of being silently overridden, and
+ * so does an `options` that is not an object (typically the old `post(url, body)` call shape).
  */
 export function withMethod(method: string, options: unknown): InternalRequestOptions {
+    methodOption(method);
     if (options === undefined) return ownOptions({ method });
     if (typeof options !== 'object' || options === null || Array.isArray(options)) {
         throw new TypeError("UltraTon: 'options' must be an object. Send a request body with { json }, { form } or { body }.");
     }
     if (Object.hasOwn(options, 'method')) {
-        throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options).");
+        throw new TypeError("UltraTon: Unknown option 'method'. The HTTP method is set by the client method you call (get, post, put, patch, delete, head, options, or request(method, url)).");
     }
     // Copied from the caller's object itself, so a non-plain one is refused before a spread could flatten it.
     return Object.assign(ownOptions(options), { method });
@@ -389,25 +410,20 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedBod
     return { options: withResolvedBody(options, Buffer.from(serialized)) };
 }
 
-const STREAM_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
-
 /**
  * Takes `method` and `maxBodySize` out of the options of `client.stream()`, validated. The rest goes through the usual
  * request firewall; `maxBodySize` stays out of it because a stream may go past the 2 GiB a buffered body is held to.
- * @throws {TypeError} If the method is not one of STREAM_METHODS (uppercase) or maxBodySize is not a safe integer >= 0.
+ * @throws {TypeError} If the method is not an uppercase method token (see methodOption) or maxBodySize is not a safe
+ *   integer >= 0.
  */
 export function splitStreamOptions(options: unknown): { method: string; maxBodySize?: number; rest: unknown } {
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
     const own = ownOptions(options as Record<string, unknown>);
     const { method = 'GET', maxBodySize, ...rest } = own;
-    if (typeof method !== 'string' || !STREAM_METHODS.includes(method)) {
-        throw new TypeError(`UltraTon: Expected 'method' to be one of ${STREAM_METHODS.join(', ')}, received ${describeValue(method)}.`);
-    }
-    if (maxBodySize !== undefined && !(Number.isSafeInteger(maxBodySize) && (maxBodySize as number) >= 0)) {
-        throw new TypeError(`UltraTon: Expected 'maxBodySize' to be an integer from 0 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxBodySize)}.`);
-    }
-    return { method, maxBodySize: maxBodySize as number | undefined, rest };
+    methodOption(method);
+    if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
+    return { method: method as string, maxBodySize: maxBodySize as number | undefined, rest };
 }
 
 /** How many pages `client.paginate()` fetches unless `maxPages` says otherwise. */
@@ -431,9 +447,7 @@ export function splitPaginateOptions(options: unknown): { next?: (page: never) =
     if (next !== undefined && typeof next !== 'function') {
         throw new TypeError(`UltraTon: Expected 'next' to be a function, received ${describeValue(next)}.`);
     }
-    if (!(Number.isSafeInteger(maxPages) && (maxPages as number) >= 1)) {
-        throw new TypeError(`UltraTon: Expected 'maxPages' to be an integer from 1 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxPages)}.`);
-    }
+    intOption('maxPages', maxPages, DEFAULT_MAX_PAGES, Number.MAX_SAFE_INTEGER, 1);
     return { next: next as ((page: never) => unknown) | undefined, maxPages: maxPages as number, rest };
 }
 
@@ -481,7 +495,7 @@ export function retryOption(value: unknown): RetryInput | undefined {
     if (raw.limit !== undefined) retry.limit = intOption('retry.limit', raw.limit, 0, MAX_RETRIES);
     if (raw.maxDelayMs !== undefined) retry.maxDelayMs = intOption('retry.maxDelayMs', raw.maxDelayMs, 0);
     if (raw.methods !== undefined) {
-        retry.methods = listOption('retry.methods', raw.methods, m => typeof m === 'string' && STREAM_METHODS.includes(m), `an array of ${STREAM_METHODS.join(', ')}`);
+        retry.methods = listOption('retry.methods', raw.methods, isMethod, 'an array of HTTP methods in uppercase');
     }
     if (raw.statusCodes !== undefined) {
         retry.statusCodes = listOption('retry.statusCodes', raw.statusCodes, c => Number.isInteger(c) && (c as number) >= 400 && (c as number) <= 599, 'an array of integers from 400 to 599');
@@ -641,6 +655,11 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
     return safeOptions as unknown as SecureUltraTonRequestOptions;
 }
 
+/** The `timings` option of a request or a client: `undefined` when unset. @throws {TypeError} If it is not a boolean. */
+export function timingsOption(value: unknown): boolean | undefined {
+    return validateType('timings', value, 'boolean') ? value as boolean : undefined;
+}
+
 /** The request options a client supplies when a request leaves them `undefined`. Headers are already sanitized (lowercase keys). */
 export interface ClientDefaults {
     /** The static headers; with a `headers` function, only the user agent. */
@@ -660,6 +679,7 @@ export interface ClientDefaults {
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
     readonly retry?: RetryInput;
+    readonly timings?: boolean;
 }
 
 /** `new UltraTonClient(options)` once validated. */
@@ -669,6 +689,8 @@ export interface ResolvedClientOptions {
     readonly http2: boolean;
     readonly tls: TlsOptions;
     readonly proxy?: ProxyConfig;
+    /** Plain http to any host; the address policy still applies. Never with `proxy`. */
+    readonly allowPlainHttp: boolean;
     /** Calls in flight per origin at most; `undefined` for no limit. */
     readonly maxConcurrency?: number;
     readonly defaults: ClientDefaults;
@@ -868,10 +890,15 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
     const tls = tlsOptions(raw.tls);
     const proxy = proxyOption(raw.proxy);
     const maxConcurrency = raw.maxConcurrency === undefined ? undefined : intOption('maxConcurrency', raw.maxConcurrency, 0, INT32_MAX, 1);
+    const allowPlainHttp = validateType('allowPlainHttp', raw.allowPlainHttp, 'boolean') && raw.allowPlainHttp === true;
+    // Plain http never goes through the proxy: allowed to any host, it would be a way around it.
+    if (allowPlainHttp && proxy) {
+        throw new TypeError("UltraTon: 'allowPlainHttp' cannot be combined with 'proxy': plain http requests do not go through the proxy.");
+    }
 
     let baseUrl: URL | undefined;
     if (validateType('baseUrl', raw.baseUrl, 'string')) {
-        baseUrl = parseSafeUrl(raw.baseUrl as string);
+        baseUrl = parseSafeUrl(raw.baseUrl as string, undefined, allowPlainHttp);
         if (baseUrl.search !== '' || baseUrl.hash !== '') {
             throw new TypeError("UltraTon: 'baseUrl' cannot contain a query string or fragment.");
         }
@@ -888,6 +915,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         tls,
         proxy,
         maxConcurrency,
+        allowPlainHttp,
         defaults: {
             headers,
             headersFn,
@@ -901,6 +929,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
             retry: retryOption(raw.retry),
+            timings: timingsOption(raw.timings),
         },
     };
 }

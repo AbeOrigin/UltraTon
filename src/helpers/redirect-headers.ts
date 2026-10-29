@@ -33,6 +33,7 @@ function headersForNextHop(
  * the Location is parsed and validated like any URL; a response fetched over TLS never steers the request onto
  * plaintext (the http loopback escape hatch included); credentials, and with `'safe'` every custom header, stay on
  * their origin; a 303, or a 301/302 on anything but GET or HEAD, becomes a GET without body or body framing.
+ * @param allowPlainHttp - The client's `allowPlainHttp`: an http Location may leave loopback (never from https).
  * @throws {UltraTonRedirectError} past `maxRedirects`.
  * @throws {SecureHttpError} `ERR_ULTRATON_DOWNGRADE` on https→http, or whatever parseSafeUrl rejects the Location with.
  */
@@ -43,11 +44,12 @@ export function followRedirect(
     options: ResolvedRequestOptions,
     reqOpts: SecureUltraTonRequestOptions,
     redirectCount: number,
+    allowPlainHttp = false,
 ): { url: string; options: ResolvedRequestOptions } {
     if (redirectCount >= reqOpts.maxRedirects) {
         throw new UltraTonRedirectError(`UltraTon: Max redirects (${reqOpts.maxRedirects}) exceeded.`);
     }
-    const next = parseSafeUrl(location, from.href);
+    const next = parseSafeUrl(location, from.href, allowPlainHttp);
     if (from.protocol === 'https:' && next.protocol === 'http:') {
         throw new SecureHttpError('UltraTon: Redirect from https to http is not allowed.', { code: 'ERR_ULTRATON_DOWNGRADE' });
     }

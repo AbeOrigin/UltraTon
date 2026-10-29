@@ -1,7 +1,10 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { Buffer } from "node:buffer";
 import { UltraTonHttpError, UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
-import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+import type { UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+
+/** The `redirects` of every response that followed none: frozen, so one array serves them all. */
+export const NO_REDIRECTS: readonly UltraTonRedirect[] = Object.freeze([]);
 
 export const secureReviver = (key: string, value: any) => {
   if (key === "__proto__" || key === "constructor" || key === "prototype") {
@@ -37,7 +40,7 @@ export function createResponse<T = unknown>(
   rawHeaders: IncomingHttpHeaders,
   data: Buffer,
   url = "",
-  redirected = false,
+  redirects: readonly UltraTonRedirect[] = NO_REDIRECTS,
 ): UltraTonResponse<T> {
   // `__proto__` is defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be
   // ignored) instead of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as
@@ -60,7 +63,8 @@ export function createResponse<T = unknown>(
     ok: statusCode >= 200 && statusCode < 300,
     headers,
     url,
-    redirected,
+    redirected: redirects.length > 0,
+    redirects,
     data,
     json<R = T>(): R {
       const payload = text();
@@ -86,7 +90,7 @@ export function createStreamResponse(
   rawHeaders: IncomingHttpHeaders,
   body: ReadableStream<Uint8Array>,
   url: string,
-  redirected: boolean,
+  redirects: readonly UltraTonRedirect[],
 ): UltraTonStreamResponse {
   const { headers } = createResponse(statusCode, rawHeaders, Buffer.alloc(0));
   const response: UltraTonStreamResponse = {
@@ -94,7 +98,8 @@ export function createStreamResponse(
     ok: statusCode >= 200 && statusCode < 300,
     headers,
     url,
-    redirected,
+    redirected: redirects.length > 0,
+    redirects,
     body,
     assertOk(): UltraTonStreamResponse {
       if (response.ok) return response;

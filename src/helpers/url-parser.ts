@@ -18,8 +18,9 @@ export const isLoopbackHost = (hostname: string): boolean =>
  * 
  * @param url The URL string to parse (or relative path if base is provided)
  * @param base The base URL (used during redirects)
+ * @param allowPlainHttp The client's `allowPlainHttp`: plain http to any host. The address policy still applies.
  */
-export function parseSafeUrl(url: string, base?: string): URL {
+export function parseSafeUrl(url: string, base?: string, allowPlainHttp = false): URL {
     let urlObj: URL;
     
     try {
@@ -36,13 +37,13 @@ export function parseSafeUrl(url: string, base?: string): URL {
     }
 
     if (urlObj.protocol !== 'https:') {
-        if (urlObj.protocol === 'http:' && isLoopbackHost(urlObj.hostname)) {
+        if (urlObj.protocol === 'http:' && (allowPlainHttp || isLoopbackHost(urlObj.hostname))) {
             // [Loopback Escape Hatch] Accept plain HTTP only for loopback names, for local development and testing.
             // This only skips the https requirement. A `*.localhost` name is resolved like any other, so both engines
             // also reject the hop unless every address it resolves to is loopback (127.0.0.0/8, ::1, ::ffff:127.0.0.0/104),
             // and every address is still judged by the reserved-IP policy: the caller must also set `permitReservedIps`
             // to allow them (true, or an allowlist such as ['127.0.0.0/8', '::1'] or ['localhost']). Redirects from
-            // https to http stay rejected.
+            // https to http stay rejected. A client with `allowPlainHttp` lifts the loopback rule, never the policy.
         } else if (urlObj.protocol === 'http:') {
             throw new SecureHttpError('UltraTon: Plain http is only allowed for loopback hosts; use https.', { code: 'ERR_ULTRATON_PLAIN_HTTP' });
         } else {

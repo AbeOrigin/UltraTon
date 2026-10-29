@@ -26,7 +26,7 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 - **The developer who configures the client.** Options are configuration, not input, but mistakes in them throw instead of being ignored.
 - **The operating system resolver.**
 - **Node.js itself** (its TLS stack and CA store, llhttp, nghttp2). On a release that lacks one of Node's own security fixes, the feature that fix covers is narrowed rather than trusted: no Brotli, no HTTP/1.1 keep-alive (see [SECURITY.md](SECURITY.md)).
-- **The operator's choice** of `permitReservedIps` and `proxy`.
+- **The operator's choice** of `permitReservedIps`, `proxy` and `allowPlainHttp`.
 
 ## Defenses
 
@@ -36,7 +36,7 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 | A1/A3: a name that resolves to a reserved IP, or to a mix | `resolveAndPinAll`: **every** address is validated; one bad address fails the whole lookup | `src/security/dns-pinner.ts` | `dns-pinner`, `happy-eyeballs` |
 | A3: DNS rebinding | The socket connects only to the validated addresses (`pinnedLookup`); nothing resolves twice. A pooled HTTP/2 session's pinned addresses are checked again against the caller's policy on every reuse (no new lookup) | `dns-pinner.ts`, `http1.ts`, `http2-session-manager.ts` | `dns-pinner`, `http2-security`, `retry` (rebinding between attempts) |
 | A1/A2: redirects to internal targets, downgrade to http | Each hop is parsed and validated again; https→http is rejected; credentials are dropped across origins (every header but content negotiation and body framing with `redirectHeaders: 'safe'`); redirects are off by default | `src/engines/http1.ts`, `src/engines/http2.ts`, `src/helpers/redirect-headers.ts` | `redirect`, `redirect-headers`, `ssrf-redirect-integration` |
-| A1: plain http to the outside | `http:` only to loopback names that resolve to loopback addresses | `url-parser.ts`, `dns-pinner.ts` | `loopback-http` |
+| A1: plain http to the outside | `http:` only to loopback names that resolve to loopback addresses, unless the operator sets `allowPlainHttp` on the client; even then every address is judged by the policy, an https→http redirect is refused, and the option cannot be combined with `proxy` (plain http would go around it) | `url-parser.ts`, `dns-pinner.ts`, `request-options.ts` | `loopback-http`, `allow-plain-http` |
 | A1: escaping `baseUrl` with the request path | The resolved path is judged the way lenient servers read it (repeated percent-decoding, NFKC, `..;/`, backslashes, fullwidth dots). Followed redirects are not bound to `baseUrl` (see residual risks) | `src/http-client.ts` | `client-facade` |
 | A1: header injection | CRLF/NUL and HTTP/2 pseudo-headers in headers throw before connecting | `src/helpers/request-options.ts` | `request-headers` |
 | A2: memory exhaustion, decompression bombs | `maxBodySize` on the wire and on decoded bytes; at most 2 content-encodings (Brotli's own working memory is a residual risk) | `src/helpers/body-reader.ts` | `decompress`, `http2-memory-shield` |
@@ -57,6 +57,7 @@ UltraTon is built for code that sends requests to URLs it does not fully control
 These are accepted and documented. Reports about them are not vulnerabilities (see SECURITY.md):
 
 - **What the operator allows is reachable.** `permitReservedIps: true`, broad CIDRs, and hostname entries (which trust whatever that name resolves to) all mean what they say. Redirects into allowed ranges are followed.
+- **`allowPlainHttp` sends in cleartext.** With it, plain http reaches any host the policy allows, and whatever the request carries (credentials included) can be read or changed on the network path, as with any plain http client. It is for internal services the operator trusts; a redirect from https still never lands on http.
 - **Redirects are not bound to `baseUrl`.** A followed redirect may go to another host or path (every hop is still checked against the SSRF policy). Redirects are off by default.
 - **Brotli can use up to 16 MiB of working memory per layer**, whatever `maxBodySize` is (zlib has no setting to lower it). The decoded output is still capped by `maxBodySize`.
 - **`resolve: 'proxy'` and `socks5h:` hand name resolution to the proxy.** SSRF protection for hostnames then depends on the proxy. Reserved IP literals are still rejected.

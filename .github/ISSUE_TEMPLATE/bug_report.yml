@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: UltraTon version
-      placeholder: 2.8.0
+      placeholder: 2.9.0
     validations:
       required: true
   - type: input

@@ -3,7 +3,7 @@ import { absoluteTimeout, bodyTooLarge, clientClosed, idleTimeout, remainingBudg
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
-import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+import type { UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 import { assertAllowedIp, policyKey, resolveAndPinAll } from "../security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
@@ -12,7 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { promisify } from 'node:util';
 import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from '../constants.ts';
 import { followRedirect } from '../helpers/redirect-headers.ts';
-import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
+import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
@@ -80,6 +80,8 @@ export class Http1Engine {
     // Internal testing interceptor (kTransport)
     readonly #transport?: typeof https.request | typeof http.request;
     readonly #proxy?: ProxyConfig;
+    /** The client's `allowPlainHttp`: plain http to any host, not only loopback. */
+    readonly #allowPlainHttp: boolean;
     /** Aborted by close(): a tunnel still being set up through the proxy is torn down with it. */
     readonly #closing = new AbortController();
     #closed = false;
@@ -88,11 +90,13 @@ export class Http1Engine {
      * @param tls - The client's validated `ca`/`cert`/`key`, applied to its HTTPS agents.
      * @param transport - Replacement for `http.request`/`https.request`, used strictly for internal testing.
      * @param proxy - The client's validated `proxy`: every `https:` request is tunnelled through it.
+     * @param allowPlainHttp - The client's `allowPlainHttp` (never with a proxy, which plain http would bypass).
      */
-    constructor(tls: TlsOptions = {}, transport?: typeof https.request | typeof http.request, proxy?: ProxyConfig) {
+    constructor(tls: TlsOptions = {}, transport?: typeof https.request | typeof http.request, proxy?: ProxyConfig, allowPlainHttp = false) {
         this.#tls = tls;
         this.#transport = transport;
         this.#proxy = proxy;
+        this.#allowPlainHttp = allowPlainHttp;
     }
 
     /** Destroys every pooled socket (in-flight requests on them fail) and refuses any later request. */
@@ -227,7 +231,8 @@ export class Http1Engine {
                 agent: this.#agentFor(reqOpts.permitReservedIps, urlObj.protocol),
                 lookup: (lookupHostname: string, lookupOptions: LookupOptions, callback: (err: NodeJS.ErrnoException | null, address: string | LookupAddress[], family?: number) => void) => {
                     // Over plain http every address must also be loopback: a `*.localhost` name can resolve anywhere.
-                    resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps, urlObj.protocol === 'http:')
+                    // `allowPlainHttp` lifts that rule; the policy still judges every address.
+                    resolveAndPinAll(lookupHostname, reqOpts.permitReservedIps, urlObj.protocol === 'http:' && !this.#allowPlainHttp)
                         .then(addresses => {
                             // Only a new socket (or a tunnel, see TunnelAgent) looks up, and never an IP literal.
                             phases?.mark('lookup');
@@ -380,7 +385,8 @@ export class Http1Engine {
     public async request(url: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonStreamResponse>;
     public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         const startTime = Date.now();
-        let redirectCount = 0;
+        // The hops followed so far, as the response reports them.
+        const redirects: UltraTonRedirect[] = [];
         let currentUrl = url;
         let currentOptions: ResolvedRequestOptions = options;
 
@@ -392,7 +398,7 @@ export class Http1Engine {
             if (this.#closed) throw clientClosed();
             // Before anything is resolved or opened; throws the signal's reason (an AbortError when it had none).
             reqOpts.signal?.throwIfAborted();
-            const urlObj: URL = parseSafeUrl(currentUrl);
+            const urlObj: URL = parseSafeUrl(currentUrl, undefined, this.#allowPlainHttp);
 
             // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
             // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
@@ -407,16 +413,17 @@ export class Http1Engine {
                 stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize }, timings?.hop());
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
-                const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirectCount);
-                redirectCount++;
+                const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirects.length, this.#allowPlainHttp);
+                redirects.push(Object.freeze({ url: urlObj.href, statusCode: hop.statusCode }));
                 currentUrl = next.url;
                 currentOptions = next.options;
                 reqOpts = buildSafeRequestOptions(currentOptions);
                 continue;
             }
 
-            if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, redirectCount > 0);
-            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, redirectCount > 0);
+            const followed = redirects.length > 0 ? Object.freeze(redirects) : NO_REDIRECTS;
+            if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, followed);
+            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, followed);
         }
     }
 }

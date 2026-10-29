@@ -72,10 +72,12 @@ const between = (from: number | undefined, to: number | undefined): number | und
     from === undefined || to === undefined ? undefined : tenth(Math.max(0, to - from));
 
 /**
- * The timings of one client call, handed to the engine only while someone listens (see observeRequest). Each hop (every
- * redirect, every retry) starts a new HopTimings: the events report the last one, and the whole call as `totalMs`.
+ * The timings of one client call, handed to the engine only while someone listens (see observeRequest) or the call asked
+ * for them (`timings: true`). Each hop (every redirect, every retry) starts a new HopTimings: the response and the events
+ * report the last one, and the whole call, from the moment this was created, as `totalMs`.
  */
 export class TimingsCollector {
+    readonly #startedAt = performance.now();
     #last = new HopTimings();
     #queuedMs?: number;
 
@@ -90,8 +92,9 @@ export class TimingsCollector {
         this.#queuedMs = ms;
     }
 
-    /** The timings of the last hop, with `totalMs` as given. Only numbers and one boolean. */
-    snapshot(totalMs: number): UltraTonTimings {
+    /** The timings of the last hop, with `totalMs` up to now. Only numbers and one boolean. */
+    snapshot(): UltraTonTimings {
+        const totalMs = performance.now() - this.#startedAt;
         const { marks, isReused } = this.#last;
         const connected = marks.secure ?? marks.connect;
         // Nothing goes out before the connection is up: an HTTP/2 stream opened on a connecting session waits for it.
@@ -180,26 +183,25 @@ export interface RequestObserver {
     /** Publishes `ultraton:request:retry`: call it once the retry is decided, before the wait. */
     retry(info: UltraTonRetryInfo): void;
     /** Publishes `ultraton:request:response` or `ultraton:request:error` when `result` settles, and passes it on. */
-    track<R extends { readonly statusCode: number }>(result: Promise<R>): Promise<R>;
+    track<R extends { readonly statusCode: number; readonly timings?: UltraTonTimings }>(result: Promise<R>): Promise<R>;
 }
 
 /**
  * Starts the diagnostics of one client call (`get`, `stream()`, `fetch()`, ...) and publishes `ultraton:request:start`.
  * `undefined`, at no cost, when nobody listens to any UltraTon channel or the URL does not parse (the engine rejects it).
+ * `own` is the call's collector when it asked for timings, so the response and the events report the same ones.
  * Payloads hold the method, origin and path (no query), status, durations, retry attempt and the error's name and
  * code: never headers, bodies, credentials, `error.cause` or resolved addresses, since APMs ship events off the host.
  * The timings are numbers and one boolean; nothing creates or measures them when this returns `undefined`.
  */
-export function observeRequest(method: string, url: string): RequestObserver | undefined {
+export function observeRequest(method: string, url: string, own?: TimingsCollector): RequestObserver | undefined {
     if (!(start.hasSubscribers || response.hasSubscribers || failure.hasSubscribers || retry.hasSubscribers)) return undefined;
     if (!URL.canParse(url)) return undefined;
     const parsed = new URL(url);
     // ;params dropped per segment (/a;jsessionid=x/b is /a/b): servers often carry session ids in them.
     const path = parsed.pathname.split('/').map(segment => segment.split(';', 1)[0]).join('/');
+    const collector = own ?? new TimingsCollector();
     const request: UltraTonDiagnosticsRequest = Object.freeze({ method, origin: parsed.origin, path });
-    const startedAt = performance.now();
-    const collector = new TimingsCollector();
-    const measured = () => collector.snapshot(performance.now() - startedAt);
     if (start.hasSubscribers) start.publish({ request });
     return {
         timings: collector,
@@ -216,13 +218,14 @@ export function observeRequest(method: string, url: string): RequestObserver | u
         track(result) {
             return result.then(res => {
                 if (response.hasSubscribers) {
-                    const timings = measured();
+                    // The ones the response carries, when the call asked for them: one measurement, never two that differ.
+                    const timings = res.timings ?? collector.snapshot();
                     response.publish({ request, statusCode: res.statusCode, durationMs: timings.totalMs, timings });
                 }
                 return res;
             }, (err: unknown) => {
                 if (failure.hasSubscribers) {
-                    const timings = measured();
+                    const timings = collector.snapshot();
                     failure.publish({ request, error: describeError(err), durationMs: timings.totalMs, timings });
                 }
                 throw err;
