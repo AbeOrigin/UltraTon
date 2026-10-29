@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`timings` option: per-phase timings on the response.** `timings: true`, on the client or on one request, puts `timings` (`UltraTonTimings`: `dnsMs`, `connectMs`, `tlsMs`, `firstByteMs`, `queuedMs`, `totalMs`, `reusedConnection`) on the response of that call, on both engines and on `stream()` (measured until the headers). The `diagnostics_channel` events are global to the process, so with several calls in flight a subscriber could not tell whose timings it got; on the response each call reads its own, and the event of that call carries the same object. Off by default: measuring costs a few microseconds per call.
+
 ## [2.8.0] - 2026-10-23
 
 Closes the API surface and debugging work: `maxConcurrency` caps the calls in flight per origin (the wait counts against `timeoutMs`), the client's `headers` may be a function called once per call for values such as `traceparent`, and the diagnostics events carry per-phase `timings` (DNS, connect, TLS, first byte, queue, total, reused connection) that `NODE_DEBUG=ultraton` shows. From an adversarial security audit of 2.7.0 that found no bypass: the secure agents check the certificate against the host the socket goes to, two more reserved ranges, and a prototype fix in `extend()`. No breaking changes; the defaults are the same. This is the last feature release before a period of patches only.

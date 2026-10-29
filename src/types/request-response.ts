@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from 'node:http';
+import type { UltraTonTimings } from '../helpers/diagnostics.ts';
 
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */
 export interface UltraTonResponse<T = unknown> {
@@ -20,6 +21,11 @@ export interface UltraTonResponse<T = unknown> {
     readonly redirected: boolean;
     /** The raw response payload. Never parsed automatically; empty for HEAD and bodiless responses. */
     readonly data: Buffer;
+    /**
+     * Where the time of this call went, phase by phase on the hop that got the response, and `totalMs` until the body
+     * was read (every redirect and retry included). Only with the `timings` option; `undefined` otherwise.
+     */
+    readonly timings?: UltraTonTimings;
 
     /**
      * Parses `data` as JSON on every call, independent of the content-type. Keys named `__proto__`, `constructor`
@@ -56,6 +62,11 @@ export interface UltraTonStreamResponse {
      * corrupt, idle past `socketTimeoutMs` while being read, aborted, or when the client is closed.
      */
     readonly body: ReadableStream<Uint8Array>;
+    /**
+     * As on {@link UltraTonResponse.timings}, with `totalMs` until the headers arrived (the body is read later, by you).
+     * Only with the `timings` option.
+     */
+    readonly timings?: UltraTonTimings;
     /**
      * The response itself when `ok`; otherwise cancels `body` (so the connection is not held by a body nobody reads)
      * and throws `UltraTonHttpError` (`ERR_ULTRATON_HTTP_STATUS`). A redirect that was not followed is not `ok` either.

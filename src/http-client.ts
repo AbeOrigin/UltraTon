@@ -7,7 +7,7 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, timingsOption, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
@@ -15,7 +15,7 @@ import { kSessionManager, kSharedEngine, kTransport } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
-import { observeRequest, type TimingsCollector } from './helpers/diagnostics.ts';
+import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
 import { createStreamResponse } from './helpers/response.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
@@ -424,13 +424,16 @@ export class UltraTonClient {
         // The caller's own options are validated (unknown keys, json/form/body, body type) and the body encoded before any
         // client default is merged in. The content-type comes last: a client default one is kept for json, replaced by
         // the one a form, FormData, URLSearchParams or typed Blob implies.
-        // `query` is applied here, after baseUrl's path check, and `retry` wraps the engine call: neither reaches the engines.
-        // withMethod returns a null-prototype object: both are deleted from it, never destructured into a plain one.
+        // `query` is applied here, after baseUrl's path check, `retry` wraps the engine call and `timings` is measured
+        // around it: none of them reaches the engines.
+        // withMethod returns a null-prototype object: they are deleted from it, never destructured into a plain one.
         const requested = withMethod(method, options);
         const target = withQuery(resolved, requested.query);
         const retryPolicy = resolveRetry(this.#defaults.retry, retryOption(requested.retry), method);
+        const measure = timingsOption(requested.timings) ?? this.#defaults.timings;
         Reflect.deleteProperty(requested, 'query');
         Reflect.deleteProperty(requested, 'retry');
+        Reflect.deleteProperty(requested, 'timings');
         // A `headers` function is called here, once per call: a retry or a redirect hop reuses its result. It is told the
         // URL as the engine will parse it, which also rejects one with credentials before the function could see it.
         const headersFn = this.#defaults.headersFn;
@@ -442,9 +445,10 @@ export class UltraTonClient {
         const merged = withAcceptEncoding(mergeClientDefaults(body.options, defaults));
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
         // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
-        // Without it the engines get no timings to measure.
-        const observer = observeRequest(method, target);
-        const timings = observer?.timings;
+        // Without it, and without `timings`, the engines get no timings to measure.
+        const own = measure ? new TimingsCollector() : undefined;
+        const observer = observeRequest(method, target, own);
+        const timings = observer?.timings ?? own;
         const observed = observer && retry && {
             ...retry,
             // The caller's hook first: when it throws there is no retry, so no retry event either.
@@ -459,9 +463,11 @@ export class UltraTonClient {
             return policy ? withRetry(send, policy, options.timeoutMs, options.signal) : send();
         };
         // Without maxConcurrency nothing is queued nor measured: the call goes straight to the engine, as it always did.
-        const result = this.#limiter
+        const sent = this.#limiter
             ? this.#limited(this.#limiter, target, resolvedOptions, stream !== undefined && method !== 'HEAD', timings, call)
             : call(resolvedOptions);
+        // Set on the response itself, which assertOk() returns and UltraTonHttpError carries.
+        const result = own ? sent.then(res => Object.assign(res, { timings: own.snapshot() })) : sent;
         return observer ? observer.track(result) : result;
     }
 

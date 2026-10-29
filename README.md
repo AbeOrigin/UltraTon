@@ -139,7 +139,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
 | `maxConcurrency` | integer from 1 | At most this many calls in flight at once per origin; the rest wait in order, and the wait counts against `timeoutMs`. Unset: no limit. See [Limits and things to know](#limits-and-things-to-know). |
-| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
+| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry`, `timings` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -161,6 +161,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `redirectHeaders` | `'all' \| 'safe'` | `'all'`: on a redirect to another origin, every header but the credential ones follows. `'safe'`: only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` do, so an `x-api-key` stays behind. A same-origin redirect keeps every header. |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
 | `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
+| `timings` | `boolean` | `false`. `true` puts `timings` on the response: where the time of that call went (see [Observability](#observability)). |
 
 **Response:**
 
@@ -172,6 +173,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `url` | `string` | The final URL, after any redirect that was followed. |
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
+| `timings` | `UltraTonTimings \| undefined` | With the `timings` option: DNS, connect, TLS, first byte, queue and total of this call, in ms (see [Observability](#observability)). `totalMs` runs until the body was read (on `stream()`, until the headers). |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |
 | `text()` | `string` | Decodes the body as UTF-8. A leading BOM is skipped, as with `fetch`; `data` keeps it. |
 | `assertOk()` | the response | Returns the response when `ok`, otherwise throws `UltraTonHttpError` (`statusCode`, `response`). On `stream()` it cancels the body first. A redirect that was not followed is not `ok`. |
@@ -489,7 +491,15 @@ UltraTon publishes [`diagnostics_channel`](https://nodejs.org/api/diagnostics_ch
 - `totalMs`: the whole call, every redirect and retry included; the same as `durationMs`.
 - `reusedConnection`: whether the request went over a pooled socket or HTTP/2 session, which had no DNS, connect or TLS of its own. HTTP/1.1 sockets are pooled only on a Node with its keep-alive fix (see [SECURITY.md](SECURITY.md)).
 
-The phases are those of the last hop: after a redirect, the last request; after a retry, the attempt that produced the response or the final error. A phase the request never went through, or never finished (a refused connection has no `connectMs`), is `undefined`. They are measured only while someone subscribes to an UltraTon channel, and hold numbers and one boolean, nothing else. The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
+The phases are those of the last hop: after a redirect, the last request; after a retry, the attempt that produced the response or the final error. A phase the request never went through, or never finished (a refused connection has no `connectMs`), is `undefined`. They are measured only while someone subscribes to an UltraTon channel or the call asked for them, and hold numbers and one boolean, nothing else.
+
+**On the response, per call.** The events are global to the process, so with several calls in flight a subscriber cannot tell which result a measurement belongs to. `timings: true` (on the client or on one request) puts the same object on the response itself, so each call reads its own. It costs a few microseconds per call, which is why it is off by default; the event of that call carries the very same object.
+
+```ts
+const client = new UltraTonClient({ timings: true });
+const [a, b] = await Promise.all([client.get(urlA), client.get(urlB)]);
+console.log(a.timings?.firstByteMs, b.timings?.firstByteMs); // each one its own
+``` The events never carry headers, bodies, `auth`, URL credentials, the query string, `;params` (session ids), `error.cause` or resolved IP addresses, because tracing tools ship them off the host.
 
 > **Warning:** **Path segments are published as they are.** If an API puts a secret in the path (a bot token like `/bot<TOKEN>/…`, a webhook URL, a reset token), redact it in your subscriber before it reaches your tracing backend, as the recipe below does.
 

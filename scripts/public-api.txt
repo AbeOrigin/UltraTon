@@ -57,6 +57,7 @@ export interface UltraTonClientOptions {
     readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
+    readonly timings?: boolean;
     readonly http2?: boolean;
     readonly tls?: {
         readonly ca?: TlsMaterial;
@@ -173,6 +174,7 @@ export interface UltraTonRequestOptions {
     readonly redirectHeaders?: RedirectHeaders;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
+    readonly timings?: boolean;
 }
 
 ## UltraTonRequestResponseMessage (helpers/diagnostics.d.ts)
@@ -205,6 +207,7 @@ export interface UltraTonResponse<T = unknown> {
     readonly url: string;
     readonly redirected: boolean;
     readonly data: Buffer;
+    readonly timings?: UltraTonTimings;
     json<R = T>(): R;
     text(): string;
     assertOk(): UltraTonResponse<T>;
@@ -262,6 +265,7 @@ export interface UltraTonStreamResponse {
     readonly url: string;
     readonly redirected: boolean;
     readonly body: ReadableStream<Uint8Array>;
+    readonly timings?: UltraTonTimings;
     assertOk(): UltraTonStreamResponse;
 }
 

@@ -171,12 +171,12 @@ function evaluateHeaders(fn: HeadersFunction, context: UltraTonHeadersContext): 
 const USER_AGENT_TWICE = "UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.";
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -641,6 +641,11 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
     return safeOptions as unknown as SecureUltraTonRequestOptions;
 }
 
+/** The `timings` option of a request or a client: `undefined` when unset. @throws {TypeError} If it is not a boolean. */
+export function timingsOption(value: unknown): boolean | undefined {
+    return validateType('timings', value, 'boolean') ? value as boolean : undefined;
+}
+
 /** The request options a client supplies when a request leaves them `undefined`. Headers are already sanitized (lowercase keys). */
 export interface ClientDefaults {
     /** The static headers; with a `headers` function, only the user agent. */
@@ -660,6 +665,7 @@ export interface ClientDefaults {
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
     readonly retry?: RetryInput;
+    readonly timings?: boolean;
 }
 
 /** `new UltraTonClient(options)` once validated. */
@@ -901,6 +907,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
             retry: retryOption(raw.retry),
+            timings: timingsOption(raw.timings),
         },
     };
 }

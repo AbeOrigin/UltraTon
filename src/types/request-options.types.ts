@@ -142,6 +142,13 @@ export interface UltraTonRequestOptions {
      * by field, and `retry: 0` turns retries off for that request. Never used by `client.fetch()`.
      */
     readonly retry?: number | UltraTonRetryOptions;
+
+    /**
+     * Measure where the time of the call went and put it on the response as `timings` (DNS, connect, TLS, first byte,
+     * total, ...: see {@link UltraTonTimings}). Each response carries its own, so calls in flight at the same time never
+     * mix them. Default false: nothing is measured unless asked for here or by a `diagnostics_channel` subscriber.
+     */
+    readonly timings?: boolean;
 }
 
 /** The HTTP methods `client.stream()` accepts. */
@@ -316,6 +323,9 @@ export interface UltraTonClientOptions {
      * it field by field; the lists are copied when the client is built.
      */
     readonly retry?: number | UltraTonRetryOptions;
+
+    /** Default `timings` for every request. See {@link UltraTonRequestOptions.timings}. */
+    readonly timings?: boolean;
 
     /** Use HTTP/2 (TLS with ALPN `h2`, or h2c over plain http to a loopback name). Default false: HTTP/1.1. */
     readonly http2?: boolean;
