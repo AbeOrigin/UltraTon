@@ -3,7 +3,7 @@ import { absoluteTimeout, bodyTooLarge, clientClosed, idleTimeout, remainingBudg
 import { buildSafeRequestOptions } from "../helpers/request-options.ts";
 import { parseSafeUrl } from "../helpers/url-parser.ts";
 import type { ResolvedRequestOptions, SecureUltraTonRequestOptions, TlsOptions } from "../types/request-options.types.ts";
-import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+import type { UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 import { assertAllowedIp, policyKey, resolveAndPinAll } from "../security/dns-pinner.ts";
 import type { ReservedIpPolicy } from "../security/dns-pinner.ts";
 import * as http from 'node:http';
@@ -12,7 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { promisify } from 'node:util';
 import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from '../constants.ts';
 import { followRedirect } from '../helpers/redirect-headers.ts';
-import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse } from '../helpers/response.ts';
+import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
@@ -385,7 +385,8 @@ export class Http1Engine {
     public async request(url: string, options: ResolvedRequestOptions, stream: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonStreamResponse>;
     public async request<T = unknown>(url: string, options: ResolvedRequestOptions, stream?: { maxBodySize?: number }, timings?: TimingsCollector): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
         const startTime = Date.now();
-        let redirectCount = 0;
+        // The hops followed so far, as the response reports them.
+        const redirects: UltraTonRedirect[] = [];
         let currentUrl = url;
         let currentOptions: ResolvedRequestOptions = options;
 
@@ -412,16 +413,17 @@ export class Http1Engine {
                 stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize }, timings?.hop());
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
-                const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirectCount, this.#allowPlainHttp);
-                redirectCount++;
+                const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirects.length, this.#allowPlainHttp);
+                redirects.push(Object.freeze({ url: currentUrl, statusCode: hop.statusCode }));
                 currentUrl = next.url;
                 currentOptions = next.options;
                 reqOpts = buildSafeRequestOptions(currentOptions);
                 continue;
             }
 
-            if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, redirectCount > 0);
-            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, redirectCount > 0);
+            const followed = redirects.length > 0 ? Object.freeze(redirects) : NO_REDIRECTS;
+            if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, followed);
+            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, followed);
         }
     }
 }

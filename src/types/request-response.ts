@@ -1,6 +1,14 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import type { UltraTonTimings } from '../helpers/diagnostics.ts';
 
+/** One redirect that was followed: the URL that answered with it and its status. See {@link UltraTonResponse.redirects}. */
+export interface UltraTonRedirect {
+    /** The URL requested on that hop, which answered with the redirect. */
+    readonly url: string;
+    /** The redirect status: 301, 302, 303, 307 or 308. */
+    readonly statusCode: number;
+}
+
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */
 export interface UltraTonResponse<T = unknown> {
     /**
@@ -19,6 +27,11 @@ export interface UltraTonResponse<T = unknown> {
     readonly url: string;
     /** True when at least one redirect was followed to get here. */
     readonly redirected: boolean;
+    /**
+     * The redirects followed to get here, in order: each hop's URL and status (where it led is the next entry's `url`,
+     * or `url` for the last one). Empty when none was followed; a redirect returned as the response is not in it.
+     */
+    readonly redirects: readonly UltraTonRedirect[];
     /** The raw response payload. Never parsed automatically; empty for HEAD and bodiless responses. */
     readonly data: Buffer;
     /**
@@ -56,6 +69,8 @@ export interface UltraTonStreamResponse {
     readonly url: string;
     /** True when at least one redirect was followed to get here. */
     readonly redirected: boolean;
+    /** The redirects followed to get here. See {@link UltraTonResponse.redirects}. */
+    readonly redirects: readonly UltraTonRedirect[];
     /**
      * The body, decoded when `decompress` is on. Read it to the end or `cancel()` it: until then it holds its
      * connection (and keeps the process alive). It fails, rather than ending, when the body is cut short, too large,

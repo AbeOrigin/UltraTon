@@ -526,6 +526,6 @@ export class UltraTonClient {
         }
         // A new response around the new body, so that assertOk() cancels that one (and gives the slot back with it).
         const res = response as UltraTonStreamResponse;
-        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirected) as R;
+        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirects) as R;
     }
 }

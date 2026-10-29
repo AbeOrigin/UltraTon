@@ -173,6 +173,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `headers` | `IncomingHttpHeaders` | Never contains HTTP/2 pseudo-headers. |
 | `url` | `string` | The final URL, after any redirect that was followed. |
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
+| `redirects` | `readonly { url, statusCode }[]` | The redirects followed, in order: the URL that answered each one and its status (where it led is the next entry's `url`, or the response's). Empty when none was followed. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
 | `timings` | `UltraTonTimings \| undefined` | With the `timings` option: DNS, connect, TLS, first byte, queue and total of this call, in ms (see [Observability](#observability)). `totalMs` runs until the body was read (on `stream()`, until the headers). |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |

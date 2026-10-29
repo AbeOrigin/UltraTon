@@ -145,6 +145,12 @@ export interface UltraTonProxyOptions {
     readonly resolve?: 'local' | 'proxy';
 }
 
+## UltraTonRedirect (types/request-response.d.ts)
+export interface UltraTonRedirect {
+    readonly url: string;
+    readonly statusCode: number;
+}
+
 ## UltraTonRedirectError (errors.d.ts)
 export declare class UltraTonRedirectError extends SecureHttpError {
 }
@@ -207,6 +213,7 @@ export interface UltraTonResponse<T = unknown> {
     readonly headers: IncomingHttpHeaders;
     readonly url: string;
     readonly redirected: boolean;
+    readonly redirects: readonly UltraTonRedirect[];
     readonly data: Buffer;
     readonly timings?: UltraTonTimings;
     json<R = T>(): R;
@@ -265,6 +272,7 @@ export interface UltraTonStreamResponse {
     readonly headers: IncomingHttpHeaders;
     readonly url: string;
     readonly redirected: boolean;
+    readonly redirects: readonly UltraTonRedirect[];
     readonly body: ReadableStream<Uint8Array>;
     readonly timings?: UltraTonTimings;
     assertOk(): UltraTonStreamResponse;

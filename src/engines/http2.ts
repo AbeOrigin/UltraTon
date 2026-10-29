@@ -6,7 +6,7 @@ import type {
   IncomingHttpHeaders,
   OutgoingHttpHeaders,
 } from "node:http2";
-import type { UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+import type { UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
 import { heldStreams, holdSession } from "./http2-session-manager.ts";
 import type { Http2SessionManager } from "./http2-session-manager.ts";
 import type {
@@ -29,6 +29,7 @@ import {
   createStreamResponse,
   declaredBodyLength,
   incompleteResponse,
+  NO_REDIRECTS,
 } from "../helpers/response.ts";
 import {
   basicAuthorization,
@@ -109,7 +110,8 @@ export class Http2Engine {
     let currentUrl = targetUrl;
     // Validate before touching the network: invalid input must fail without connecting.
     let currentOptions: ResolvedRequestOptions = options;
-    let redirectCount = 0;
+    // The hops followed so far, as the response reports them.
+    const redirects: UltraTonRedirect[] = [];
     let reqOpts = this.#buildRequestOptions(currentOptions);
     // Before connecting: a buffered body over maxRequestBodySize throws here, a streamed one as it is read.
     limitRequestBody(currentOptions.body, reqOpts.maxRequestBodySize);
@@ -184,7 +186,7 @@ export class Http2Engine {
         currentOptions.body,
         remainingMs,
         reqOpts,
-        stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl, redirected: redirectCount > 0 },
+        stream && { maxBodySize: stream.maxBodySize ?? reqOpts.maxBodySize, url: currentUrl, redirects: redirects.length > 0 ? redirects : NO_REDIRECTS },
         phases,
       );
 
@@ -200,8 +202,8 @@ export class Http2Engine {
         !(body instanceof StreamedBody && (statusCode === 307 || statusCode === 308))
       ) {
         if (reqOpts.maxRedirects > 0) {
-          const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirectCount, this.#sessionManager.allowPlainHttp);
-          redirectCount++;
+          const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirects.length, this.#sessionManager.allowPlainHttp);
+          redirects.push(Object.freeze({ url: currentUrl, statusCode }));
           currentUrl = next.url;
           currentOptions = next.options;
           reqOpts = this.#buildRequestOptions(currentOptions);
@@ -210,7 +212,9 @@ export class Http2Engine {
       }
 
       // A buffered response is built without its URL in #executeStream; the stream one already carries it.
-      return stream ? response : Object.assign(response, { url: currentUrl, redirected: redirectCount > 0 });
+      // The last hop: nothing is pushed after this, so the list is frozen as it is.
+      Object.freeze(redirects);
+      return stream ? response : Object.assign(response, { url: currentUrl, redirected: redirects.length > 0, redirects: redirects.length > 0 ? redirects : NO_REDIRECTS });
     }
   }
 
@@ -277,7 +281,7 @@ export class Http2Engine {
     body: Buffer | StreamedBody | undefined,
     remainingMs: number,
     reqOpts: SecureUltraTonRequestOptions,
-    streaming?: { maxBodySize: number; url: string; redirected: boolean },
+    streaming?: { maxBodySize: number; url: string; redirects: readonly UltraTonRedirect[] },
     phases?: HopTimings,
   ): Promise<UltraTonResponse<T> | UltraTonStreamResponse> {
     const { timeoutMs, maxBodySize, socketTimeoutMs, signal, decompress } = reqOpts;
@@ -418,7 +422,7 @@ export class Http2Engine {
 
           if (streaming) {
             const empty = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
-            return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url, streaming.redirected));
+            return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url, streaming.redirects));
           }
           return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
         }
@@ -464,7 +468,7 @@ export class Http2Engine {
               // As for a buffered response: a silent connection may be dead, so the next request gets a new one.
               if (err instanceof UltraTonNetworkTimeoutError) this.#sessionManager.retire(session);
             },
-          }), streaming.url, streaming.redirected));
+          }), streaming.url, streaming.redirects));
         }
 
         reader = new BodyReader({
