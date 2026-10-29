@@ -9,6 +9,7 @@ export const ERROR_CODES = [
     'ERR_ULTRATON_HTTP_STATUS',
     'ERR_ULTRATON_MAX_PAGES',
     'ERR_ULTRATON_NON_CANONICAL_IP',
+    'ERR_ULTRATON_OPTION_RANGE',
     'ERR_ULTRATON_PAGE_OUT_OF_SCOPE',
     'ERR_ULTRATON_PLAIN_HTTP',
     'ERR_ULTRATON_PROXY',
@@ -68,6 +69,14 @@ export function remainingBudget(timeoutMs: number, startedAt: number): number {
     if (remaining <= 0) throw absoluteTimeout(timeoutMs);
     return remaining;
 }
+/**
+ * A number option that is not an integer within its range (`timeoutMs: 3e9`, `maxRedirects: 21`, `retry.limit: 1.5`).
+ * A `TypeError`, like every invalid option, thrown before connecting; for a caller to say it in its own words it
+ * carries `code` `ERR_ULTRATON_OPTION_RANGE`, the option's name as `option` (`'timeoutMs'`, `'retry.limit'`) and the
+ * accepted bounds as `min` and `max`.
+ */
+export const optionRange = (option: string, received: string, min: number, max: number): TypeError =>
+    Object.assign(new TypeError(`UltraTon: Expected '${option}' to be an integer from ${min} to ${max}, received ${received}.`), { code: 'ERR_ULTRATON_OPTION_RANGE', option, min, max });
 /** The request (or a step of it) ran into `close()`. */
 export const clientClosed = () => new SecureHttpError('UltraTon: Client is closed.');
 /**

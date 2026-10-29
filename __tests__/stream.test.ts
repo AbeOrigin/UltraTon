@@ -276,10 +276,12 @@ describe('client.stream() validation', () => {
 
     it('accepts maxBodySize up to Number.MAX_SAFE_INTEGER only in stream()', async () => {
         await assert.rejects(client.get('https://example.com/', { maxBodySize: 2 ** 40 }), TypeError);
-        for (const maxBodySize of [Infinity, -1, 1.5, 2 ** 53, '10']) {
+        for (const maxBodySize of [Infinity, -1, 1.5, 2 ** 53]) {
             await assert.rejects(client.stream('https://example.com/', { maxBodySize } as any), (err: Error) =>
-                err instanceof TypeError && /^UltraTon: Expected 'maxBodySize' to be an integer from 0 to 9007199254740991/.test(err.message));
+                err instanceof TypeError && /^UltraTon: Expected 'maxBodySize' to be an integer from 0 to 9007199254740991/.test(err.message)
+                && (err as { code?: string }).code === 'ERR_ULTRATON_OPTION_RANGE');
         }
+        await assert.rejects(client.stream('https://example.com/', { maxBodySize: '10' } as any), { name: 'TypeError', message: /^UltraTon: Expected 'maxBodySize' to be a number/ });
     });
 
     it('validates the method', async () => {

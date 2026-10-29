@@ -187,6 +187,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | Error | When | `code` |
 |---|---|---|
 | `TypeError` | Unknown options or wrong option types, a body on GET/HEAD, and with `baseUrl` a request path that is absolute, malformed or escapes it. Thrown before any connection. | — |
+| `TypeError` | A number option that is not an integer within its range (`timeoutMs` above 2147483647, `maxRedirects: 21`, `retry.limit: 1.5`). Thrown before any connection, with the option's name and bounds as `err.option`, `err.min` and `err.max`. | `ERR_ULTRATON_OPTION_RANGE` |
 | `SecureHttpError` | A malformed URL, a scheme other than http(s), or credentials in the URL (request URL, `baseUrl` or redirect target) | — |
 | `SecureHttpError` | A reserved IP not allowed by `permitReservedIps` | `ERR_ULTRATON_RESERVED_IP` |
 | `SecureHttpError` | Plain `http:` to a host or address that is not loopback, without `allowPlainHttp` | `ERR_ULTRATON_PLAIN_HTTP` |
@@ -236,6 +237,7 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_RESERVED_IP` | The host is, or resolves to, a private, loopback, link-local or otherwise reserved address that `permitReservedIps` does not allow. | For a local or internal target, allow it in `permitReservedIps` (an IP, a CIDR or the exact hostname). `client.explain(url)` shows the addresses. |
 | `ERR_ULTRATON_PLAIN_HTTP` | Plain `http:` to something that is not loopback. | Use `https:`. For an internal service without TLS that you trust, `allowPlainHttp: true` on the client (plus `permitReservedIps` for its private address). |
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
+| `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
 | `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
 | `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |

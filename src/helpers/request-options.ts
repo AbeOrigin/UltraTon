@@ -3,6 +3,7 @@ import { isIP } from "node:net";
 import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonHeadersContext, UltraTonRetryInfo } from "../types/request-options.types.ts";
 import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
+import { optionRange } from "../errors.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
 import { discardBody, isStreamBody, StreamedBody } from './request-body.ts';
 
@@ -27,15 +28,14 @@ function validateType(propName: string, value: unknown, expectedType: 'string' |
 /**
  * An integer from `min` (0 by default) up to `max` (INT32_MAX by default, the most a timer accepts), or `fallback`
  * when `undefined`.
- * @throws {TypeError} For a wrong type, and for a too small, fractional or too large number, naming the allowed range:
- *   an out-of-range value is a mistake to report, never something to replace silently with the default.
+ * @throws {TypeError} For a wrong type, and for a too small, fractional or too large number, naming the allowed range
+ *   (with code `ERR_ULTRATON_OPTION_RANGE`, see optionRange): an out-of-range value is a mistake to report, never
+ *   something to replace silently with the default or the bound.
  */
 function intOption(propName: string, value: unknown, fallback: number, max = INT32_MAX, min = 0): number {
     if (!validateType(propName, value, 'number')) return fallback;
     const n = value as number;
-    if (!Number.isInteger(n) || n < min || n > max) {
-        throw new TypeError(`UltraTon: Expected '${propName}' to be an integer from ${min} to ${max}, received ${n}.`);
-    }
+    if (!Number.isInteger(n) || n < min || n > max) throw optionRange(propName, String(n), min, max);
     return n;
 }
 
@@ -405,9 +405,7 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
     if (typeof method !== 'string' || !STREAM_METHODS.includes(method)) {
         throw new TypeError(`UltraTon: Expected 'method' to be one of ${STREAM_METHODS.join(', ')}, received ${describeValue(method)}.`);
     }
-    if (maxBodySize !== undefined && !(Number.isSafeInteger(maxBodySize) && (maxBodySize as number) >= 0)) {
-        throw new TypeError(`UltraTon: Expected 'maxBodySize' to be an integer from 0 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxBodySize)}.`);
-    }
+    if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
     return { method, maxBodySize: maxBodySize as number | undefined, rest };
 }
 
@@ -432,9 +430,7 @@ export function splitPaginateOptions(options: unknown): { next?: (page: never) =
     if (next !== undefined && typeof next !== 'function') {
         throw new TypeError(`UltraTon: Expected 'next' to be a function, received ${describeValue(next)}.`);
     }
-    if (!(Number.isSafeInteger(maxPages) && (maxPages as number) >= 1)) {
-        throw new TypeError(`UltraTon: Expected 'maxPages' to be an integer from 1 to ${Number.MAX_SAFE_INTEGER}, received ${describeValue(maxPages)}.`);
-    }
+    intOption('maxPages', maxPages, DEFAULT_MAX_PAGES, Number.MAX_SAFE_INTEGER, 1);
     return { next: next as ((page: never) => unknown) | undefined, maxPages: maxPages as number, rest };
 }
 
