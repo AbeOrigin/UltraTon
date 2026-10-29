@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.9.0] - 2026-10-29
 
-What Ultraman, the first application built on UltraTon (an API testing tool that runs requests in parallel), found missing. An exception to the patches-only period announced with 2.8.0: every change is opt-in or additive, none loosens a default, and the one that loosens a check (`allowPlainHttp`) is a client option named so it reads as a decision. No breaking changes.
+What Ultraman, the first application built on UltraTon (an API testing tool that runs requests in parallel), found missing. It breaks the patches-only period announced with 2.8.0, which SUPPORT.md records and restarts from this release. Every change is opt-in or additive, none loosens a default, and the one that loosens a check (`allowPlainHttp`) is a client option named so it reads as a decision. One type change can break code that compiled: `redirects` is required on the response types (see Changed).
 
 ### Added
 
@@ -22,7 +22,8 @@ What Ultraman, the first application built on UltraTon (an API testing tool that
 
 ### Changed
 
-- SUPPORT.md states the stability period: from 2.8.0 (2026-10-23) and for at least three months, patch releases only, with the public API snapshot frozen and enforced by CI; the one exception is a security fix that needs a new option. `redirectHeaders: 'safe'` as the default is recorded as a candidate for a later major.
+- SUPPORT.md states the stability period: from 2.9.0 (2026-10-29) and for at least three months, patch releases only, with the public API snapshot frozen and enforced by CI; the one exception is a security fix that needs a new option. It was announced from 2.8.0 (2026-10-23); SUPPORT.md records that this release broke it, why, and that it restarts here, once. `redirectHeaders: 'safe'` as the default is recorded as a candidate for a later major.
+- **`UltraTonResponse` and `UltraTonStreamResponse` require `redirects`.** TypeScript code that builds one by hand (a mock, an adapter) stops compiling until it adds `redirects: []`. SUPPORT.md counts that as a breaking change; it ships in this minor as part of the exception above, since an optional field would make every caller check for a value that is always there.
 - `stream()` accepts any uppercase method token, TRACE included, instead of only the seven; the `method` and `retry.methods` types widen to `UltraTonStreamMethod | (string & {})` (`UltraTonStreamMethod` itself is unchanged).
 - `stream()`'s `maxBodySize` and `paginate()`'s `maxPages` given a non-number now say "to be a number", as every other option does, instead of naming the range.
 
