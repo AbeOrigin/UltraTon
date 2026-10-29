@@ -135,7 +135,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `baseUrl` | `string` | Relative request paths resolve under it and can never escape it (see [baseUrl](#baseurl)). |
 | `http2` | `boolean` | Use HTTP/2 (ALPN `h2`, or h2c to loopback). Default `false`. |
 | `allowPlainHttp` | `boolean` | Plain `http:` to any host, not only loopback: for an internal service without TLS (`http://api.staging.internal`). Every address is still judged by `permitReservedIps`, an https→http redirect is still refused, and nothing is encrypted. Cannot be combined with `proxy`. Default `false`. |
-| `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA, or a client certificate for mTLS. |
+| `tls` | `{ ca?, cert?, key? }` | PEM strings or Buffers: a private CA (or a dev server's self-signed certificate, see [Recipes](#recipes)), or a client certificate for mTLS. `ca` replaces the system roots. |
 | `userAgent` | `string` | Default `ultraton/<version>`. |
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
@@ -248,7 +248,7 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_AGENT_KEEP_ALIVE` | `createSecureAgents()`, on a Node release without the keep-alive fix: `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. | Upgrade Node (see SECURITY.md); the agents cannot pool sockets safely before that. |
 | `ERR_ULTRATON_NON_CANONICAL_IP` | `createSecureAgents()`: a host such as `127.1` or `0x7f.0.0.1`. | Write the IP in its canonical dotted form. |
 | `ECONNREFUSED`, `ECONNRESET`, `ENOTFOUND` | Node's own network codes: nothing listens there, the connection dropped, the name does not resolve. | The server or the network. `retry` covers the transient ones. |
-| `ERR_TLS_CERT_ALTNAME_INVALID` and other TLS codes | The certificate does not match the host, or is not trusted. | A private CA goes in `tls: { ca }`; verification cannot be turned off. |
+| `ERR_TLS_CERT_ALTNAME_INVALID` and other TLS codes | The certificate does not match the host, or is not trusted (`DEPTH_ZERO_SELF_SIGNED_CERT`, `SELF_SIGNED_CERT_IN_CHAIN`: a self-signed one). | A private CA, or a dev server's self-signed certificate, goes in `tls: { ca }` (see [Recipes](#recipes)); verification cannot be turned off. |
 
 ## Recipes
 
@@ -348,6 +348,18 @@ const h2 = new UltraTonClient({ http2: true, baseUrl: 'https://api.example.com/'
 ```ts
 const mtls = new UltraTonClient({ tls: { cert: fs.readFileSync('client.pem'), key: fs.readFileSync('client.key') } });
 ```
+
+**A development server with a self-signed certificate.** Verification cannot be turned off, but it can trust that one certificate: pass it (or the CA that signed it, as with mkcert) in `tls.ca`. This works for a self-signed CA certificate and for a self-signed leaf (`CA:FALSE`, as Vite's and ASP.NET's dev certificates are), on both engines. `ca` replaces the system roots, so add them back if the same client also calls public hosts. A variant with its own `tls` gets pools of its own:
+
+```ts
+import tls from 'node:tls';
+
+const api = new UltraTonClient({ permitReservedIps: ['localhost'] });
+const dev = api.extend({ tls: { ca: [...tls.rootCertificates, fs.readFileSync('dev-server.pem')] } });
+await dev.get('https://localhost:8443/health');
+```
+
+The certificate must still name the host you call (`localhost`, `127.0.0.1`, ...): a name mismatch is `ERR_TLS_CERT_ALTNAME_INVALID` whatever `ca` says.
 
 **Cancel a request:**
 
