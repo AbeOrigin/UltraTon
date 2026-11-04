@@ -10,7 +10,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { promisify } from 'node:util';
-import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from '../constants.ts';
+import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, MAX_FREE_SOCKETS, TLS_MIN_VERSION } from '../constants.ts';
 import { followRedirect } from '../helpers/redirect-headers.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
@@ -116,10 +116,10 @@ export class Http1Engine {
         if (!agents) {
             agents = {
                 // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
-                http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
+                http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS }),
                 https: this.#proxy
-                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }, this.#proxy, this.#closing.signal)
-                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }),
+                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS, minVersion: TLS_MIN_VERSION, ...this.#tls }, this.#proxy, this.#closing.signal)
+                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS, minVersion: TLS_MIN_VERSION, ...this.#tls }),
             };
             this.#agentsByPolicy.set(key, agents);
         }
@@ -213,8 +213,9 @@ export class Http1Engine {
             };
 
             // Ends a proxy tunnel still being set up for this hop when the hop gives up: abort, timeout (see TunnelAgent).
-            const hop = new AbortController();
-            const tunnelSignal = this.#proxy && reqOpts.signal ? AbortSignal.any([hop.signal, reqOpts.signal]) : hop.signal;
+            // Only a proxy tunnel uses it: without a proxy no controller is made per hop.
+            const hop = this.#proxy ? new AbortController() : undefined;
+            const tunnelSignal = hop && reqOpts.signal ? AbortSignal.any([hop.signal, reqOpts.signal]) : hop?.signal;
 
             // The TLS name comes from the URL, which WHATWG canonicalized, never from a caller's Host header: Node's agent
             // would otherwise take it from there, and a non-canonical IP (`127.1`) checked as a DNS name is the confusion
@@ -222,9 +223,13 @@ export class Http1Engine {
             const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
             // Before the request: creating it is what opens a new socket and starts its lookup.
             phases?.mark('start');
+            // Only what Node reads: the rest of reqOpts (limits, policy, redirects) is UltraTon's, and Node copies every
+            // key of this object into the request's options.
             const req = transport(urlObj, {
-                ...reqOpts,
-                ...(this.#proxy ? { [kTunnelSignal]: tunnelSignal } : {}),
+                method: reqOpts.method,
+                auth: reqOpts.auth,
+                signal: reqOpts.signal,
+                ...(hop ? { [kTunnelSignal]: tunnelSignal } : {}),
                 servername: isIP(bareHostname) === 0 ? bareHostname : '',
                 headers,
                 timeout: reqOpts.socketTimeoutMs,
@@ -252,7 +257,7 @@ export class Http1Engine {
 
             if (currentTimeoutMs > 0) {
                 executionTimer = setTimeout(() => {
-                    hop.abort();
+                    hop?.abort();
                     req.destroy();
                     reject(absoluteTimeout(reqOpts.timeoutMs));
                 }, currentTimeoutMs);
@@ -342,7 +347,7 @@ export class Http1Engine {
             });
 
             const onSocketTimeout = () => {
-                hop.abort();
+                hop?.abort();
                 req.destroy();
                 clearTimeout(executionTimer);
                 reject(idleTimeout(reqOpts.socketTimeoutMs));
@@ -370,7 +375,7 @@ export class Http1Engine {
                 if (isSinkClosed(err)) return;
                 bodyError = err;
                 clearTimeout(executionTimer);
-                hop.abort();
+                hop?.abort();
                 reject(err);
                 req.destroy();
             });

@@ -31,6 +31,12 @@ export const TLS_MIN_VERSION = 'TLSv1.2';
 export const IDLE_TIMEOUT = 10000;
 /** Idle pooled HTTP/1.1 sockets are reaped after this, as with Node's global agent, in the client's agents and the secure ones. */
 export const IDLE_SOCKET_TIMEOUT_MS = 5000;
+/**
+ * Idle HTTP/1.1 sockets a client's pool keeps per policy and origin, above Node's default of 256: with more requests
+ * than that in flight, Node would close the extra sockets as they free up and the next requests would open new ones
+ * (a lookup and a handshake each). The idle ones are still reaped after IDLE_SOCKET_TIMEOUT_MS.
+ */
+export const MAX_FREE_SOCKETS = 1024;
 /** The largest delay `setTimeout` takes: the ceiling of every millisecond option. */
 export const INT32_MAX = 2147483647;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;

@@ -32,6 +32,7 @@ const CLIENTS = [
     'got',
     'node-fetch',
     'UltraTonClient (HTTP/1.1)',
+    'UltraTonClient (HTTP/1.1, stream drained)',
     'UltraTonClient (HTTP/2)',
     'axios + createSecureAgents',
 ] as const;
@@ -45,20 +46,38 @@ const SETTINGS = SMOKE
     ? { concurrency: 4, warmupMs: 100, roundMs: 200, rounds: 1 }
     : { concurrency: 16, warmupMs: 2000, roundMs: 5000, rounds: 3 };
 
+/**
+ * BENCH_CONCURRENCY: the requests each client keeps in flight, as a comma-separated list for one table per level
+ * (`100,500,1000`). BENCH_CLIENTS: only the clients whose name contains one of these comma-separated parts.
+ */
+const LEVELS = (process.env.BENCH_CONCURRENCY ?? String(SETTINGS.concurrency)).split(',').map(level => {
+    const n = Number(level.trim());
+    if (!Number.isInteger(n) || n < 1) throw new Error(`BENCH_CONCURRENCY: '${level}' is not a positive integer`);
+    return n;
+});
+const FILTER = process.env.BENCH_CLIENTS?.split(',').map(part => part.trim()).filter(Boolean) ?? [];
+const RUN_CLIENTS = FILTER.length > 0 ? CLIENTS.filter(client => FILTER.some(part => client.includes(part))) : [...CLIENTS];
+if (RUN_CLIENTS.length === 0) throw new Error(`BENCH_CLIENTS matches no client: ${process.env.BENCH_CLIENTS}`);
+
 /** A worker that runs longer than its rounds plus this margin is killed: a hang must not last until the job timeout. */
 const WORKER_MARGIN_MS = 60_000;
 
-interface Measurement { requestsPerSecond: number; p50Ms: number; p99Ms: number; cpuMsPer1k: number; rssMb: number; serverCpuPercent: number }
+interface Measurement { requestsPerSecond: number; p50Ms: number; p95Ms: number; p99Ms: number; cpuMsPer1k: number; rssMb: number; serverCpuPercent: number; connections: number }
 
 /** Starts the loopback servers (HTTP/1.1 and h2c) that answer every request with `bytes` of body. */
 async function startServers(bytes: number) {
     const body = Buffer.alloc(bytes, 'x');
+    // New connections (TCP), counted across both servers: with keep-alive, how often a client had to open a socket.
+    const counter = { connections: 0 };
     const h1 = http.createServer((_req, res) => { res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': bytes }); res.end(body); });
     h1.keepAliveTimeout = 30_000;
     const h2 = http2.createServer().on('stream', stream => { stream.respond({ ':status': 200, 'content-type': 'application/octet-stream', 'content-length': bytes }); stream.end(body); });
+    h1.on('connection', () => { counter.connections++; });
+    h2.on('connection', () => { counter.connections++; });
     await new Promise<void>(r => h1.listen(0, '127.0.0.1', r));
     await new Promise<void>(r => h2.listen(0, '127.0.0.1', r));
     return {
+        counter,
         h1Url: `http://127.0.0.1:${(h1.address() as AddressInfo).port}/`,
         h2Url: `http://127.0.0.1:${(h2.address() as AddressInfo).port}/`,
         close: async () => {
@@ -72,13 +91,14 @@ async function startServers(bytes: number) {
  * Runs one client in its own process and returns its median measurement, plus the CPU the server (this process)
  * used meanwhile: near 100% means the server, not the client, set the pace.
  */
-function measure(client: string, h1Url: string, h2Url: string): Promise<Measurement> {
+function measure(client: string, h1Url: string, h2Url: string, concurrency: number, counter: { connections: number }): Promise<Measurement> {
     return new Promise((resolve, reject) => {
         const worker = fileURLToPath(new URL('./worker.ts', import.meta.url));
         const serverCpu = process.cpuUsage();
+        const connectionsBefore = counter.connections;
         const started = performance.now();
         const child = spawn(process.execPath, [worker], {
-            env: { ...process.env, BENCH_CLIENT: client, BENCH_H1: h1Url, BENCH_H2: h2Url, BENCH_SETTINGS: JSON.stringify(SETTINGS) },
+            env: { ...process.env, BENCH_CLIENT: client, BENCH_H1: h1Url, BENCH_H2: h2Url, BENCH_SETTINGS: JSON.stringify({ ...SETTINGS, concurrency }) },
             stdio: ['ignore', 'pipe', 'inherit'],
         });
         const budget = SETTINGS.warmupMs + SETTINGS.rounds * SETTINGS.roundMs + WORKER_MARGIN_MS;
@@ -93,7 +113,7 @@ function measure(client: string, h1Url: string, h2Url: string): Promise<Measurem
             const cpu = process.cpuUsage(serverCpu);
             try {
                 const result = JSON.parse(out);
-                resolve({ ...result, serverCpuPercent: ((cpu.user + cpu.system) / 1000 / (performance.now() - started)) * 100 });
+                resolve({ ...result, serverCpuPercent: ((cpu.user + cpu.system) / 1000 / (performance.now() - started)) * 100, connections: counter.connections - connectionsBefore });
             } catch (err) {
                 reject(new Error(`${client}: unreadable worker output`, { cause: err }));
             }
@@ -101,17 +121,22 @@ function measure(client: string, h1Url: string, h2Url: string): Promise<Measurem
     });
 }
 
+/** One table per scenario and concurrency level; the level is in the name only when there are several. */
+const tableName = (scenario: string, level: number) => (LEVELS.length > 1 ? `${scenario}, ${level} in flight` : scenario);
 const results: Record<string, Record<string, Measurement>> = {};
 for (const scenario of SCENARIOS) {
-    const servers = await startServers(scenario.bytes);
-    results[scenario.name] = {};
-    try {
-        for (const client of CLIENTS) {
-            results[scenario.name][client] = await measure(client, servers.h1Url, servers.h2Url);
-            console.error(`${scenario.name} / ${client}: ${results[scenario.name][client].requestsPerSecond.toFixed(0)} req/s`);
+    for (const level of LEVELS) {
+        const servers = await startServers(scenario.bytes);
+        const table = tableName(scenario.name, level);
+        results[table] = {};
+        try {
+            for (const client of RUN_CLIENTS) {
+                results[table][client] = await measure(client, servers.h1Url, servers.h2Url, level, servers.counter);
+                console.error(`${table} / ${client}: ${results[table][client].requestsPerSecond.toFixed(0)} req/s`);
+            }
+        } finally {
+            await servers.close();
         }
-    } finally {
-        await servers.close();
     }
 }
 
@@ -127,7 +152,7 @@ const environment = {
     cpu: `${os.cpus()[0]?.model ?? 'unknown'} × ${os.cpus().length}`,
     commit: process.env.GITHUB_SHA ?? 'local',
     date: new Date().toISOString().slice(0, 10),
-    settings: SETTINGS,
+    settings: { ...SETTINGS, concurrency: LEVELS },
     smoke: SMOKE,
 };
 
@@ -140,32 +165,33 @@ const lines = [
     '',
     '**Method.**',
     '- **Server:** on loopback, in the parent process, answering every request with a fixed body.',
-    `- **Clients:** each one runs in its own process with only its own library loaded, keeps its defaults and keep-alive, keeps ${SETTINGS.concurrency} GET requests in flight, and reads the whole body.`,
+    `- **Clients:** each one runs in its own process with only its own library loaded, keeps its defaults and keep-alive, keeps ${LEVELS.join(', ')} GET requests in flight${LEVELS.length > 1 ? ' (one table per level)' : ''}, and reads the whole body.`,
     `- **Timing:** a ${SETTINGS.warmupMs / 1000} s warm-up, then the median of ${SETTINGS.rounds} rounds of ${SETTINGS.roundMs / 1000} s.`,
     '',
     '**Read these numbers with their limits:**',
     '- **No TLS.** Everything is plain HTTP/1.1 or h2c, so the cost of TLS, often the largest per new connection, is not in the table.',
     '- **No DNS.** Every client gets an IP literal. UltraTon resolves and validates the name on every new connection, without a cache; with keep-alive that is rare, but this table does not show it.',
-    '- **One machine, loopback.** There is no network latency, so per-request overheads look larger than they would against a real server. GET only, at one concurrency level.',
+    '- **One machine, loopback.** There is no network latency, so per-request overheads look larger than they would against a real server. GET only.',
     '- **The HTTP/2 row** uses a different server (`node:http2`, h2c) and one multiplexed connection: compare it with the HTTP/1.1 rows with care.',
     '- **A shared CI runner is noisy.** Compare rows within one table, not across runs.',
     '- **Server CPU** is what the server used while that client ran. Near 100% (⚠️), the server, not the client, set the pace, and that row is a lower bound.',
     '',
     '**Columns.**',
     '- **req/s:** completed requests per second; higher is better.',
-    '- **p50 / p99:** latency per request.',
+    '- **p50 / p95 / p99:** latency per request.',
     '- **CPU:** the client process\'s CPU time per 1 000 requests.',
     '- **RSS:** the client process\'s memory at the end, with only its own library loaded.',
+    '- **Conns:** new TCP connections the server accepted while that client ran, warm-up included: with keep-alive, how often it had to open a socket.',
     '',
     'The baseline row is Node\'s own `http.request`, with no checks at all. What UltraTon checks costs something relative to it: options, the address policy, body limits and integrity. Against the other clients, the table shows how much.',
     '',
 ];
-for (const scenario of SCENARIOS) {
-    lines.push(`## ${scenario.name}`, '', '| Client | req/s | p50 (ms) | p99 (ms) | CPU (ms / 1k req) | RSS (MB) | Server CPU |', '|---|---:|---:|---:|---:|---:|---:|');
-    for (const client of CLIENTS) {
-        const m = results[scenario.name][client];
+for (const table of Object.keys(results)) {
+    lines.push(`## ${table}`, '', '| Client | req/s | p50 (ms) | p95 (ms) | p99 (ms) | CPU (ms / 1k req) | RSS (MB) | Conns | Server CPU |', '|---|---:|---:|---:|---:|---:|---:|---:|---:|');
+    for (const client of RUN_CLIENTS) {
+        const m = results[table][client];
         const server = `${fmt(m.serverCpuPercent)}%${m.serverCpuPercent >= 90 ? ' ⚠️' : ''}`;
-        lines.push(`| ${client} | ${fmt(m.requestsPerSecond)} | ${fmt(m.p50Ms, 2)} | ${fmt(m.p99Ms, 2)} | ${fmt(m.cpuMsPer1k, 1)} | ${fmt(m.rssMb)} | ${server} |`);
+        lines.push(`| ${client} | ${fmt(m.requestsPerSecond)} | ${fmt(m.p50Ms, 2)} | ${fmt(m.p95Ms, 2)} | ${fmt(m.p99Ms, 2)} | ${fmt(m.cpuMsPer1k, 1)} | ${fmt(m.rssMb)} | ${fmt(m.connections)} | ${server} |`);
     }
     lines.push('');
 }

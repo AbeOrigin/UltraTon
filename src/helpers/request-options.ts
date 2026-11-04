@@ -508,19 +508,6 @@ export function retryOption(value: unknown): RetryInput | undefined {
 }
 
 /**
- * Adds the default `accept-encoding` (every coding the body reader can decode) unless `decompress` is `false` or the
- * headers already carry one. Run it on the options merged with the client defaults, like withJsonContentType.
- */
-export function withAcceptEncoding(options: ResolvedRequestOptions): ResolvedRequestOptions {
-    if (options.decompress === false) return options;
-    const headers: unknown = options.headers;
-    if (headers !== undefined && !isPlainObject(headers)) return options;
-    const map = (headers ?? {}) as Record<string, unknown>;
-    if (Object.keys(map).some(key => key.toLowerCase() === 'accept-encoding' && map[key] !== undefined)) return options;
-    return { ...options, headers: { ...map, 'accept-encoding': ACCEPT_ENCODING } as ResolvedRequestOptions['headers'] };
-}
-
-/**
  * Adds `content-type: application/json` for a `json` body, unless the headers already carry a content-type. Run it on
  * the options merged with the client defaults, so a client default content-type (`application/vnd.api+json`) is kept
  * and a request's own one wins over both. Headers that are not a plain object are left for buildSafeRequestOptions to reject.
@@ -946,9 +933,11 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
     // resolveRequestBody's result has no prototype, so nothing can be inherited: read as is. Anything else is copied.
     const own = Object.getPrototypeOf(options) === null ? options : ownOptions(options);
     const or = <V>(value: V | undefined, fallback: V | undefined) => (value === undefined ? fallback : value);
+    const decompress = or(own.decompress, defaults.decompress);
     return {
         method: own.method,
-        headers: mergeHeaders(defaults.headers, own.headers),
+        // With the default accept-encoding (every coding the body reader can decode) unless decompress is off.
+        headers: mergeHeaders(defaults.headers, own.headers, decompress === false ? undefined : ACCEPT_ENCODING),
         timeoutMs: or(own.timeoutMs, defaults.timeoutMs),
         socketTimeoutMs: or(own.socketTimeoutMs, defaults.socketTimeoutMs),
         maxBodySize: or(own.maxBodySize, defaults.maxBodySize),
@@ -956,7 +945,7 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
         redirectHeaders: or(own.redirectHeaders, defaults.redirectHeaders),
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
-        decompress: or(own.decompress, defaults.decompress),
+        decompress,
         signal: own.signal,
         auth: own.auth,
         body: own.body,
@@ -1053,19 +1042,28 @@ export function mergeClientOptions(base: UltraTonClientOptions, extra: unknown):
     return merged as UltraTonClientOptions;
 }
 
-function mergeHeaders(defaults: ClientDefaults['headers'], own: unknown): ResolvedRequestOptions['headers'] {
-    if (own === undefined) return { ...defaults };
+/**
+ * `own` headers over `defaults` (whose keys are lowercase), the request's key winning in any case. With
+ * `acceptEncoding`, an `accept-encoding` header is added last unless either side sets one (a request's `null` counts).
+ */
+function mergeHeaders(defaults: ClientDefaults['headers'], own: unknown, acceptEncoding?: string): ResolvedRequestOptions['headers'] {
+    const addEncoding = acceptEncoding !== undefined && defaults['accept-encoding'] === undefined;
+    if (own === undefined) return addEncoding ? { ...defaults, 'accept-encoding': acceptEncoding } : { ...defaults };
     // Not a plain object (a Headers or Map included, whose entries Object.keys cannot see): leave it for
     // buildSafeRequestOptions to reject with the usual message instead of merging it as if it were empty.
     if (!isPlainObject(own)) return own as ResolvedRequestOptions['headers'];
     const map = own as Record<string, unknown>;
     // No prototype: a '__proto__' key from the caller stays a plain key (which sanitizeHeaders then drops).
     const merged: Record<string, unknown> = Object.assign(Object.create(null), defaults);
+    let ownEncoding = false;
     for (const key of Object.keys(map)) {
         if (map[key] === undefined) continue;
         // Default keys are lowercase; the request's own key keeps its case so error messages name it as written.
-        delete merged[key.toLowerCase()];
+        const lower = key.toLowerCase();
+        if (lower === 'accept-encoding') ownEncoding = true;
+        delete merged[lower];
         merged[key] = map[key];
     }
+    if (addEncoding && !ownEncoding) merged['accept-encoding'] = acceptEncoding;
     return merged as ResolvedRequestOptions['headers'];
 }
