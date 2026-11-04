@@ -107,6 +107,9 @@ export const notEventStream = () =>
 /** The response body went past `maxBodySize` and the response was aborted. One message for `get()` and `stream()`: the body-parity test holds them to it. */
 export const bodyTooLarge = (maxBodySize: number) =>
     new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${maxBodySize} bytes. Raise maxBodySize.`);
+/** The response headers (a redirect's too) went past the 16 KiB header list cap on HTTP/2; HTTP/1.1 fails at the parser. */
+export const headersTooLarge = (limit: number) =>
+    new UltraTonMemoryError(`UltraTon: Response headers exceeded the maximum allowed size of ${limit} bytes.`);
 /** The request body went past `maxRequestBodySize`: before connecting for a buffered one, mid-upload for a stream. */
 export const requestBodyTooLarge = (limit: number) =>
     new UltraTonMemoryError(`UltraTon: Request body exceeded the maximum allowed size of ${limit} bytes. Raise maxRequestBodySize, or send less.`, { code: 'ERR_ULTRATON_REQUEST_BODY_TOO_LARGE' });

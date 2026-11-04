@@ -32,6 +32,7 @@ import net, { type AddressInfo, isIP } from "node:net";
 import { Http2SessionManager } from "../src/engines/http2-session-manager.ts";
 import {
   SecureHttpError,
+  UltraTonMemoryError,
   UltraTonNetworkError,
   UltraTonNetworkTimeoutError,
 } from "../src/errors.ts";
@@ -1143,5 +1144,44 @@ describe("HTTP/2 server push is refused", () => {
     assert.equal(pushedToClient, 0, "no pushed stream reached the client");
     assert.equal(pushErrors.length, 1);
     assert.equal(pushErrors[0].code, "ERR_HTTP2_PUSH_DISABLED");
+  });
+});
+
+describe("HTTP/2 response header list cap", () => {
+  beforeEach(mockIpLiteralDns);
+  afterEach(() => mock.restoreAll());
+
+  // /big: 200 with a 20 KiB header. /hop: 302 to /ok with one. /fits: 200 with 15 KiB. /ok: 200.
+  const huge = "a".repeat(20 * 1024);
+  const respond: OnStream = (stream, headers) => {
+    const path = headers[":path"];
+    if (path === "/big") stream.respond({ ":status": 200, "x-big": huge });
+    else if (path === "/hop") stream.respond({ ":status": 302, location: "/ok", "x-big": huge });
+    else if (path === "/fits") stream.respond({ ":status": 200, "x-big": "a".repeat(15 * 1024) });
+    else stream.respond({ ":status": 200 });
+    stream.end("ok");
+  };
+  const overCap = (err: unknown) =>
+    err instanceof UltraTonMemoryError && /Response headers exceeded/.test(err.message) && !err.message.includes("127.0.0.1");
+
+  it("fails a final response and a redirect hop over 16 KiB on a new session, before Node enforces its SETTINGS", async (t) => {
+    // A fresh client each time: the first stream of a session goes out before the server acknowledges the cap.
+    for (const path of ["/big", "/hop"]) {
+      const { client, listen } = startServers(t);
+      const port = await listen(respond);
+      await assert.rejects(client.get(`http://127.0.0.1:${port}${path}`, { permitReservedIps: true, maxRedirects: 1 }), overCap);
+    }
+  });
+
+  it("still fails on a pooled session, and lets a header list under the cap through", async (t) => {
+    const { client, listen } = startServers(t);
+    const port = await listen(respond);
+    const options = { permitReservedIps: true, maxRedirects: 1 };
+    assert.equal((await client.get(`http://127.0.0.1:${port}/fits`, options)).text(), "ok");
+    // Whichever side refuses it now (Node, once its SETTINGS are acknowledged, or UltraTon), it fails without an address.
+    for (const path of ["/big", "/hop"]) {
+      await assert.rejects(client.get(`http://127.0.0.1:${port}${path}`, options), (err: unknown) =>
+        err instanceof SecureHttpError && !err.message.includes("127.0.0.1"));
+    }
   });
 });

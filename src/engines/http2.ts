@@ -18,12 +18,13 @@ import {
   absoluteTimeout,
   bodyTooLarge,
   clientClosed,
+  headersTooLarge,
   idleTimeout,
   refusedStream,
   remainingBudget,
   toNetworkError,
 } from "../errors.ts";
-import { HTTP_CODES_REDIRECTS } from "../constants.ts";
+import { HTTP_CODES_REDIRECTS, MAX_HEADER_LIST_SIZE } from "../constants.ts";
 import {
   createResponse,
   createStreamResponse,
@@ -41,6 +42,20 @@ import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
 import { followRedirect } from "../helpers/redirect-headers.ts";
 import type { HopTimings, TimingsCollector } from "../helpers/diagnostics.ts";
+
+/**
+ * The size of a header list as SETTINGS_MAX_HEADER_LIST_SIZE counts it (RFC 9113 6.5.2): name, value and 32 per field.
+ * Node enforces the cap UltraTon advertises only once the server has acknowledged its SETTINGS: until then (the first
+ * streams of every new session) it lets through up to its own 64 KiB ceiling. So every response is measured here.
+ */
+// ponytail: string lengths, not UTF-8 bytes; node:http2 decodes header values as latin1, where the two agree.
+function headerListSize(headers: IncomingHttpHeaders): number {
+  let size = 0;
+  for (const [name, value] of Object.entries(headers)) {
+    for (const v of Array.isArray(value) ? value : [value]) size += name.length + String(v ?? "").length + 32;
+  }
+  return size;
+}
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -400,6 +415,13 @@ export class Http2Engine {
 
       stream.on("response", (headers) => {
         if (settled) return;
+        // Before anything reads them, so a redirect hop's headers are bounded as a final response's are.
+        if (headerListSize(headers) > MAX_HEADER_LIST_SIZE) {
+          settled = true;
+          cleanup();
+          stream.close(constants.NGHTTP2_CANCEL);
+          return reject(headersTooLarge(MAX_HEADER_LIST_SIZE));
+        }
         phases?.mark("response");
         armIdleTimer();
         statusCode = Number(headers[":status"]);

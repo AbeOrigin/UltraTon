@@ -25,6 +25,10 @@ What the first application built on UltraTon (an API testing tool that runs requ
 - SUPPORT.md: the patches-only period ended with this release, and no new one is announced with a date. It now says what holds instead: semver, opt-in additions, no default moved without a major, and the API snapshot CI enforces.
 - The benchmark harness (`compat/bench`) takes several concurrency levels and a client filter, reports p95 and the new connections each client opened, and has a row for `stream()` with the body drained.
 
+### Security
+
+- **HTTP/2 response headers are capped at 16 KiB, as on HTTP/1.1.** The cap was advertised to the server as `SETTINGS_MAX_HEADER_LIST_SIZE`, but Node enforces it only once the server acknowledges it, so the first streams of every new session accepted header lists up to Node's own 64 KiB ceiling. UltraTon now measures each response's header list (a followed redirect's too) and fails the request with `UltraTonMemoryError` past 16 KiB. A response that passed before can now fail: one whose headers were over the cap, on a new session.
+
 ## [2.9.0] - 2026-10-29
 
 What Ultraman, the first application built on UltraTon (an API testing tool that runs requests in parallel), found missing. It breaks the patches-only period announced with 2.8.0, which SUPPORT.md records and restarts from this release. Every change is opt-in or additive, none loosens a default, and the one that loosens a check (`allowPlainHttp`) is a client option named so it reads as a decision. One type change can break code that compiled: `redirects` is required on the response types (see Changed).
