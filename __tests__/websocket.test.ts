@@ -294,16 +294,15 @@ describe('websocket(): closing', () => {
         await ws.close(1000, 'x'.repeat(123));
     });
 
-    it('break closes with 1000; await using closes too', async (t) => {
+    it('break closes with 1000; Symbol.asyncDispose (await using) closes too', async (t) => {
         const peers: Peer[] = [];
         const server = await wsServer(t, accepting(p => { peers.push(p); p.socket.write(frame(TEXT, 'one')); }));
         const ws = await client(t).websocket(server.url());
         for await (const _ of ws) break;
         assert.equal(closeCodeOf((await peers[0].frames.next()).payload), 1000);
         assert.throws(() => ws[Symbol.asyncIterator](), TypeError);
-        {
-            await using _disposed = await client(t).websocket(server.url());
-        }
+        // What `await using` calls at the end of its block; the syntax itself needs Node 24+ (as in dispose.test.ts).
+        await (await client(t).websocket(server.url()))[Symbol.asyncDispose]();
         assert.equal(closeCodeOf((await peers[1].frames.next()).payload), 1000);
     });
 
