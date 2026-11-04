@@ -102,3 +102,18 @@ describe('parseEventStream', () => {
         assert.ok(Object.isFrozen(event));
     });
 });
+
+describe('LineBuffer', () => {
+    it('holds a line that arrives a byte at a time in about twice its bytes, and gives it back whole', async () => {
+        const { LineBuffer } = await import('../src/helpers/event-stream.ts');
+        const buffer = new LineBuffer();
+        const bytes = encoder.encode('x'.repeat(10_000));
+        for (let i = 0; i < bytes.length; i++) buffer.append(bytes.subarray(i, i + 1));
+        assert.equal(buffer.length, 10_000);
+        assert.ok(buffer.capacity <= 2 * 10_000, `capacity ${buffer.capacity}`);
+        const line = buffer.take(encoder.encode('yz'));
+        assert.equal(line.toString(), `${'x'.repeat(10_000)}yz`);
+        assert.equal(buffer.length, 0);
+        assert.equal(buffer.capacity, 0, 'the memory is let go once the line is taken');
+    });
+});

@@ -244,7 +244,7 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
 | `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
-| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
+| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). On `events()` the stream had already started, so nothing retries it: open a new one. |
 | `ERR_ULTRATON_EVENT_STREAM` | `events()`: the response is not a 200 with `content-type: text/event-stream`. | Check the URL and the `accept` the endpoint wants; `stream()` reads any response. |
 | `ERR_ULTRATON_EVENT_TOO_LARGE` | `events()`: one event (or one line) went past `maxEventSize`. | Raise `maxEventSize` for that call. |
 | `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |
@@ -485,7 +485,11 @@ let lastId = '';
 for (let attempt = 0; attempt < 5; attempt++) {
   try {
     const stream = await client.events(url, { headers: lastId ? { 'last-event-id': lastId } : {} });
-    for await (const event of stream) { lastId = event.id; handle(event.data); }
+    for await (const event of stream) {
+      // The id is the server's: send back only one a header can carry, or the next events() call throws.
+      if (/^[\x20-\x7e]{0,256}$/.test(event.id)) lastId = event.id;
+      handle(event.data);
+    }
   } catch (err) {
     if (!isUltraTonError(err)) throw err;
   }
@@ -493,7 +497,7 @@ for (let attempt = 0; attempt < 5; attempt++) {
 }
 ```
 
-A `last-event-id` you send is server data going back into a header: UltraTon refuses CR, LF and NUL in any header, so a hostile id cannot inject one.
+A `last-event-id` you send is server data going back into a header. UltraTon refuses CR, LF and NUL in any header, so a hostile id cannot inject one; but an id with other characters a header cannot carry (control characters, non-ASCII) would make the next call throw a `TypeError`, which is why the loop keeps only printable ASCII ids, and only short ones.
 
 ### Retries
 

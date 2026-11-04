@@ -60,6 +60,13 @@ async function server(t: TestContext, http2: boolean) {
                 const id = every(100, () => res.write(': ping\n'));
                 return res.on('close', () => clearInterval(id));
             }
+            case '/two-then-ping': {
+                res.writeHead(200, SSE);
+                res.write('data: 1\n\n');
+                setTimeout(() => res.write('data: 2\n\n'), 50);
+                const id = every(100, () => res.write(': ping\n'));
+                return res.on('close', () => clearInterval(id));
+            }
             case '/flood':
                 res.writeHead(200, SSE);
                 for (let i = 0; i < 10; i++) res.write(`: ${'x'.repeat(1000)}\n`);
@@ -187,6 +194,17 @@ for (const http2 of [false, true]) {
             await new Promise(r => setTimeout(r, 1200));
             await stream.cancel();
             assert.deepEqual(await iterating, []);
+        });
+
+        it('a consumer slower than socketTimeoutMs is not taken for a stalled server', { timeout: 5000 }, async t => {
+            const { base } = await server(t, http2);
+            const stream = await clientOf(t, http2).events(`${base}/two-then-ping`, { socketTimeoutMs: 500 });
+            const iterator = stream[Symbol.asyncIterator]();
+            assert.equal((await iterator.next()).value?.data, '1');
+            // Handling the event takes longer than the idle limit; the server kept sending meanwhile.
+            await new Promise(r => setTimeout(r, 800));
+            assert.equal((await iterator.next()).value?.data, '2');
+            await stream.cancel();
         });
 
         it('maxBodySize bounds the whole stream, and maxEventSize one event', async t => {

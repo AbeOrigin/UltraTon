@@ -21,8 +21,7 @@ export interface UltraTonRedirect {
 export interface UltraTonEvent {
     /** The `event` field, or `'message'` when the server sent none. */
     readonly event: string;
-    /** The `data` lines of the event, joined with `'
-'`. */
+    /** The `data` lines of the event, joined with a line feed (`'\n'`). */
     readonly data: string;
     /** The last event ID the server set, when this event was dispatched: `''` until it sets one. */
     readonly id: string;

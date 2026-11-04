@@ -12,6 +12,7 @@ import { gzipSync } from 'node:zlib';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonMemoryError } from '../src/errors.ts';
 import { KEEP_ALIVE } from '../src/helpers/keep-alive.ts';
+import { BodyReader } from '../src/helpers/body-reader.ts';
 
 const KIB = 1024;
 const HALF_MIB = Buffer.alloc(512 * KIB, 'x');
@@ -107,4 +108,26 @@ describe('discardBody is a request option of the buffered methods only', () => {
         t.after(() => client.close());
         await assert.rejects(client.get('http://127.0.0.1:1/', { discardBody: 'yes' } as never), { name: 'TypeError', message: "UltraTon: Expected 'discardBody' to be a boolean, received string" });
     });
+});
+
+describe('BodyReader with discard', () => {
+    for (const encoding of [undefined, 'gzip']) {
+        it(`holds none of the body in memory (${encoding ?? 'identity'})`, async () => {
+            const raw = Buffer.alloc(512 * KIB, 'x');
+            const reader = new BodyReader({
+                maxBodySize: 1024 * KIB,
+                contentEncoding: encoding,
+                decompress: true,
+                discard: true,
+                tooLarge: () => new Error('too large'),
+                onError: () => {},
+            });
+            const wire = encoding ? gzipSync(raw) : raw;
+            for (let at = 0; at < wire.length; at += 16 * KIB) reader.write(wire.subarray(at, at + 16 * KIB));
+            const data = await reader.end();
+            assert.equal(data.length, 0);
+            assert.equal(reader.size, 512 * KIB);
+            assert.equal(reader.keptBytes, 0, 'nothing kept');
+        });
+    }
 });

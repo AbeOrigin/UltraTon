@@ -113,6 +113,11 @@ export class BodyReader {
         return this.#size;
     }
 
+    /** The decoded bytes held in memory now: `size` without `discard`, 0 with it. */
+    get keptBytes(): number {
+        return this.#chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+    }
+
     /** The error the body failed with, if any. */
     get error(): Error | undefined {
         return this.#error;
@@ -178,7 +183,8 @@ export class BodyReader {
         stages[stages.length - 1].on('data', (chunk: Buffer) => {
             if (this.#error || this.#destroyed) return;
             this.#size += chunk.length;
-            this.#chunks.push(chunk);
+            // Decoded bytes are counted either way; with `discard` none is kept (as in #collect).
+            if (!this.#options.discard) this.#chunks.push(chunk);
         });
         this.#done = new Promise<void>(resolve => {
             pipeline(stages, (err?: Error | null) => {

@@ -8,16 +8,55 @@ const ASCII_DIGITS = /^[0-9]+$/;
 
 /** The bounds of one event stream. Both are checked before anything is buffered past them. */
 export interface EventStreamLimits {
-    /** The most bytes one line may take, and the most bytes of `data` lines one event may gather before it ends. */
+    /**
+     * The most bytes one line may take, and the most bytes of `data` lines one event may gather before it ends. What is
+     * held for them stays within about twice that (see LineBuffer).
+     */
     readonly maxEventSize: number;
     /** The most milliseconds without a complete line (an event's or a comment's); 0 for no limit. */
     readonly idleMs: number;
 }
 
-/** One line's bytes, joined from the pieces it came in: only now, when it is complete. */
-function joinLine(pieces: Uint8Array[], last: Uint8Array): Buffer {
-    if (pieces.length === 0) return Buffer.from(last.buffer, last.byteOffset, last.byteLength);
-    return Buffer.concat([...pieces, last]);
+/**
+ * The incomplete line at the end of what came so far, in one buffer that doubles as it grows: appending is amortized
+ * linear however small the pieces, and the memory held stays within about twice the line's bytes (one small object per
+ * piece would cost a couple hundred bytes for each byte a server drips). Let go once the line is taken.
+ */
+export class LineBuffer {
+    #buffer: Buffer = Buffer.alloc(0);
+    #length = 0;
+
+    /** The bytes of the line so far. */
+    get length(): number {
+        return this.#length;
+    }
+
+    /** The bytes allocated to hold them. */
+    get capacity(): number {
+        return this.#buffer.length;
+    }
+
+    append(bytes: Uint8Array): void {
+        const needed = this.#length + bytes.length;
+        if (needed > this.#buffer.length) {
+            const grown = Buffer.allocUnsafe(Math.max(needed, this.#buffer.length * 2, 64));
+            this.#buffer.copy(grown, 0, 0, this.#length);
+            this.#buffer = grown;
+        }
+        this.#buffer.set(bytes, this.#length);
+        this.#length = needed;
+    }
+
+    /** The whole line, ending with `last` (the bytes before its line end in the current chunk), and an empty buffer. */
+    take(last: Uint8Array): Buffer {
+        if (this.#length === 0) return Buffer.from(last.buffer, last.byteOffset, last.byteLength);
+        const line = Buffer.allocUnsafe(this.#length + last.length);
+        this.#buffer.copy(line, 0, 0, this.#length);
+        line.set(last, this.#length);
+        this.#buffer = Buffer.alloc(0);
+        this.#length = 0;
+        return line;
+    }
 }
 
 /**
@@ -34,9 +73,8 @@ function joinLine(pieces: Uint8Array[], last: Uint8Array): Buffer {
  */
 export async function* parseEventStream(reader: ReadableStreamDefaultReader<Uint8Array>, limits: EventStreamLimits): AsyncGenerator<UltraTonEvent, void, undefined> {
     const { maxEventSize, idleMs } = limits;
-    // The incomplete line at the end of what came so far, as the pieces it arrived in.
-    let partial: Uint8Array[] = [];
-    let partialBytes = 0;
+    // The incomplete line at the end of what came so far.
+    const partial = new LineBuffer();
     // The event being built. Its `data` lines' bytes are what an event holds in memory, so they are what is bounded.
     let type = '';
     let data = '';
@@ -81,7 +119,7 @@ export async function* parseEventStream(reader: ReadableStreamDefaultReader<Uint
                     chunk = chunk.subarray(i);
                 } else if (i < chunk.length) {
                     // Not a BOM after all: the bytes matched so far are the start of the first line.
-                    if (bom > 0) { partial.push(Uint8Array.from(BOM.slice(0, bom))); partialBytes += bom; }
+                    if (bom > 0) partial.append(Uint8Array.from(BOM.slice(0, bom)));
                     chunk = chunk.subarray(i);
                     bom = -1;
                 } else {
@@ -96,9 +134,7 @@ export async function* parseEventStream(reader: ReadableStreamDefaultReader<Uint
                     if (byte === LF) { lineStart = i + 1; continue; }
                 }
                 if (byte !== LF && byte !== CR) continue;
-                const line = joinLine(partial, chunk.subarray(lineStart, i));
-                partial = [];
-                partialBytes = 0;
+                const line = partial.take(chunk.subarray(lineStart, i));
                 lineStart = i + 1;
                 afterCR = byte === CR;
                 lastLineAt = performance.now();
@@ -116,6 +152,9 @@ export async function* parseEventStream(reader: ReadableStreamDefaultReader<Uint
                         data = '';
                         dataBytes = 0;
                         yield event;
+                        // The time the caller spent on the event is not the server's: the idle clock restarts when it
+                        // asks for the next one. A yield only follows a complete line, so a drip cannot use this.
+                        lastLineAt = performance.now();
                     } else {
                         type = '';
                     }
@@ -152,11 +191,9 @@ export async function* parseEventStream(reader: ReadableStreamDefaultReader<Uint
                 }
             }
             if (lineStart < chunk.length) {
-                // A copy: a view would keep the whole chunk alive for the few bytes of the line it ends with.
-                const rest = chunk.slice(lineStart);
-                partial.push(rest);
-                partialBytes += rest.length;
-                if (partialBytes > maxEventSize) throw eventTooLarge(maxEventSize);
+                // Checked before it is copied in: a line past the limit is never held whole.
+                if (partial.length + (chunk.length - lineStart) > maxEventSize) throw eventTooLarge(maxEventSize);
+                partial.append(chunk.subarray(lineStart));
             }
         }
     } catch (err: unknown) {
