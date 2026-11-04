@@ -75,13 +75,12 @@ for (const http2 of [false, true]) {
             assert.equal(({} as Record<string, unknown>).polluted, undefined);
         });
 
-        // HTTP/1.1 only: node:http enforces its 16 KiB header cap on every response. On HTTP/2 the cap is a SETTINGS
-        // value the server may ignore, for a final response and a hop alike (tracked apart from this option).
-        it("a hop's headers over the cap fail the request, as a final response's do", { skip: http2 }, async t => {
+        // node:http fails the header overflow at its parser; on HTTP/2 UltraTon measures the header list itself, since
+        // Node enforces the advertised SETTINGS only once the server acknowledges them.
+        it("a hop's headers over the cap fail the request, as a final response's do", async t => {
             const base = await server(t, http2);
-            // A network-level failure (the header overflow), not a TypeError about the options.
             await assert.rejects(clientOf(t, http2).get(`${base}/huge`, { maxRedirects: 5, redirectHopHeaders: true }),
-                (err: Error) => !(err instanceof TypeError) && err.name !== 'TypeError');
+                { name: http2 ? 'UltraTonMemoryError' : 'UltraTonNetworkError' });
         });
 
         it('takes a client default, which a request turns off', async t => {
