@@ -94,6 +94,7 @@ for (let i = 0; i < settings.rounds; i++) {
     rounds.push({
         requestsPerSecond: latencies.length / (elapsedMs / 1000),
         p50Ms: percentile(latencies, 50),
+        p95Ms: percentile(latencies, 95),
         p99Ms: percentile(latencies, 99),
         cpuMsPer1k: ((cpu.user + cpu.system) / 1000) / (latencies.length / 1000),
         rssMb: process.memoryUsage().rss / (1024 * 1024),

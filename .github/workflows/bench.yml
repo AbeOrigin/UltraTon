@@ -5,6 +5,15 @@ name: Benchmarks
 
 on:
   workflow_dispatch:
+    inputs:
+      concurrency:
+        description: 'Requests in flight per client, comma-separated for one table per level (e.g. 100,500,1000)'
+        required: false
+        default: '16'
+      clients:
+        description: 'Only the clients whose name contains one of these comma-separated parts (empty: all)'
+        required: false
+        default: ''
   schedule:
     - cron: '41 5 * * 1'
   pull_request:
@@ -56,6 +65,10 @@ jobs:
 
     - name: Run the benchmarks
       working-directory: compat
+      env:
+        # Inputs only exist on a manual run; the schedule and pull requests get the defaults.
+        BENCH_CONCURRENCY: ${{ inputs.concurrency || '16' }}
+        BENCH_CLIENTS: ${{ inputs.clients }}
       run: npm run bench
 
     - name: Upload the results
