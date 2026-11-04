@@ -88,12 +88,11 @@ describe('parseEventStream', () => {
         assert.equal((await collect(Array.from({ length: 40 }, () => `data: ${'x'.repeat(50)}\n\n`), 1024)).length, 40);
     });
 
-    it('a line in tiny chunks costs linear time, not quadratic', async () => {
-        const line = `data: ${'x'.repeat(60_000)}\n\n`;
+    // Linear time is pinned by LineBuffer's growth count below: a wall-clock bound here flaked on slow CI runners.
+    it('a line in one-byte chunks comes out whole', async () => {
+        const line = `data: ${'x'.repeat(6_000)}\n\n`;
         const chunks = Array.from(encoder.encode(line), b => new Uint8Array([b]));
-        const started = performance.now();
-        assert.equal((await collect(chunks, 64 * 1024))[0].data.length, 60_000);
-        assert.ok(performance.now() - started < 2000, `took ${performance.now() - started} ms`);
+        assert.equal((await collect(chunks, 64 * 1024))[0].data.length, 6_000);
     });
 
     it('events have no prototype and are frozen', async () => {
@@ -108,7 +107,15 @@ describe('LineBuffer', () => {
         const { LineBuffer } = await import('../src/helpers/event-stream.ts');
         const buffer = new LineBuffer();
         const bytes = encoder.encode('x'.repeat(10_000));
-        for (let i = 0; i < bytes.length; i++) buffer.append(bytes.subarray(i, i + 1));
+        // Doubling keeps it linear (each byte copied about twice): a buffer grown to fit each chunk would reallocate
+        // 10,000 times, a quadratic copy. 64 to 16 KiB is 9 growths.
+        let growths = 0;
+        for (let i = 0; i < bytes.length; i++) {
+            const before = buffer.capacity;
+            buffer.append(bytes.subarray(i, i + 1));
+            if (buffer.capacity !== before) growths++;
+        }
+        assert.ok(growths <= 10, `${growths} reallocations`);
         assert.equal(buffer.length, 10_000);
         assert.ok(buffer.capacity <= 2 * 10_000, `capacity ${buffer.capacity}`);
         const line = buffer.take(encoder.encode('yz'));
