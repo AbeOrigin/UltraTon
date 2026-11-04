@@ -69,6 +69,7 @@ Not sure why something was blocked? `await client.explain(url)` tells you before
 | https → http redirect | **Rejected**. | — |
 | Headers on a cross-origin redirect | `authorization`, `cookie`, `proxy-authorization`, `auth` and `host` are dropped; every other header follows, as with `fetch`. | `redirectHeaders: 'safe'` lets only `accept*`, `user-agent` and the body framing follow |
 | Response body size | **2 MB**, then the response is aborted. | `maxBodySize` |
+| Response header size | **16 KiB** per response, every redirect hop included, on HTTP/1.1 and HTTP/2; past it the request fails. | — |
 | Compressed responses (gzip, deflate, br) | **Decoded**, with `maxBodySize` applied to the decoded bytes too, so a decompression bomb stops at the limit. At most 2 content-encodings. br only on a Node release with the Brotli fix (see [Security](#security)). | `decompress: false` |
 | Total time (DNS + all hops) | **30 s** | `timeoutMs` (`0` = none) |
 | Idle connection | **10 s** without bytes | `socketTimeoutMs` (`0` = none) |
@@ -206,6 +207,7 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `UltraTonNetworkError` | The proxy refused the tunnel (CONNECT status or SOCKS5 reason), or answered outside its protocol | `ERR_ULTRATON_PROXY` |
 | `SecureHttpError` | More than 2 content-encodings on a response | `ERR_ULTRATON_CONTENT_ENCODING` |
 | `UltraTonMemoryError` | The body exceeded `maxBodySize` | — |
+| `UltraTonMemoryError` | HTTP/2: the response headers (a followed redirect's too) exceeded 16 KiB. On HTTP/1.1 the same overflow is an `UltraTonNetworkError` with `HPE_HEADER_OVERFLOW`. | — |
 | `UltraTonMemoryError` | The request body exceeded `maxRequestBodySize` | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` |
 | `SecureHttpError` | A streamed request body yielded more or fewer bytes than its `content-length` | `ERR_ULTRATON_REQUEST_BODY_LENGTH` |
 | `UltraTonRedirectError` | More redirects than `maxRedirects` | — |
