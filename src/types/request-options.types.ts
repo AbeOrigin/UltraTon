@@ -241,6 +241,31 @@ export interface UltraTonEventsOptions extends Omit<UltraTonStreamOptions, 'meth
     readonly maxEventSize?: number;
 }
 
+/**
+ * Options of `client.websocket()`: of the request options, only those that apply to an upgrade, plus the WebSocket's
+ * own. Anything else (a body, `method`, `maxRedirects`, `retry`, `timings`, the body limits) throws a `TypeError`.
+ */
+export interface UltraTonWebSocketOptions extends Pick<UltraTonRequestOptions, 'headers' | 'query' | 'timeoutMs' | 'socketTimeoutMs' | 'signal' | 'permitReservedIps' | 'auth'> {
+    /**
+     * The subprotocols to offer (`Sec-WebSocket-Protocol`), in order of preference: tokens (RFC 9110), no duplicates.
+     * The server's choice is `protocol`; a choice that is not one of these fails the handshake.
+     */
+    readonly protocols?: readonly string[];
+    /**
+     * The most bytes one received message may take, and so one frame: checked from the frame's header, before anything
+     * of it is buffered. Past it the connection fails with close code 1009 and `UltraTonMemoryError`
+     * (`ERR_ULTRATON_WS_MESSAGE_TOO_LARGE`). An integer from 1 to 2147483647. Default 1048576 (1 MiB).
+     */
+    readonly maxMessageSize?: number;
+    /**
+     * Milliseconds without a frame from the server, while you wait for a message, before the client sends a ping;
+     * `socketTimeoutMs` then runs until any frame arrives. Keeps a quiet connection alive and proves the server is
+     * still there. An integer from 0 to 2147483647. Default 0: the client never pings, and `socketTimeoutMs` alone
+     * bounds the time without a frame.
+     */
+    readonly pingIntervalMs?: number;
+}
+
 /** The options of `client.paginate()`: the GET options (no body), plus how to find the next page and when to stop. */
 export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body' | 'discardBody'> {
     /**

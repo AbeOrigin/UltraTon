@@ -1,7 +1,7 @@
 import { ACCEPT_ENCODING } from './body-reader.ts';
 import { isIP } from "node:net";
 import type { InternalRequestOptions, RedirectHeaders, ResolvedRequestOptions, SecureUltraTonRequestOptions, ReservedIpPolicy, TlsMaterial, TlsOptions, UltraTonClientOptions, UltraTonHeadersContext, UltraTonRetryInfo } from "../types/request-options.types.ts";
-import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING } from "../constants.ts";
+import { DEFAULT_TIMEOUT_MS, INT32_MAX, MAX_REDIRECTS_CEILING, WS_MAX_MESSAGE_SIZE } from "../constants.ts";
 import { parseSafeUrl } from "./url-parser.ts";
 import { optionRange } from "../errors.ts";
 import type { ProxyConfig } from "../proxy/tunnel.ts";
@@ -463,6 +463,38 @@ export function splitEventsOptions(options: unknown): { maxEventSize: number; re
         };
     }
     return { maxEventSize: maxEventSize as number, rest };
+}
+
+/** The request options that apply to a WebSocket upgrade; the rest of REQUEST_OPTION_KEYS is refused by websocket(). */
+const WEBSOCKET_REQUEST_KEYS = new Set(['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'signal', 'permitReservedIps', 'auth']);
+/** A token (RFC 9110 5.6.2), any case: what a subprotocol name must be. */
+const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/**
+ * Takes the WebSocket's own options (`protocols`, `maxMessageSize`, `pingIntervalMs`) out of the options of
+ * `client.websocket()`, validated, and refuses the request options that do not apply to an upgrade. The rest goes
+ * through the usual request firewall.
+ * @throws {TypeError} For `method`, a body, `maxRedirects`, `retry`, `timings` or a body limit; for `protocols` that
+ *   are not an array of distinct tokens; for a `maxMessageSize` or `pingIntervalMs` out of range.
+ */
+export function splitWebSocketOptions(options: unknown): { protocols: readonly string[]; maxMessageSize: number; pingIntervalMs: number; rest: unknown } {
+    if (options === undefined) options = {};
+    // Not an object: left for withMethod to reject with its usual message.
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) return { protocols: [], maxMessageSize: WS_MAX_MESSAGE_SIZE, pingIntervalMs: 0, rest: options };
+    const { protocols = [], maxMessageSize = WS_MAX_MESSAGE_SIZE, pingIntervalMs = 0, ...rest } = ownOptions(options as Record<string, unknown>);
+    for (const key of Object.keys(rest)) {
+        if (rest[key] === undefined || WEBSOCKET_REQUEST_KEYS.has(key)) continue;
+        // Anything else that is not a request option is left for the firewall's "Unknown option" and its hints.
+        if (key !== 'method' && !REQUEST_OPTION_KEYS.includes(key)) continue;
+        discardBody(rest.body);
+        throw new TypeError(`UltraTon: websocket() does not take '${key}': it sends one upgrade request, follows no redirect and has no body. It takes ${[...WEBSOCKET_REQUEST_KEYS, 'protocols', 'maxMessageSize', 'pingIntervalMs'].join(', ')}.`);
+    }
+    if (!Array.isArray(protocols) || protocols.some(name => typeof name !== 'string' || !TOKEN.test(name)) || new Set(protocols).size !== protocols.length) {
+        throw new TypeError("UltraTon: Expected 'protocols' to be an array of distinct subprotocol names (tokens such as 'chat' or 'v2.json').");
+    }
+    intOption('maxMessageSize', maxMessageSize, WS_MAX_MESSAGE_SIZE, INT32_MAX, 1);
+    intOption('pingIntervalMs', pingIntervalMs, 0);
+    return { protocols: Object.freeze([...protocols as string[]]), maxMessageSize: maxMessageSize as number, pingIntervalMs: pingIntervalMs as number, rest };
 }
 
 /** How many pages `client.paginate()` fetches unless `maxPages` says otherwise. */

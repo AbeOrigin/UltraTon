@@ -18,3 +18,6 @@ export const kSessionManager: unique symbol = Symbol('ultraton.sessionManager');
  * with the count of clients using it. Set by `extend()` only; never by a caller.
  */
 export const kSharedEngine: unique symbol = Symbol('ultraton.sharedEngine');
+
+/** The close-handshake timeout of `websocket()` connections, in place of WS_CLOSE_TIMEOUT_MS, so tests need not wait it out. */
+export const kWebSocketCloseTimeout: unique symbol = Symbol('ultraton.webSocketCloseTimeout');

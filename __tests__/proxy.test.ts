@@ -15,6 +15,7 @@ import { createSecureServer } from 'node:http2';
 import { UltraTonClient } from '../src/http-client.ts';
 import { ipv6Available, mockDns, RESERVED, v4, v6 } from './fixtures/net-fixtures.ts';
 import { ipv6Bytes } from '../src/proxy/tunnel.ts';
+import { ClientFrames, echo } from './fixtures/ws-server.ts';
 
 const fixture = (name: string) => fs.readFileSync(new URL(`./fixtures/${name}`, import.meta.url));
 const CERT = fixture('localhost-cert.pem');
@@ -616,5 +617,29 @@ describe('ipv6Bytes', () => {
         assert.equal(hex('1:2:3:4:5:6:1.2.3.4'), '00010002000300040005000601020304');
         assert.equal(hex('::FFFF:7F00:1'), '00000000000000000000ffff7f000001');
         assert.throws(() => ipv6Bytes('not-an-ip'), TypeError);
+    });
+});
+
+describe('proxy: WebSocket', () => {
+    it('wss: tunnels to the validated IP and checks the certificate against the target', async (t) => {
+        mockDns(t, { localhost: [v4('127.0.0.1')], 'evil.localhost': [v4('127.0.0.1')] });
+        const proxy = await connectProxy(t);
+        const server = https.createServer({ cert: CERT, key: KEY });
+        const sockets = new Set<net.Socket>();
+        server.on('secureConnection', (s: net.Socket) => { sockets.add(s); s.on('close', () => sockets.delete(s)); });
+        server.on('upgrade', (req: http.IncomingMessage, socket: net.Socket) => echo({ req, socket, frames: new ClientFrames(socket) }));
+        await new Promise<void>(r => server.listen(0, '127.0.0.1', r));
+        t.after(async () => {
+            for (const s of sockets) s.destroy();
+            await new Promise<void>(r => server.close(() => r()));
+        });
+        const port = (server.address() as AddressInfo).port;
+        const client = proxied(t, false, proxy.url);
+        const ws = await client.websocket(`wss://localhost:${port}/`);
+        await ws.send('through the tunnel');
+        assert.deepEqual(await ws[Symbol.asyncIterator]().next(), { done: false, value: 'through the tunnel' });
+        await ws.close();
+        assert.deepEqual(proxy.seen.map(s => s.target), [`127.0.0.1:${port}`]);
+        await assert.rejects(client.websocket(`wss://evil.localhost:${port}/`), (err: any) => err.name === 'UltraTonNetworkError' && /TLS handshake failed/.test(err.message));
     });
 });

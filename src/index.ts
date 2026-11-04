@@ -31,6 +31,7 @@ export type {
   ReservedIpPolicy,
   UltraTonStreamOptions,
   UltraTonEventsOptions,
+  UltraTonWebSocketOptions,
   UltraTonPaginateOptions,
   UltraTonStreamMethod,
   UltraTonRetryOptions,
@@ -38,4 +39,4 @@ export type {
   UltraTonProxyOptions,
   QueryValue,
 } from './types/request-options.types.ts';
-export type { UltraTonEvent, UltraTonEventStream, UltraTonExplainedAddress, UltraTonExplanation, UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+export type { UltraTonEvent, UltraTonEventStream, UltraTonExplainedAddress, UltraTonExplanation, UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse, UltraTonWebSocket } from './types/request-response.ts';

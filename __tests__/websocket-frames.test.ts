@@ -5,18 +5,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { encodeFrame, FrameError, FrameParser, Opcode, type Incoming } from '../src/helpers/websocket.ts';
-
-/** A server frame: unmasked, FIN and RSV bits as given. */
-export function frame(opcode: number, payload: Uint8Array | string = '', { fin = true, rsv = 0, mask = false, length }: { fin?: boolean; rsv?: number; mask?: boolean; length?: number } = {}): Buffer {
-    const body = typeof payload === 'string' ? Buffer.from(payload) : Buffer.from(payload);
-    const len = length ?? body.length;
-    const head = len < 126 ? Buffer.from([0, len]) : len < 0x10000 ? Buffer.alloc(4) : Buffer.alloc(10);
-    head[0] = (fin ? 0x80 : 0) | (rsv << 4) | opcode;
-    if (len >= 126 && len < 0x10000) { head[1] = 126; head.writeUInt16BE(len, 2); }
-    if (len >= 0x10000) { head[1] = 127; head.writeBigUInt64BE(BigInt(len), 2); }
-    if (mask) head[1] |= 0x80;
-    return Buffer.concat([head, mask ? Buffer.alloc(4) : Buffer.alloc(0), body]);
-}
+import { closePayload, frame } from './fixtures/ws-server.ts';
 
 function parse(bytes: Uint8Array, max = 1 << 20): Incoming[] {
     return new FrameParser(max).push(bytes);
@@ -25,8 +14,6 @@ function parse(bytes: Uint8Array, max = 1 << 20): Incoming[] {
 function failsWith(code: number, bytes: Uint8Array, max = 1 << 20): void {
     assert.throws(() => parse(bytes, max), (err: unknown) => err instanceof FrameError && err.closeCode === code);
 }
-
-const closePayload = (code: number, reason = '') => Buffer.concat([Buffer.from([code >> 8, code & 0xff]), Buffer.from(reason)]);
 
 describe('FrameParser', () => {
     it('reads a text frame with each length form', () => {
