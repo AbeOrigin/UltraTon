@@ -18,18 +18,20 @@ import {
   absoluteTimeout,
   bodyTooLarge,
   clientClosed,
+  headersTooLarge,
   idleTimeout,
   refusedStream,
   remainingBudget,
   toNetworkError,
 } from "../errors.ts";
-import { HTTP_CODES_REDIRECTS } from "../constants.ts";
+import { HTTP_CODES_REDIRECTS, MAX_HEADER_LIST_SIZE } from "../constants.ts";
 import {
   createResponse,
   createStreamResponse,
   declaredBodyLength,
   incompleteResponse,
   NO_REDIRECTS,
+  responseHeaders,
 } from "../helpers/response.ts";
 import {
   basicAuthorization,
@@ -40,6 +42,20 @@ import { BodyReader, createBodyStream } from "../helpers/body-reader.ts";
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from "../helpers/request-body.ts";
 import { followRedirect } from "../helpers/redirect-headers.ts";
 import type { HopTimings, TimingsCollector } from "../helpers/diagnostics.ts";
+
+/**
+ * The size of a header list as SETTINGS_MAX_HEADER_LIST_SIZE counts it (RFC 9113 6.5.2): name, value and 32 per field.
+ * Node enforces the cap UltraTon advertises only once the server has acknowledged its SETTINGS: until then (the first
+ * streams of every new session) it lets through up to its own 64 KiB ceiling. So every response is measured here.
+ */
+// ponytail: string lengths, not UTF-8 bytes; node:http2 decodes header values as latin1, where the two agree.
+function headerListSize(headers: IncomingHttpHeaders): number {
+  let size = 0;
+  for (const [name, value] of Object.entries(headers)) {
+    for (const v of Array.isArray(value) ? value : [value]) size += name.length + String(v ?? "").length + 32;
+  }
+  return size;
+}
 
 /** Per session, the requests in flight that a GOAWAY may leave unprocessed (see watchGoaway). */
 const goawayWatchers = new WeakMap<ClientHttp2Session, Set<(lastStreamID: number) => void>>();
@@ -203,7 +219,9 @@ export class Http2Engine {
       ) {
         if (reqOpts.maxRedirects > 0) {
           const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirects.length, this.#sessionManager.allowPlainHttp);
-          redirects.push(Object.freeze({ url: parsedUrl.href, statusCode }));
+          redirects.push(Object.freeze(reqOpts.redirectHopHeaders
+            ? { url: parsedUrl.href, statusCode, headers: responseHeaders(response.headers) }
+            : { url: parsedUrl.href, statusCode }));
           currentUrl = next.url;
           currentOptions = next.options;
           reqOpts = this.#buildRequestOptions(currentOptions);
@@ -397,6 +415,13 @@ export class Http2Engine {
 
       stream.on("response", (headers) => {
         if (settled) return;
+        // Before anything reads them, so a redirect hop's headers are bounded as a final response's are.
+        if (headerListSize(headers) > MAX_HEADER_LIST_SIZE) {
+          settled = true;
+          cleanup();
+          stream.close(constants.NGHTTP2_CANCEL);
+          return reject(headersTooLarge(MAX_HEADER_LIST_SIZE));
+        }
         phases?.mark("response");
         armIdleTimer();
         statusCode = Number(headers[":status"]);
@@ -412,7 +437,7 @@ export class Http2Engine {
           if (!stream.closed && !stream.destroyed) {
             stream.close(stream.endAfterHeaders ? constants.NGHTTP2_NO_ERROR : constants.NGHTTP2_CANCEL);
           }
-          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0), undefined, undefined, reqOpts.discardBody ? 0 : undefined));
         }
 
         if (pseudoHeaders[":method"] === "HEAD") {
@@ -424,7 +449,7 @@ export class Http2Engine {
             const empty = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
             return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url, streaming.redirects));
           }
-          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0), undefined, undefined, reqOpts.discardBody ? 0 : undefined));
         }
 
         // A stream hands the body over with the headers: timeoutMs covered the wait for them, and from here the body
@@ -475,6 +500,7 @@ export class Http2Engine {
           maxBodySize,
           contentEncoding: headers["content-encoding"],
           decompress,
+          discard: reqOpts.discardBody,
           tooLarge: () => bodyTooLarge(maxBodySize),
           // A decoding failure or a decoded overflow, reported after the chunk that caused it was taken.
           onError: (err) => {
@@ -552,7 +578,7 @@ export class Http2Engine {
           (data) => {
             if (signal?.aborted) return reject(signal.reason);
             if (this.#closed) return reject(clientClosed());
-            resolve(createResponse<T>(status, responseHeaders, data));
+            resolve(createResponse<T>(status, responseHeaders, data, undefined, undefined, reqOpts.discardBody ? (reader?.size ?? 0) : undefined));
           },
           reject,
         );

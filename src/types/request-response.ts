@@ -7,6 +7,44 @@ export interface UltraTonRedirect {
     readonly url: string;
     /** The redirect status: 301, 302, 303, 307 or 308. */
     readonly statusCode: number;
+    /**
+     * That hop's response headers (`set-cookie`, `location`, ...), as `headers` on a response. Only with
+     * `redirectHopHeaders`; otherwise absent.
+     */
+    readonly headers?: IncomingHttpHeaders;
+}
+
+/**
+ * One Server-Sent Event from `client.events()`. Built without a prototype and frozen. `data` is the server's text,
+ * never parsed.
+ */
+export interface UltraTonEvent {
+    /** The `event` field, or `'message'` when the server sent none. */
+    readonly event: string;
+    /** The `data` lines of the event, joined with a line feed (`'\n'`). */
+    readonly data: string;
+    /** The last event ID the server set, when this event was dispatched: `''` until it sets one. */
+    readonly id: string;
+    /** The last `retry` the server sent, in milliseconds; `undefined` until it sends one. A hint, never acted on. */
+    readonly retry: number | undefined;
+}
+
+/**
+ * What `client.events()` resolves with once the headers arrive: the response's status and headers, and its events,
+ * read with `for await`. Read only once. Leaving the loop (`break`, `return`, a throw) or `cancel()` ends the stream
+ * and releases its connection.
+ */
+export interface UltraTonEventStream extends AsyncIterable<UltraTonEvent> {
+    /** Always 200: anything else rejected `events()`. */
+    readonly statusCode: number;
+    /** The response headers. Never contains HTTP/2 pseudo-headers. */
+    readonly headers: IncomingHttpHeaders;
+    /** The final URL, after any redirect that was followed. */
+    readonly url: string;
+    /** The redirects followed to get here. See {@link UltraTonResponse.redirects}. */
+    readonly redirects: readonly UltraTonRedirect[];
+    /** Ends the stream and releases its connection; a `for await` in progress ends. Safe to call more than once. */
+    cancel(): Promise<void>;
 }
 
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */
@@ -34,6 +72,8 @@ export interface UltraTonResponse<T = unknown> {
     readonly redirects: readonly UltraTonRedirect[];
     /** The raw response payload. Never parsed automatically; empty for HEAD and bodiless responses. */
     readonly data: Buffer;
+    /** With `discardBody`: how many bytes the body had, decoded (`data` is then empty). Absent otherwise. */
+    readonly bodySize?: number;
     /**
      * Where the time of this call went, phase by phase on the hop that got the response, and `totalMs` until the body
      * was read (every redirect and retry included). Only with the `timings` option; `undefined` otherwise.

@@ -79,6 +79,8 @@ export interface BodyReaderOptions {
     readonly tooLarge: () => Error;
     /** Called once when decoding fails or overflows asynchronously; the engine cancels the response. */
     readonly onError: (err: Error) => void;
+    /** Count the decoded bytes and keep none (`discardBody`): end() resolves with an empty Buffer, `size` says how many. */
+    readonly discard?: boolean;
 }
 
 /**
@@ -104,6 +106,16 @@ export class BodyReader {
         const codings = options.decompress ? codingsFor(options.contentEncoding) : [];
         this.#codings = codings instanceof Error ? [] : codings;
         if (codings instanceof Error) this.#codingError = codings;
+    }
+
+    /** The decoded bytes taken so far, kept or not. */
+    get size(): number {
+        return this.#size;
+    }
+
+    /** The decoded bytes held in memory now: `size` without `discard`, 0 with it. */
+    get keptBytes(): number {
+        return this.#chunks.reduce((sum, chunk) => sum + chunk.length, 0);
     }
 
     /** The error the body failed with, if any. */
@@ -138,7 +150,8 @@ export class BodyReader {
             await this.#done;
         }
         if (this.#error) throw this.#error;
-        return Buffer.concat(this.#chunks, this.#size);
+        // With `discard` nothing was kept: concat's length would pad an empty list with zeros.
+        return this.#options.discard ? Buffer.alloc(0) : Buffer.concat(this.#chunks, this.#size);
     }
 
     /** Frees the decoders of a response the engine gave up (abort, timeout); reports nothing. */
@@ -153,7 +166,7 @@ export class BodyReader {
             this.#fail(this.#options.tooLarge());
             return false;
         }
-        this.#chunks.push(chunk);
+        if (!this.#options.discard) this.#chunks.push(chunk);
         return true;
     }
 
@@ -170,7 +183,8 @@ export class BodyReader {
         stages[stages.length - 1].on('data', (chunk: Buffer) => {
             if (this.#error || this.#destroyed) return;
             this.#size += chunk.length;
-            this.#chunks.push(chunk);
+            // Decoded bytes are counted either way; with `discard` none is kept (as in #collect).
+            if (!this.#options.discard) this.#chunks.push(chunk);
         });
         this.#done = new Promise<void>(resolve => {
             pipeline(stages, (err?: Error | null) => {

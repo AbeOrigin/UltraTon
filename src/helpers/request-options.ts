@@ -171,12 +171,12 @@ function evaluateHeaders(fn: HeadersFunction, context: UltraTonHeadersContext): 
 const USER_AGENT_TWICE = "UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.";
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'redirectHopHeaders', 'discardBody', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'redirectHopHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -227,6 +227,7 @@ const CLIENT_OPTION_HINTS = new Map<string, string>([
     ['form', perRequestOnly('form')],
     ['body', perRequestOnly('body')],
     ['query', perRequestOnly('query')],
+    ['discardBody', perRequestOnly('discardBody')],
 ]);
 
 /** @throws {TypeError} For any own key outside the allowlist, whatever its value (`undefined` included). */
@@ -421,9 +422,47 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
     const own = ownOptions(options as Record<string, unknown>);
     const { method = 'GET', maxBodySize, ...rest } = own;
+    if (rest.discardBody !== undefined) {
+        throw new TypeError("UltraTon: 'discardBody' is not an option of stream(): its body is yours to read, or to cancel().");
+    }
     methodOption(method);
     if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
     return { method: method as string, maxBodySize: maxBodySize as number | undefined, rest };
+}
+
+/** The most bytes of one event's line or data that `client.events()` buffers unless `maxEventSize` says otherwise. */
+const DEFAULT_MAX_EVENT_SIZE = 64 * 1024;
+
+/**
+ * Takes `maxEventSize` out of the options of `client.events()`, validated, and adds `accept: text/event-stream` and
+ * `cache-control: no-cache` unless the call sets them (a client default `accept` is replaced: an event stream is what
+ * this call asks for). The rest goes to `stream()`, which checks it.
+ * @throws {TypeError} If `maxEventSize` is not an integer from 1, or `method`, `json`, `form` or `body` is set (it is a
+ *   GET). A stream body is released first.
+ */
+export function splitEventsOptions(options: unknown): { maxEventSize: number; rest: unknown } {
+    if (options === undefined) options = {};
+    // Not an object: left for withMethod to reject with its usual message.
+    if (typeof options !== 'object' || options === null || Array.isArray(options)) return { maxEventSize: DEFAULT_MAX_EVENT_SIZE, rest: options };
+    const { maxEventSize = DEFAULT_MAX_EVENT_SIZE, ...rest } = ownOptions(options as Record<string, unknown>);
+    for (const key of ['method', 'json', 'form', 'body']) {
+        if (rest[key] === undefined) continue;
+        discardBody(rest.body);
+        throw new TypeError(`UltraTon: events() sends a GET request; '${key}' is not accepted.`);
+    }
+    intOption('maxEventSize', maxEventSize, DEFAULT_MAX_EVENT_SIZE, INT32_MAX, 1);
+    const headers: unknown = rest.headers;
+    // Not a plain object: left for stream() to reject with its usual message.
+    if (headers === undefined || isPlainObject(headers)) {
+        const own = (headers ?? {}) as Record<string, unknown>;
+        const sets = (name: string) => Object.keys(own).some(key => key.toLowerCase() === name && own[key] !== undefined);
+        rest.headers = {
+            ...(sets('accept') ? {} : { accept: 'text/event-stream' }),
+            ...(sets('cache-control') ? {} : { 'cache-control': 'no-cache' }),
+            ...own,
+        };
+    }
+    return { maxEventSize: maxEventSize as number, rest };
 }
 
 /** How many pages `client.paginate()` fetches unless `maxPages` says otherwise. */
@@ -444,6 +483,7 @@ export function splitPaginateOptions(options: unknown): { next?: (page: never) =
         discardBody(rest.body);
         throw new TypeError(`UltraTon: paginate() sends GET requests; '${key}' is not accepted.`);
     }
+    if (rest.discardBody !== undefined) throw new TypeError("UltraTon: paginate() reads every page; 'discardBody' is not accepted.");
     if (next !== undefined && typeof next !== 'function') {
         throw new TypeError(`UltraTon: Expected 'next' to be a function, received ${describeValue(next)}.`);
     }
@@ -636,6 +676,8 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
         throw new TypeError(`UltraTon: Expected 'redirectHeaders' to be 'all' or 'safe', received ${received}.`);
     }
     safeOptions.redirectHeaders = options.redirectHeaders ?? 'all';
+    safeOptions.redirectHopHeaders = validateType('redirectHopHeaders', options.redirectHopHeaders, 'boolean') ? options.redirectHopHeaders : false;
+    safeOptions.discardBody = validateType('discardBody', options.discardBody, 'boolean') ? options.discardBody : false;
     // Strict fallback: block SSRF
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
@@ -663,6 +705,7 @@ export interface ClientDefaults {
     readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
     readonly redirectHeaders?: RedirectHeaders;
+    readonly redirectHopHeaders?: boolean;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
     readonly retry?: RetryInput;
@@ -854,6 +897,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
         maxRedirects: raw.maxRedirects as number | undefined,
         redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
+        redirectHopHeaders: raw.redirectHopHeaders as boolean | undefined,
         permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
         decompress: raw.decompress as boolean | undefined,
     });
@@ -913,6 +957,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
             maxRedirects: raw.maxRedirects as number | undefined,
             redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
+            redirectHopHeaders: raw.redirectHopHeaders as boolean | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
             retry: retryOption(raw.retry),
@@ -944,6 +989,9 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         maxRequestBodySize: or(own.maxRequestBodySize, defaults.maxRequestBodySize),
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
         redirectHeaders: or(own.redirectHeaders, defaults.redirectHeaders),
+        redirectHopHeaders: or(own.redirectHopHeaders, defaults.redirectHopHeaders),
+        // A request option only: never a client default.
+        discardBody: own.discardBody,
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
         decompress,
         signal: own.signal,

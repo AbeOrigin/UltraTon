@@ -6,6 +6,8 @@ export const ERROR_CODES = [
     'ERR_ULTRATON_AGENT_PROXY',
     'ERR_ULTRATON_CONTENT_ENCODING',
     'ERR_ULTRATON_DOWNGRADE',
+    'ERR_ULTRATON_EVENT_STREAM',
+    'ERR_ULTRATON_EVENT_TOO_LARGE',
     'ERR_ULTRATON_HTTP_STATUS',
     'ERR_ULTRATON_MAX_PAGES',
     'ERR_ULTRATON_NON_CANONICAL_IP',
@@ -93,9 +95,21 @@ export const idleTimeout = (socketTimeoutMs: number) =>
  * `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE`, the request body exceeded `maxRequestBodySize`.
  */
 export class UltraTonMemoryError extends SecureHttpError {}
+/** `events()`: no complete line (an event or a keep-alive comment) for `idleMs`, however many bytes came. */
+export const eventStreamIdle = (idleMs: number) =>
+    new UltraTonNetworkTimeoutError(`UltraTon: No complete event-stream line for ${idleMs}ms.`, { code: 'ERR_ULTRATON_SOCKET_TIMEOUT' });
+/** `events()`: one line, or the `data` lines of one event, went past `maxEventSize` before the line or the event ended. */
+export const eventTooLarge = (maxEventSize: number) =>
+    new UltraTonMemoryError(`UltraTon: An event exceeded the maximum allowed size of ${maxEventSize} bytes. Raise maxEventSize.`, { code: 'ERR_ULTRATON_EVENT_TOO_LARGE' });
+/** `events()`: the response is not an event stream (200 with `content-type: text/event-stream`). Says nothing of what it was. */
+export const notEventStream = () =>
+    new SecureHttpError('UltraTon: The response is not an event stream (a 200 with content-type text/event-stream).', { code: 'ERR_ULTRATON_EVENT_STREAM' });
 /** The response body went past `maxBodySize` and the response was aborted. One message for `get()` and `stream()`: the body-parity test holds them to it. */
 export const bodyTooLarge = (maxBodySize: number) =>
     new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${maxBodySize} bytes. Raise maxBodySize.`);
+/** The response headers (a redirect's too) went past the 16 KiB header list cap on HTTP/2; HTTP/1.1 fails at the parser. */
+export const headersTooLarge = (limit: number) =>
+    new UltraTonMemoryError(`UltraTon: Response headers exceeded the maximum allowed size of ${limit} bytes.`);
 /** The request body went past `maxRequestBodySize`: before connecting for a buffered one, mid-upload for a stream. */
 export const requestBodyTooLarge = (limit: number) =>
     new UltraTonMemoryError(`UltraTon: Request body exceeded the maximum allowed size of ${limit} bytes. Raise maxRequestBodySize, or send less.`, { code: 'ERR_ULTRATON_REQUEST_BODY_TOO_LARGE' });

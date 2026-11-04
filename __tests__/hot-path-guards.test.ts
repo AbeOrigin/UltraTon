@@ -1,7 +1,7 @@
 /**
- * Guards for the HTTP/1.1 hot path. The client's default headers are sanitized once, when the client is made, and a
- * call's options built by UltraTon itself are not copied and checked a second time on their way to the engine. What a
- * call brings (its headers, its options) must still be checked on every call, whatever the client already checked.
+ * Guards for the HTTP/1.1 hot path, where the default accept-encoding is added while the call's headers are merged over
+ * the client's. What a call brings (its headers, its options) must still be checked on every call, with UltraTon's own
+ * messages, whatever the client already checked; and the merge must keep the rules it replaced.
  */
 import { describe, it, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';

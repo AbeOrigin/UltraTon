@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-11-04
+
+What the first application built on UltraTon (an API testing tool that runs requests in parallel) asked for after its load tests: Server-Sent Events from servers you do not control, the headers of each redirect hop, a way to read a body without keeping it, and less CPU per request. It ends the patches-only period restarted with 2.9.0; SUPPORT.md says why and what holds instead. Every addition is opt-in and no default moved.
+
+### Added
+
+- **`redirectHopHeaders` option: each redirect hop's response headers.** With `redirectHopHeaders: true`, on the client or on one request, each entry of `res.redirects` carries `headers`, that hop's response headers built as a final response's are (no HTTP/2 pseudo-headers, a `__proto__` header kept as data), on both engines and on `stream()`. It is for auditing a redirect chain and for callers that keep cookies themselves and need a hop's `set-cookie`, such as a log-in that sets the session on a 302: UltraTon still keeps no cookie jar, and follows the redirect with its own rules (credentials on their origin, `redirectHeaders`, the https to http refusal) instead of the caller re-implementing them. Off by default: the entries stay `{ url, statusCode }` and no hop's headers are kept.
+- **`discardBody` request option: read a body without keeping it.** With `discardBody: true` the body is read to the end, so the connection goes back to the pool, and none of it is kept: `data` is empty and `bodySize` says how many bytes came, decoded. For health checks, uptime probes and downloads where only the status and the size matter, without holding every body in flight in memory. `maxBodySize` (on the wire and decoded), the timeouts and the check of a body cut short still apply. It costs what `request()` costs, and less for large bodies, where `stream()` with the body drained by hand costs about twice as much. A request option only: as a client default it would empty `paginate()`'s pages, and `stream()` and `paginate()` refuse it.
+
+- **`client.events()`: Server-Sent Events from servers you do not control.** It opens a stream with a GET over the `stream()` path, with every check of the other methods (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`), and yields `{ event, data, id, retry }` objects with `for await`, parsed as the WHATWG standard says. What a hostile server controls is bounded: `maxEventSize` (default 64 KiB) bounds one line and one event before anything past it is buffered, `maxBodySize` the whole stream, and `socketTimeoutMs` the time between complete lines, so bytes that never end a line are cut while keep-alive comments keep a quiet stream open. A status that is not 2xx rejects with `UltraTonHttpError`, any other response that is not an event stream with `ERR_ULTRATON_EVENT_STREAM`; an event too large fails with `ERR_ULTRATON_EVENT_TOO_LARGE`. It never reconnects on its own: the README shows a loop with your own limits. New types: `UltraTonEvent`, `UltraTonEventStream`, `UltraTonEventsOptions`.
+
+### Changed
+
+- **Less work per HTTP/1.1 request.** The default `accept-encoding` is added while the call's headers are merged over the client's, in one pass, instead of in a second scan and copy; Node gets only the options it reads instead of every option UltraTon keeps; the per-hop `AbortController` is made only when a proxy tunnel needs it. UltraTon's own share of the CPU on a keep-alive GET loop drops by about a third. Every value of a call is still checked on every call.
+- **Up to 1024 idle HTTP/1.1 sockets per pool**, up from Node's default of 256. With more requests than that in flight, the sockets above 256 were closed as they freed up and the next requests opened new ones. Still one pool per reserved-IP policy, no socket limit, and idle sockets reaped after 5 s.
+- SUPPORT.md: the patches-only period ended with this release, and no new one is announced with a date. It now says what holds instead: semver, opt-in additions, no default moved without a major, and the API snapshot CI enforces.
+- The benchmark harness (`compat/bench`) takes several concurrency levels and a client filter, reports p95 and the new connections each client opened, and has a row for `stream()` with the body drained.
+
+### Security
+
+- **HTTP/2 response headers are capped at 16 KiB, as on HTTP/1.1.** The cap was advertised to the server as `SETTINGS_MAX_HEADER_LIST_SIZE`, but Node enforces it only once the server acknowledges it, so the first streams of every new session accepted header lists up to Node's own 64 KiB ceiling. UltraTon now measures each response's header list (a followed redirect's too) and fails the request with `UltraTonMemoryError` past 16 KiB. A response that passed before can now fail: one whose headers were over the cap, on a new session.
+
 ## [2.9.0] - 2026-10-29
 
 What Ultraman, the first application built on UltraTon (an API testing tool that runs requests in parallel), found missing. It breaks the patches-only period announced with 2.8.0, which SUPPORT.md records and restarts from this release. Every change is opt-in or additive, none loosens a default, and the one that loosens a check (`allowPlainHttp`) is a client option named so it reads as a decision. One type change can break code that compiled: `redirects` is required on the response types (see Changed).

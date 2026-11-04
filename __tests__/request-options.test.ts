@@ -14,6 +14,8 @@ describe('Unit Test: buildSafeRequestOptions (Firewall Helper)', () => {
             timeoutMs: 30000,
             maxRedirects: 0,
             redirectHeaders: 'all',
+            redirectHopHeaders: false,
+            discardBody: false,
             permitReservedIps: false
         });
     });
