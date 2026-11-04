@@ -45,6 +45,17 @@ async function makeClient(name: string): Promise<() => Promise<unknown>> {
             const ultraton = new UltraTonClient({ permitReservedIps: ['127.0.0.1'] });
             return () => ultraton.get(h1Url);
         }
+        case 'UltraTonClient (HTTP/1.1, stream drained)': {
+            // The body read to the end and counted, never kept: what a caller that needs only the status and size does.
+            const { UltraTonClient } = await import('ultraton');
+            const ultraton = new UltraTonClient({ permitReservedIps: ['127.0.0.1'] });
+            return async () => {
+                const res = await ultraton.stream(h1Url);
+                let bytes = 0;
+                for await (const chunk of res.body) bytes += chunk.byteLength;
+                return bytes;
+            };
+        }
         case 'UltraTonClient (HTTP/2)': {
             const { UltraTonClient } = await import('ultraton');
             const ultraton = new UltraTonClient({ http2: true, permitReservedIps: ['127.0.0.1'] });

@@ -32,6 +32,7 @@ const CLIENTS = [
     'got',
     'node-fetch',
     'UltraTonClient (HTTP/1.1)',
+    'UltraTonClient (HTTP/1.1, stream drained)',
     'UltraTonClient (HTTP/2)',
     'axios + createSecureAgents',
 ] as const;
