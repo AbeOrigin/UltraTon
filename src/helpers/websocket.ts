@@ -498,8 +498,19 @@ export class WebSocketConnection implements UltraTonWebSocket {
         if (this.#state === 'open') this.#writeClose(code === 1005 ? undefined : code, '');
         this.#state = 'closed';
         this.#socket.end();
+        this.#discardRest();
         this.#armCloseTimer();
         this.#wakeAll();
+    }
+
+    /**
+     * Nothing reads the socket once the connection is closed, and an unread socket never reaches its end, so it would
+     * not close until the close timer (unref'd) destroyed it: on Linux the process could exit with `close()` still
+     * pending. What still comes is discarded instead, so the server's end closes the socket.
+     */
+    #discardRest(): void {
+        this.#socket.removeAllListeners('readable');
+        this.#socket.resume();
     }
 
     /** Fails the connection: with `closeCode`, the close frame is sent first (RFC 6455 7.1.7), then the socket ends. */
@@ -509,6 +520,7 @@ export class WebSocketConnection implements UltraTonWebSocket {
             this.#writeClose(closeCode, '');
             this.#state = 'closed';
             this.#socket.end();
+            this.#discardRest();
             this.#armCloseTimer();
         } else {
             this.#socket.destroy();

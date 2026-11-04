@@ -252,6 +252,36 @@ describe('websocket(): messages', () => {
         await assert.rejects(ws.send('late'), code('ERR_ULTRATON_WS_CLOSED'));
     });
 
+    // A server that ends the TCP connection only some time after the close handshake (Autobahn's does): nothing reads
+    // the socket once the connection is closed, so it must still reach its end. The close timer is 60 s here, so only
+    // the server's end can settle close() within the test's timeout.
+    it("close() after the server's close settles when the server ends the connection later", { timeout: 10_000 }, async (t) => {
+        const server = await wsServer(t, accepting(async p => {
+            p.socket.write(frame(CLOSE, closePayload(1000, '')));
+            await p.frames.next(); // the client's answer
+            setTimeout(() => p.socket.end(), 100);
+        }));
+        const ws = await client(t, { [kWebSocketCloseTimeout]: 60_000 }).websocket(server.url());
+        for await (const _ of ws) assert.fail('no message');
+        assert.equal(ws.closeCode, 1000);
+        await ws.close();
+    });
+
+    // The same after the client fails the connection (here a reserved bit): its 1002 goes out and the socket ends, and
+    // the server's end must close it. Autobahn's cases 21 and up waited out the whole close timer on Linux.
+    it('close() after the client failed the connection settles when the server ends it later', { timeout: 10_000 }, async (t) => {
+        let answer: number | undefined;
+        const server = await wsServer(t, accepting(async p => {
+            p.socket.write(frame(TEXT, 'x', { rsv: 4 }));
+            answer = closeCodeOf((await p.frames.next()).payload);
+            setTimeout(() => p.socket.end(), 100);
+        }));
+        const ws = await client(t, { [kWebSocketCloseTimeout]: 60_000 }).websocket(server.url());
+        await assert.rejects(ws[Symbol.asyncIterator]().next(), code('ERR_ULTRATON_WS_PROTOCOL'));
+        await ws.close();
+        assert.equal(answer, 1002);
+    });
+
     it('a close without a code is answered with an empty close, never 1005', async (t) => {
         let peer: Peer | undefined;
         const server = await wsServer(t, accepting(p => { peer = p; p.socket.write(frame(CLOSE)); }));
