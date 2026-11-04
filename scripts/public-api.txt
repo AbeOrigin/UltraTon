@@ -56,6 +56,7 @@ export interface UltraTonClientOptions {
     readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
     readonly redirectHeaders?: RedirectHeaders;
+    readonly redirectHopHeaders?: boolean;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
     readonly timings?: boolean;
@@ -150,6 +151,7 @@ export interface UltraTonProxyOptions {
 export interface UltraTonRedirect {
     readonly url: string;
     readonly statusCode: number;
+    readonly headers?: IncomingHttpHeaders;
 }
 
 ## UltraTonRedirectError (errors.d.ts)
@@ -180,6 +182,7 @@ export interface UltraTonRequestOptions {
     readonly timeoutMs?: number;
     readonly maxRedirects?: number;
     readonly redirectHeaders?: RedirectHeaders;
+    readonly redirectHopHeaders?: boolean;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
     readonly timings?: boolean;

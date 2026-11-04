@@ -30,6 +30,7 @@ import {
   declaredBodyLength,
   incompleteResponse,
   NO_REDIRECTS,
+  responseHeaders,
 } from "../helpers/response.ts";
 import {
   basicAuthorization,
@@ -203,7 +204,9 @@ export class Http2Engine {
       ) {
         if (reqOpts.maxRedirects > 0) {
           const next = followRedirect(statusCode, location, parsedUrl, currentOptions, reqOpts, redirects.length, this.#sessionManager.allowPlainHttp);
-          redirects.push(Object.freeze({ url: parsedUrl.href, statusCode }));
+          redirects.push(Object.freeze(reqOpts.redirectHopHeaders
+            ? { url: parsedUrl.href, statusCode, headers: responseHeaders(response.headers) }
+            : { url: parsedUrl.href, statusCode }));
           currentUrl = next.url;
           currentOptions = next.options;
           reqOpts = this.#buildRequestOptions(currentOptions);

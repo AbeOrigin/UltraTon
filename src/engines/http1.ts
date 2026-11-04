@@ -12,7 +12,7 @@ import type { LookupOptions, LookupAddress } from 'node:dns';
 import { promisify } from 'node:util';
 import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, MAX_FREE_SOCKETS, TLS_MIN_VERSION } from '../constants.ts';
 import { followRedirect } from '../helpers/redirect-headers.ts';
-import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS } from '../helpers/response.ts';
+import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS, responseHeaders } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
 import { KEEP_ALIVE } from '../helpers/keep-alive.ts';
 import { frameBody, isSinkClosed, limitRequestBody, StreamedBody } from '../helpers/request-body.ts';
@@ -419,7 +419,9 @@ export class Http1Engine {
 
             if (hop.isRedirect && hop.headers.location && reqOpts.maxRedirects > 0) {
                 const next = followRedirect(hop.statusCode, hop.headers.location, urlObj, currentOptions, reqOpts, redirects.length, this.#allowPlainHttp);
-                redirects.push(Object.freeze({ url: urlObj.href, statusCode: hop.statusCode }));
+                redirects.push(Object.freeze(reqOpts.redirectHopHeaders
+                    ? { url: urlObj.href, statusCode: hop.statusCode, headers: responseHeaders(hop.headers) }
+                    : { url: urlObj.href, statusCode: hop.statusCode }));
                 currentUrl = next.url;
                 currentOptions = next.options;
                 reqOpts = buildSafeRequestOptions(currentOptions);

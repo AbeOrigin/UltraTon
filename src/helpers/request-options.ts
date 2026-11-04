@@ -171,12 +171,12 @@ function evaluateHeaders(fn: HeadersFunction, context: UltraTonHeadersContext): 
 const USER_AGENT_TWICE = "UltraTon: Set the user agent with either 'userAgent' or a 'user-agent' header, not both.";
 
 /** The per-request options a caller may pass. `method` is not one of them: the client method being called sets it. */
-const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
+const REQUEST_OPTION_KEYS = ['headers', 'query', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'redirectHopHeaders', 'permitReservedIps', 'signal', 'auth', 'json', 'form', 'body', 'retry', 'timings'];
 /** What buildSafeRequestOptions accepts: the options above plus the `method` the client methods set internally. */
 const ACCEPTED_KEYS = new Set([...REQUEST_OPTION_KEYS, 'method']);
 
 /** The options of `new UltraTonClient(options)`. */
-const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
+const CLIENT_OPTION_KEYS = ['baseUrl', 'headers', 'timeoutMs', 'socketTimeoutMs', 'maxBodySize', 'maxRequestBodySize', 'decompress', 'maxRedirects', 'redirectHeaders', 'redirectHopHeaders', 'permitReservedIps', 'retry', 'http2', 'tls', 'userAgent', 'proxy', 'maxConcurrency', 'timings', 'allowPlainHttp'];
 const CLIENT_KEYS = new Set(CLIENT_OPTION_KEYS);
 const TLS_OPTION_KEYS = ['ca', 'cert', 'key'] as const;
 
@@ -636,6 +636,7 @@ export function buildSafeRequestOptions(options: InternalRequestOptions | Resolv
         throw new TypeError(`UltraTon: Expected 'redirectHeaders' to be 'all' or 'safe', received ${received}.`);
     }
     safeOptions.redirectHeaders = options.redirectHeaders ?? 'all';
+    safeOptions.redirectHopHeaders = validateType('redirectHopHeaders', options.redirectHopHeaders, 'boolean') ? options.redirectHopHeaders : false;
     // Strict fallback: block SSRF
     safeOptions.permitReservedIps = reservedIpPolicy(options.permitReservedIps);
 
@@ -663,6 +664,7 @@ export interface ClientDefaults {
     readonly maxRequestBodySize?: number;
     readonly maxRedirects?: number;
     readonly redirectHeaders?: RedirectHeaders;
+    readonly redirectHopHeaders?: boolean;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly decompress?: boolean;
     readonly retry?: RetryInput;
@@ -854,6 +856,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
         maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
         maxRedirects: raw.maxRedirects as number | undefined,
         redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
+        redirectHopHeaders: raw.redirectHopHeaders as boolean | undefined,
         permitReservedIps: raw.permitReservedIps as ReservedIpPolicy | undefined,
         decompress: raw.decompress as boolean | undefined,
     });
@@ -913,6 +916,7 @@ export function resolveClientOptions(options: unknown, defaultUserAgent: string)
             maxRequestBodySize: raw.maxRequestBodySize as number | undefined,
             maxRedirects: raw.maxRedirects as number | undefined,
             redirectHeaders: raw.redirectHeaders as RedirectHeaders | undefined,
+            redirectHopHeaders: raw.redirectHopHeaders as boolean | undefined,
             permitReservedIps: raw.permitReservedIps === undefined ? undefined : safe.permitReservedIps,
             decompress: raw.decompress as boolean | undefined,
             retry: retryOption(raw.retry),
@@ -944,6 +948,7 @@ export function mergeClientDefaults(options: ResolvedRequestOptions, defaults: C
         maxRequestBodySize: or(own.maxRequestBodySize, defaults.maxRequestBodySize),
         maxRedirects: or(own.maxRedirects, defaults.maxRedirects),
         redirectHeaders: or(own.redirectHeaders, defaults.redirectHeaders),
+        redirectHopHeaders: or(own.redirectHopHeaders, defaults.redirectHopHeaders),
         permitReservedIps: or(own.permitReservedIps, defaults.permitReservedIps),
         decompress,
         signal: own.signal,

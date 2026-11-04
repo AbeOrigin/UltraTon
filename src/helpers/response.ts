@@ -31,6 +31,23 @@ export const incompleteResponse = (cause?: unknown) =>
   new UltraTonNetworkError("UltraTon: Connection failed (ECONNRESET).", { code: "ECONNRESET", cause });
 
 /**
+ * A response's headers as the caller gets them, on a final response or a redirect hop: HTTP/2 pseudo-headers (':status',
+ * ...) are protocol framing and dropped. `__proto__` is defined, not assigned: on a plain object `headers['__proto__'] = v`
+ * would set the prototype (or be ignored) instead of keeping a header the server named `__proto__` (node:http2 hands it
+ * over as an ordinary key) as data. Every other key is assigned: only `__proto__` has a setter on a plain object, and
+ * defineProperty per header was a measurable share of every response.
+ */
+export function responseHeaders(rawHeaders: IncomingHttpHeaders): IncomingHttpHeaders {
+  const headers: IncomingHttpHeaders = {};
+  for (const key of Object.keys(rawHeaders)) {
+    if (key.startsWith(":")) continue;
+    if (key === "__proto__") Object.defineProperty(headers, key, { value: rawHeaders[key], enumerable: true, writable: true, configurable: true });
+    else headers[key] = rawHeaders[key];
+  }
+  return headers;
+}
+
+/**
  * Builds the response both engines hand to the caller. The body stays a raw Buffer: JSON is parsed only when
  * `json()` is called, so a huge or malformed payload cannot fail (or block) the request itself.
  * HTTP/2 pseudo-headers (':status', ...) are protocol framing, not response headers, so they are dropped.
@@ -42,16 +59,7 @@ export function createResponse<T = unknown>(
   url = "",
   redirects: readonly UltraTonRedirect[] = NO_REDIRECTS,
 ): UltraTonResponse<T> {
-  // `__proto__` is defined, not assigned: on a plain object `headers['__proto__'] = v` would set the prototype (or be
-  // ignored) instead of keeping a header the server named `__proto__` (node:http2 hands it over as an ordinary key) as
-  // data. Every other key is assigned: only `__proto__` has a setter on a plain object, and defineProperty per header
-  // was a measurable share of every response.
-  const headers: IncomingHttpHeaders = {};
-  for (const key of Object.keys(rawHeaders)) {
-    if (key.startsWith(":")) continue;
-    if (key === "__proto__") Object.defineProperty(headers, key, { value: rawHeaders[key], enumerable: true, writable: true, configurable: true });
-    else headers[key] = rawHeaders[key];
-  }
+  const headers = responseHeaders(rawHeaders);
 
   // A leading byte order mark is not content, as fetch reads it; `data` keeps the raw bytes.
   const text = (): string => {

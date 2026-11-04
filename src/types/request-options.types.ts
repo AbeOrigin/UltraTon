@@ -123,6 +123,14 @@ export interface UltraTonRequestOptions {
     readonly redirectHeaders?: RedirectHeaders;
 
     /**
+     * Keep each followed redirect's response headers on its entry of `redirects` (see {@link UltraTonRedirect.headers}):
+     * to audit a redirect chain, or to read a hop's `set-cookie` when you keep cookies yourself (UltraTon keeps none).
+     * Each hop's headers are bounded as a final response's are. Default false: the entries carry `url` and `statusCode`
+     * only, and no hop's headers are kept in memory.
+     */
+    readonly redirectHopHeaders?: boolean;
+
+    /**
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
      * `true` allows all of them: set it ONLY if you are building an internal API client.
      * An array allows just what it names: IPs (`'10.0.0.5'`), CIDRs (`'10.0.0.0/8'`) and exact,
@@ -251,6 +259,7 @@ export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
     readonly timeoutMs: number;
     readonly maxRedirects: number;
     readonly redirectHeaders: RedirectHeaders;
+    readonly redirectHopHeaders: boolean;
     readonly permitReservedIps: ReservedIpPolicy;
 }
 
@@ -317,6 +326,9 @@ export interface UltraTonClientOptions {
 
     /** Default `redirectHeaders` for every request. See {@link UltraTonRequestOptions.redirectHeaders}. */
     readonly redirectHeaders?: RedirectHeaders;
+
+    /** Default `redirectHopHeaders` for every request. See {@link UltraTonRequestOptions.redirectHopHeaders}. */
+    readonly redirectHopHeaders?: boolean;
 
     /**
      * Default `permitReservedIps` for every request. See {@link UltraTonRequestOptions.permitReservedIps}. A list is

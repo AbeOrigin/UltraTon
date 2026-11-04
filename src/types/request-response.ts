@@ -7,6 +7,11 @@ export interface UltraTonRedirect {
     readonly url: string;
     /** The redirect status: 301, 302, 303, 307 or 308. */
     readonly statusCode: number;
+    /**
+     * That hop's response headers (`set-cookie`, `location`, ...), as `headers` on a response. Only with
+     * `redirectHopHeaders`; otherwise absent.
+     */
+    readonly headers?: IncomingHttpHeaders;
 }
 
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */

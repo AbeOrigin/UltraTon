@@ -160,6 +160,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `decompress` | `boolean` | `true`: sends `accept-encoding` (unless you set one) and decodes the body. `false` leaves `data` as received. |
 | `maxRedirects` | integer 0–20 | `0` |
 | `redirectHeaders` | `'all' \| 'safe'` | `'all'`: on a redirect to another origin, every header but the credential ones follows. `'safe'`: only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` do, so an `x-api-key` stays behind. A same-origin redirect keeps every header. |
+| `redirectHopHeaders` | `boolean` | `false`. `true` keeps each followed redirect's response headers on its entry of `redirects`: to audit a chain, or to read a hop's `set-cookie` when you keep cookies yourself (UltraTon keeps none). Bounded as a final response's headers are. |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
 | `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
 | `timings` | `boolean` | `false`. `true` puts `timings` on the response: where the time of that call went (see [Observability](#observability)). |
@@ -173,7 +174,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `headers` | `IncomingHttpHeaders` | Never contains HTTP/2 pseudo-headers. |
 | `url` | `string` | The final URL, after any redirect that was followed. |
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
-| `redirects` | `readonly { url, statusCode }[]` | The redirects followed, in order: the URL that answered each one and its status (where it led is the next entry's `url`, or the response's). Empty when none was followed. |
+| `redirects` | `readonly { url, statusCode, headers? }[]` | The redirects followed, in order: the URL that answered each one and its status (where it led is the next entry's `url`, or the response's). Empty when none was followed. `headers`, that hop's response headers, only with `redirectHopHeaders`. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
 | `timings` | `UltraTonTimings \| undefined` | With the `timings` option: DNS, connect, TLS, first byte, queue and total of this call, in ms (see [Observability](#observability)). `totalMs` runs until the body was read (on `stream()`, until the headers). |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |
