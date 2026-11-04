@@ -354,6 +354,32 @@ describe('websocket(): time', () => {
         await assert.rejects(cut[Symbol.asyncIterator]().next(), code('ERR_ULTRATON_SOCKET_TIMEOUT'));
     });
 
+    it('fragments keep a slow message alive: the clock runs between frames, not messages', async (t) => {
+        const server = await wsServer(t, accepting(({ socket }) => {
+            let i = 0;
+            const id = setInterval(() => {
+                if (!socket.writable) return clearInterval(id);
+                const last = ++i === 6;
+                socket.write(frame(i === 1 ? TEXT : 0x0, 'ab', { fin: last }));
+                if (last) clearInterval(id);
+            }, 200);
+            socket.on('close', () => clearInterval(id));
+        }));
+        const ws = await client(t).websocket(server.url(), { socketTimeoutMs: 300 });
+        assert.deepEqual(await ws[Symbol.asyncIterator]().next(), { done: false, value: 'ab'.repeat(6) });
+        await ws.close();
+    });
+
+    it('an http2 client closed while websocket() validates opens nothing', async (t) => {
+        const server = await wsServer(t, echo);
+        const c = client(t, { http2: true });
+        const opening = c.websocket(server.url());
+        await c.close();
+        await assert.rejects(opening, /Client is closed/);
+        await sleep(50);
+        assert.equal(server.upgrades(), 0);
+    });
+
     it('maxConcurrency: a second connection to the origin waits until the first one closes', async (t) => {
         const server = await wsServer(t, echo);
         const c = client(t, { maxConcurrency: 1 });
@@ -391,6 +417,21 @@ function stalled(socketTimeoutMs = 0) {
     });
     return { socket, ws };
 }
+
+describe('websocket(): a socket that closed before the connection was built', () => {
+    it('close() still resolves', async () => {
+        const socket = new StalledSocket();
+        socket.destroy();
+        await new Promise(resolve => socket.once('close', resolve));
+        let closed = 0;
+        const ws = new WebSocketConnection(socket, Buffer.alloc(0), {
+            url: 'ws://127.0.0.1/', headers: {}, protocol: '', maxMessageSize: 1024, socketTimeoutMs: 0, pingIntervalMs: 0, closeTimeoutMs: 100, onClosed: () => { closed++; },
+        });
+        await assert.rejects(ws[Symbol.asyncIterator]().next(), (err: any) => err?.name === 'UltraTonNetworkError');
+        await ws.close();
+        assert.equal(closed, 1);
+    });
+});
 
 describe('websocket(): a server that stops reading', () => {
     it('send() rejects once more than 1 MiB is queued, and resolves once written', async () => {

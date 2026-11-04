@@ -229,10 +229,16 @@ export class UltraTonClient {
                 ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy, resolved.allowPlainHttp))
                 : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy, resolved.allowPlainHttp);
             let upgrades = engine instanceof Http1Engine ? engine : undefined;
+            let engineClosed = false;
             this.#shared = {
                 engine,
-                upgrades: () => (upgrades ??= new Http1Engine(resolved.tls, undefined, resolved.proxy, resolved.allowPlainHttp)),
+                // Never made once closed: an engine made after close() would never be closed.
+                upgrades: () => {
+                    if (engineClosed) throw clientClosed();
+                    return (upgrades ??= new Http1Engine(resolved.tls, undefined, resolved.proxy, resolved.allowPlainHttp));
+                },
                 close: () => {
+                    engineClosed = true;
                     engine.close();
                     if (upgrades !== engine) upgrades?.close();
                 },
@@ -396,6 +402,8 @@ export class UltraTonClient {
         const headersFn = this.#defaults.headersFn;
         const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method: 'GET', url: wsUrl })) } : this.#defaults;
         const merged = mergeClientDefaults((await resolveRequestBody(requested)).options, defaults);
+        // close() may have run during that await: nothing may be resolved, opened or sent after it.
+        if (this.#closed) throw clientClosed();
         const headers = (merged.headers ?? {}) as Record<string, unknown>;
         for (const name of Object.keys(headers)) {
             const lower = name.toLowerCase();

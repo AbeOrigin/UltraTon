@@ -64,10 +64,16 @@ export class FrameParser {
     #controlHave = 0;
     /** The opcode of the message whose fragments are being gathered; 0 when none. */
     #messageOpcode = 0;
+    #frames = 0;
     #message = new LineBuffer();
 
     constructor(maxMessageSize: number) {
         this.#maxMessageSize = maxMessageSize;
+    }
+
+    /** How many frames were read whole so far, fragments included. */
+    get frames(): number {
+        return this.#frames;
     }
 
     /** Feeds bytes; returns what is complete so far, in order. Throws a FrameError on the first violation. */
@@ -94,6 +100,7 @@ export class FrameParser {
             }
             if (this.#remaining > 0) break;
             this.#inFrame = false;
+            this.#frames++;
             const done = this.#finishFrame();
             if (done) out.push(done);
         }
@@ -333,7 +340,7 @@ export class WebSocketConnection implements UltraTonWebSocket {
         // The timeout the agent or the request armed on the socket would still fire: the timers here replace it.
         net.setTimeout?.(0);
         net.setNoDelay?.(true);
-        this.#closed = new Promise(resolve => socket.once('close', resolve));
+        this.#closed = socket.closed ? Promise.resolve() : new Promise(resolve => socket.once('close', resolve));
         socket.on('readable', () => this.#wakeAll());
         socket.on('drain', () => {
             const pong = this.#pendingPong;
@@ -458,6 +465,7 @@ export class WebSocketConnection implements UltraTonWebSocket {
 
     #feed(chunk: Buffer): void {
         let items: Incoming[];
+        const framesBefore = this.#parser.frames;
         try {
             items = this.#parser.push(chunk);
         } catch (err: unknown) {
@@ -465,9 +473,11 @@ export class WebSocketConnection implements UltraTonWebSocket {
             this.#fail(err.closeCode === 1009 ? wsMessageTooLarge(this.#settings.maxMessageSize) : wsProtocol(err.message), err.closeCode);
             return;
         }
-        if (items.length === 0) return;
-        this.#lastFrameAt = performance.now();
-        this.#pingSentAt = undefined;
+        // Any complete frame is the server being there, a fragment of a message not complete yet included.
+        if (this.#parser.frames !== framesBefore) {
+            this.#lastFrameAt = performance.now();
+            this.#pingSentAt = undefined;
+        }
         for (const item of items) {
             if (item.kind === 'message') {
                 if (this.#state === 'open') this.#messages.push(item.data);
