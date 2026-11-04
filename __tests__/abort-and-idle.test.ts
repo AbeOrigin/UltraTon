@@ -157,6 +157,23 @@ describe('AbortSignal rejects with the signal reason on both engines', () => {
         controller.abort();
         assert.equal(response.text(), 'ok');
       });
+
+      it('aborting on the hop a followed redirect led to rejects with the reason', { timeout: 5000 }, async (t) => {
+        let reached = 0;
+        const { url, client } = await startServer(t, engine, {
+          // The first request is redirected to /next; /next never answers.
+          respond: (res) => {
+            if (reached++ > 0) return;
+            if ('respond' in res) { res.respond({ ':status': 302, location: '/next' }); res.end(); }
+            else { res.writeHead(302, { location: '/next' }); res.end(); }
+          },
+        });
+        const reason = new Error('stop on the second hop');
+        const started = Date.now();
+        await assert.rejects(client.get(url, { maxRedirects: 1, signal: abortIn(150, reason) }), (err: unknown) => err === reason);
+        assert.ok(Date.now() - started < 1000, `rejected in ${Date.now() - started}ms`);
+        assert.equal(reached, 2, 'the redirect was followed before the abort');
+      });
     });
   }
 });

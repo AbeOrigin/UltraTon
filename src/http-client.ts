@@ -7,7 +7,7 @@ import { VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, timingsOption, withAcceptEncoding, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, timingsOption, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
@@ -457,7 +457,7 @@ export class UltraTonClient {
         const body = pending instanceof Promise ? await pending : pending;
         // A stream can only be read once: a request with one is sent once, whatever the retry option says.
         const retry = body.options.body instanceof StreamedBody ? undefined : retryPolicy;
-        const merged = withAcceptEncoding(mergeClientDefaults(body.options, defaults));
+        const merged = mergeClientDefaults(body.options, defaults);
         const resolvedOptions = requested.json === undefined ? withBodyContentType(merged, body.contentType) : withJsonContentType(merged);
         // diagnostics_channel: started once the options are valid, so a TypeError for bad input publishes nothing.
         // Without it, and without `timings`, the engines get no timings to measure.
