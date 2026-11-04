@@ -759,7 +759,7 @@ The [SSRF corpus results](compat/ssrf-corpus/RESULTS.md) show, case by case, wha
 
 ## Support and contributing
 
-[SUPPORT.md](SUPPORT.md) lists the supported Node.js and UltraTon versions, how long an old major gets security fixes, what counts as a breaking change, and the current stability period (patches only from 2.9.0 to at least 2027-01-29). [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and send a change.
+[SUPPORT.md](SUPPORT.md) lists the supported Node.js and UltraTon versions, how long an old major gets security fixes, what counts as a breaking change, and how the API changes (semver, opt-in additions, a recorded API snapshot). [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, test and send a change.
 
 ## License
 

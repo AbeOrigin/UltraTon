@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.10.0] - 2026-11-04
+
+What the first application built on UltraTon (an API testing tool that runs requests in parallel) asked for after its load tests: Server-Sent Events from servers you do not control, the headers of each redirect hop, a way to read a body without keeping it, and less CPU per request. It ends the patches-only period restarted with 2.9.0; SUPPORT.md says why and what holds instead. Every addition is opt-in and no default moved.
+
 ### Added
 
 - **`redirectHopHeaders` option: each redirect hop's response headers.** With `redirectHopHeaders: true`, on the client or on one request, each entry of `res.redirects` carries `headers`, that hop's response headers built as a final response's are (no HTTP/2 pseudo-headers, a `__proto__` header kept as data), on both engines and on `stream()`. It is for auditing a redirect chain and for callers that keep cookies themselves and need a hop's `set-cookie`, such as a log-in that sets the session on a 302: UltraTon still keeps no cookie jar, and follows the redirect with its own rules (credentials on their origin, `redirectHeaders`, the https to http refusal) instead of the caller re-implementing them. Off by default: the entries stay `{ url, statusCode }` and no hop's headers are kept.
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Less work per HTTP/1.1 request.** The default `accept-encoding` is added while the call's headers are merged over the client's, in one pass, instead of in a second scan and copy; Node gets only the options it reads instead of every option UltraTon keeps; the per-hop `AbortController` is made only when a proxy tunnel needs it. UltraTon's own share of the CPU on a keep-alive GET loop drops by about a third. Every value of a call is still checked on every call.
 - **Up to 1024 idle HTTP/1.1 sockets per pool**, up from Node's default of 256. With more requests than that in flight, the sockets above 256 were closed as they freed up and the next requests opened new ones. Still one pool per reserved-IP policy, no socket limit, and idle sockets reaped after 5 s.
+- SUPPORT.md: the patches-only period ended with this release, and no new one is announced with a date. It now says what holds instead: semver, opt-in additions, no default moved without a major, and the API snapshot CI enforces.
 - The benchmark harness (`compat/bench`) takes several concurrency levels and a client filter, reports p95 and the new connections each client opened, and has a row for `stream()` with the body drained.
 
 ## [2.9.0] - 2026-10-29

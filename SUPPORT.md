@@ -25,17 +25,16 @@ UltraTon supports every Node.js line from 22.12 on that is still maintained upst
 
 When a new major ships, the previous one keeps getting **security fixes for 6 months**, then stops.
 
-## Stability period: 2.9.0 to 2027-01-29
+## How the API changes
 
-2.0.0 to 2.8.0 shipped in five days. Each release is documented and tested, but an API that moves that fast is not one you can build on, so from 2.9.0 (2026-10-29) and **for at least three months**:
+**There is no patches-only period today.** One was announced from 2.8.0 and restarted from 2.9.0 (2026-10-29) for at least three months. It ended early, with 2.10.0 (2026-11-04): the first application built on UltraTon needed what that release adds (Server-Sent Events, the headers of each redirect hop, reading a body without keeping it) and less CPU per request, and three months of workarounds in its first adopter would have cost more than the promise was worth. Two announced periods ended early in two weeks, so no new one is announced with a date: a date is only worth what keeping it is.
 
-- **Only patch releases (2.9.x).** Bug fixes, security fixes and documentation. No new options, methods, exports or error codes, and no change of behaviour that is not a fix.
-- **The public API is frozen and CI enforces it.** `scripts/public-api.txt` is the snapshot of every exported type and signature, and of every error code; a change fails CI unless the snapshot is updated on purpose, and in this period it is not.
-- **The one exception is a security fix that cannot be made without a new option.** It ships in a minor, the CHANGELOG says why under "Security", and nothing else comes with it.
+What holds instead, and what you can check:
 
-**The period was first announced from 2.8.0 (2026-10-23), and 2.9.0 broke it six days later.** Ultraman, the first application built on UltraTon, found six gaps it could only work around (timings per response, plain http to internal services, self-signed dev servers, the redirect chain, a code for out-of-range options, custom methods), and fixing them in the first week cost less than three months of workarounds in the first adopter. Every change in 2.9.0 is opt-in or additive and no default moved; one is a type change that can break code that compiled (`redirects` is required on the response types), which the CHANGELOG lists. The period restarts from 2.9.0 instead of keeping a date it no longer earns, and this is the one time: an adopter's request that needs a new option waits until the period ends.
-
-What the period is for: feedback on the 2.7 to 2.9 additions (`explain()`, `extend()`, `assertOk()`, `redirectHeaders`, `maxConcurrency`, the `headers` function, the diagnostics timings, `timings` and `redirects` on the response, `allowPlainHttp`, `client.request()`) before anything is built on top of them, and a track record an adopter can check: the CHANGELOG and the API snapshot between two dates. Candidates for a later major are listed in the CHANGELOG as they come up (today: `redirectHeaders: 'safe'` as the default), and none of them ships before the period ends.
+- **Semver, as below.** A new option, method or error code ships in a minor; nothing you rely on changes outside a major.
+- **Every addition is opt-in, and no default moves without a major**, except to close a security hole (see below). 2.9.0 and 2.10.0 kept to that: every change in both is opt-in or additive.
+- **The public API is recorded and CI enforces it.** `scripts/public-api.txt` is the snapshot of every exported type and signature, and of every error code; a change fails CI unless the snapshot is updated on purpose, in the same commit, where the diff shows exactly what changed.
+- **The CHANGELOG lists every change**, and candidates for a later major as they come up (today: `redirectHeaders: 'safe'` as the default).
 
 ## What counts as a breaking change
 
