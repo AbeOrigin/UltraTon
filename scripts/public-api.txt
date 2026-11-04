@@ -130,7 +130,7 @@ export declare class UltraTonNetworkTimeoutError extends UltraTonNetworkError {
 }
 
 ## UltraTonPaginateOptions (types/request-options.types.d.ts)
-export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body'> {
+export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body' | 'discardBody'> {
     readonly next?: (page: UltraTonResponse<T>) => string | URL | null | undefined;
     readonly maxPages?: number;
 }
@@ -183,6 +183,7 @@ export interface UltraTonRequestOptions {
     readonly maxRedirects?: number;
     readonly redirectHeaders?: RedirectHeaders;
     readonly redirectHopHeaders?: boolean;
+    readonly discardBody?: boolean;
     readonly permitReservedIps?: ReservedIpPolicy;
     readonly retry?: number | UltraTonRetryOptions;
     readonly timings?: boolean;
@@ -219,6 +220,7 @@ export interface UltraTonResponse<T = unknown> {
     readonly redirected: boolean;
     readonly redirects: readonly UltraTonRedirect[];
     readonly data: Buffer;
+    readonly bodySize?: number;
     readonly timings?: UltraTonTimings;
     json<R = T>(): R;
     text(): string;
@@ -264,7 +266,7 @@ export interface UltraTonSecureAgents {
 export type UltraTonStreamMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
 ## UltraTonStreamOptions (types/request-options.types.d.ts)
-export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
+export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize' | 'discardBody'> {
     readonly method?: UltraTonStreamMethod | (string & {});
     readonly maxBodySize?: number;
 }

@@ -415,7 +415,7 @@ export class Http2Engine {
           if (!stream.closed && !stream.destroyed) {
             stream.close(stream.endAfterHeaders ? constants.NGHTTP2_NO_ERROR : constants.NGHTTP2_CANCEL);
           }
-          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0), undefined, undefined, reqOpts.discardBody ? 0 : undefined));
         }
 
         if (pseudoHeaders[":method"] === "HEAD") {
@@ -427,7 +427,7 @@ export class Http2Engine {
             const empty = new ReadableStream<Uint8Array>({ start: (controller) => controller.close() });
             return resolve(createStreamResponse(statusCode, responseHeaders, empty, streaming.url, streaming.redirects));
           }
-          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0)));
+          return resolve(createResponse<T>(statusCode, responseHeaders, Buffer.alloc(0), undefined, undefined, reqOpts.discardBody ? 0 : undefined));
         }
 
         // A stream hands the body over with the headers: timeoutMs covered the wait for them, and from here the body
@@ -478,6 +478,7 @@ export class Http2Engine {
           maxBodySize,
           contentEncoding: headers["content-encoding"],
           decompress,
+          discard: reqOpts.discardBody,
           tooLarge: () => bodyTooLarge(maxBodySize),
           // A decoding failure or a decoded overflow, reported after the chunk that caused it was taken.
           onError: (err) => {
@@ -555,7 +556,7 @@ export class Http2Engine {
           (data) => {
             if (signal?.aborted) return reject(signal.reason);
             if (this.#closed) return reject(clientClosed());
-            resolve(createResponse<T>(status, responseHeaders, data));
+            resolve(createResponse<T>(status, responseHeaders, data, undefined, undefined, reqOpts.discardBody ? (reader?.size ?? 0) : undefined));
           },
           reject,
         );

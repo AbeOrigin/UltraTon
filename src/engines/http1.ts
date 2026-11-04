@@ -131,7 +131,7 @@ export class Http1Engine {
         req: ClientRequest,
         reqOpts: SecureUltraTonRequestOptions,
         executionTimer: NodeJS.Timeout | undefined
-    ): Promise<{ data: Buffer, wireBytes: number }> {
+    ): Promise<{ data: Buffer, wireBytes: number, size: number }> {
         // A decoding failure or a decoded overflow surfaces asynchronously: destroying the request ends the loop below.
         const reader = new BodyReader({
             maxBodySize: reqOpts.maxBodySize,
@@ -139,6 +139,7 @@ export class Http1Engine {
             decompress: reqOpts.decompress,
             tooLarge: () => bodyTooLarge(reqOpts.maxBodySize),
             onError: () => req.destroy(),
+            discard: reqOpts.discardBody,
         });
 
         try {
@@ -179,7 +180,7 @@ export class Http1Engine {
             // close() or an abort during that last stretch wins over the decoded body, as it would mid-body.
             if (reqOpts.signal?.aborted) throw reqOpts.signal.reason;
             if (this.#closed) throw clientClosed();
-            return { data, wireBytes: reader.wireBytes };
+            return { data, wireBytes: reader.wireBytes, size: reader.size };
         } finally {
             clearTimeout(executionTimer);
         }
@@ -193,7 +194,7 @@ export class Http1Engine {
         followRedirects: boolean,
         stream?: { maxBodySize: number },
         phases?: HopTimings
-    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, isRedirect: boolean, body?: ReadableStream<Uint8Array> }> {
+    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, bodySize?: number, isRedirect: boolean, body?: ReadableStream<Uint8Array> }> {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
@@ -329,7 +330,7 @@ export class Http1Engine {
                 }
 
                 this._consumeResponseBuffer(res, req as ClientRequest, reqOpts, executionTimer)
-                    .then(({ data, wireBytes }) => {
+                    .then(({ data, wireBytes, size }) => {
                         // llhttp already fails a body cut short of its content-length; checked here too so both
                         // engines share one rule and a truncated body can never resolve as a success. The
                         // content-length counts the bytes on the wire, before any content-encoding is undone.
@@ -339,6 +340,7 @@ export class Http1Engine {
                             statusCode: res.statusCode as number,
                             headers: res.headers,
                             data,
+                            bodySize: reqOpts.discardBody ? size : undefined,
                             isRedirect: false
                         });
                         stopUpload();
@@ -430,7 +432,7 @@ export class Http1Engine {
 
             const followed = redirects.length > 0 ? Object.freeze(redirects) : NO_REDIRECTS;
             if (hop.body) return createStreamResponse(hop.statusCode, hop.headers, hop.body, currentUrl, followed);
-            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, followed);
+            return createResponse<T>(hop.statusCode, hop.headers, hop.data, currentUrl, followed, hop.bodySize);
         }
     }
 }

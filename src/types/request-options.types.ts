@@ -131,6 +131,14 @@ export interface UltraTonRequestOptions {
     readonly redirectHopHeaders?: boolean;
 
     /**
+     * Read the body to the end and keep none of it: `data` is empty and `bodySize` says how many bytes came (decoded).
+     * For health checks and probes that need only the status and the size, without holding the body in memory.
+     * `maxBodySize`, the timeouts and the check of a body cut short still apply. Default false. A request option only:
+     * `stream()` and `paginate()` refuse it.
+     */
+    readonly discardBody?: boolean;
+
+    /**
      * Allows resolution of internal/reserved IPs (like localhost or private network space).
      * `true` allows all of them: set it ONLY if you are building an internal API client.
      * An array allows just what it names: IPs (`'10.0.0.5'`), CIDRs (`'10.0.0.0/8'`) and exact,
@@ -212,7 +220,7 @@ export interface UltraTonRetryInfo {
 }
 
 /** The options of `client.stream()`: the request options plus the method, and a `maxBodySize` that may go past 2 GiB. */
-export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize'> {
+export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'maxBodySize' | 'discardBody'> {
     /** The HTTP method, in uppercase: one of the seven or one of your own (`PROPFIND`), but not CONNECT. Default 'GET'. */
     readonly method?: UltraTonStreamMethod | (string & {});
     /**
@@ -224,7 +232,7 @@ export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'max
 }
 
 /** The options of `client.paginate()`: the GET options (no body), plus how to find the next page and when to stop. */
-export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body'> {
+export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body' | 'discardBody'> {
     /**
      * Returns the next page's URL, or `undefined` or `null` when this page is the last. An absolute URL is taken as is;
      * a path is read as `get()` reads one: under `baseUrl`, from the base ('/items' and 'items' alike, with its path
@@ -260,6 +268,7 @@ export interface SecureUltraTonRequestOptions extends InternalRequestOptions {
     readonly maxRedirects: number;
     readonly redirectHeaders: RedirectHeaders;
     readonly redirectHopHeaders: boolean;
+    readonly discardBody: boolean;
     readonly permitReservedIps: ReservedIpPolicy;
 }
 

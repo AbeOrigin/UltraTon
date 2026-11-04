@@ -39,6 +39,8 @@ export interface UltraTonResponse<T = unknown> {
     readonly redirects: readonly UltraTonRedirect[];
     /** The raw response payload. Never parsed automatically; empty for HEAD and bodiless responses. */
     readonly data: Buffer;
+    /** With `discardBody`: how many bytes the body had, decoded (`data` is then empty). Absent otherwise. */
+    readonly bodySize?: number;
     /**
      * Where the time of this call went, phase by phase on the hop that got the response, and `totalMs` until the body
      * was read (every redirect and retry included). Only with the `timings` option; `undefined` otherwise.

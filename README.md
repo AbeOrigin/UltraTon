@@ -140,7 +140,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `proxy` | `string` or `{ url, auth, ca, resolve }` | Outbound HTTP CONNECT or SOCKS5 proxy for `https:` targets, tunnelled to the validated IP (see [Proxy](#proxy)). |
 | `headers` | plain object, or `(ctx) => headers` | Sent with every request; a request header with the same name (any case) wins. A function is called once per call (not per retry or redirect hop) with `{ method, url }`, for values that change per request: `headers: () => ({ traceparent: currentTraceparent() })`. What it returns is validated as static headers are, and it can only set headers. |
 | `maxConcurrency` | integer from 1 | At most this many calls in flight at once per origin; the rest wait in order, and the wait counts against `timeoutMs`. Unset: no limit. See [Limits and things to know](#limits-and-things-to-know). |
-| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `permitReservedIps`, `retry`, `timings` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
+| `timeoutMs`, `socketTimeoutMs`, `maxBodySize`, `maxRequestBodySize`, `maxRedirects`, `redirectHopHeaders`, `permitReservedIps`, `retry`, `timings` | | Defaults for every request. A request that sets the same option wins; `retry` is merged key by key. |
 
 **Request options** are the second argument of every method:
 
@@ -161,6 +161,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `maxRedirects` | integer 0–20 | `0` |
 | `redirectHeaders` | `'all' \| 'safe'` | `'all'`: on a redirect to another origin, every header but the credential ones follows. `'safe'`: only `accept`, `accept-encoding`, `accept-language`, `user-agent`, `content-type` and `content-length` do, so an `x-api-key` stays behind. A same-origin redirect keeps every header. |
 | `redirectHopHeaders` | `boolean` | `false`. `true` keeps each followed redirect's response headers on its entry of `redirects`: to audit a chain, or to read a hop's `set-cookie` when you keep cookies yourself (UltraTon keeps none). Bounded as a final response's headers are. |
+| `discardBody` | `boolean` | `false`. `true` reads the body to the end and keeps none of it: `data` is empty and `bodySize` says how many bytes came, decoded. For health checks and probes that need only the status and the size. `maxBodySize`, the timeouts and the check of a body cut short still apply. Not a client default; `stream()` and `paginate()` refuse it. |
 | `permitReservedIps` | `boolean \| string[]` | `false` |
 | `retry` | integer 0–10 or `{ limit, methods, statusCodes, maxDelayMs, onRetry }` | `0` (off). See [Retries](#retries). |
 | `timings` | `boolean` | `false`. `true` puts `timings` on the response: where the time of that call went (see [Observability](#observability)). |
@@ -176,6 +177,7 @@ How they compare, with each library's defaults (UltraTon 2.x, Node 24's `fetch`,
 | `redirected` | `boolean` | `true` when at least one redirect was followed. |
 | `redirects` | `readonly { url, statusCode, headers? }[]` | The redirects followed, in order: the URL that answered each one and its status (where it led is the next entry's `url`, or the response's). Empty when none was followed. `headers`, that hop's response headers, only with `redirectHopHeaders`. |
 | `data` | `Buffer` | The raw body. It is never parsed automatically. |
+| `bodySize` | `number \| undefined` | With `discardBody`: the body's size in bytes, decoded (`data` is then empty). |
 | `timings` | `UltraTonTimings \| undefined` | With the `timings` option: DNS, connect, TLS, first byte, queue and total of this call, in ms (see [Observability](#observability)). `totalMs` runs until the body was read (on `stream()`, until the headers). |
 | `json<T>()` | `T` | Parses on each call, whatever the content-type. An empty body gives `{}`. A leading UTF-8 BOM is skipped. |
 | `text()` | `string` | Decodes the body as UTF-8. A leading BOM is skipped, as with `fetch`; `data` keeps it. |

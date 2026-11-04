@@ -58,6 +58,7 @@ export function createResponse<T = unknown>(
   data: Buffer,
   url = "",
   redirects: readonly UltraTonRedirect[] = NO_REDIRECTS,
+  bodySize?: number,
 ): UltraTonResponse<T> {
   const headers = responseHeaders(rawHeaders);
 
@@ -89,6 +90,8 @@ export function createResponse<T = unknown>(
       throw new UltraTonHttpError(statusCode, response);
     },
   };
+  // Only with discardBody: without it the response keeps the shape it always had.
+  if (bodySize !== undefined) Object.assign(response, { bodySize });
   return response;
 }
 

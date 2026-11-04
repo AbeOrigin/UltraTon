@@ -79,6 +79,8 @@ export interface BodyReaderOptions {
     readonly tooLarge: () => Error;
     /** Called once when decoding fails or overflows asynchronously; the engine cancels the response. */
     readonly onError: (err: Error) => void;
+    /** Count the decoded bytes and keep none (`discardBody`): end() resolves with an empty Buffer, `size` says how many. */
+    readonly discard?: boolean;
 }
 
 /**
@@ -104,6 +106,11 @@ export class BodyReader {
         const codings = options.decompress ? codingsFor(options.contentEncoding) : [];
         this.#codings = codings instanceof Error ? [] : codings;
         if (codings instanceof Error) this.#codingError = codings;
+    }
+
+    /** The decoded bytes taken so far, kept or not. */
+    get size(): number {
+        return this.#size;
     }
 
     /** The error the body failed with, if any. */
@@ -138,7 +145,8 @@ export class BodyReader {
             await this.#done;
         }
         if (this.#error) throw this.#error;
-        return Buffer.concat(this.#chunks, this.#size);
+        // With `discard` nothing was kept: concat's length would pad an empty list with zeros.
+        return this.#options.discard ? Buffer.alloc(0) : Buffer.concat(this.#chunks, this.#size);
     }
 
     /** Frees the decoders of a response the engine gave up (abort, timeout); reports nothing. */
@@ -153,7 +161,7 @@ export class BodyReader {
             this.#fail(this.#options.tooLarge());
             return false;
         }
-        this.#chunks.push(chunk);
+        if (!this.#options.discard) this.#chunks.push(chunk);
         return true;
     }
 
