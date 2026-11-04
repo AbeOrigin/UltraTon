@@ -13,6 +13,8 @@ import { UltraTonClient } from '../src/http-client.ts';
 import { createSecureAgents } from '../src/agents.ts';
 import { SecureHttpError } from '../src/errors.ts';
 import { hasSafeKeepAlive, KEEP_ALIVE } from '../src/helpers/keep-alive.ts';
+import { IDLE_SOCKET_TIMEOUT_MS, MAX_FREE_SOCKETS } from '../src/constants.ts';
+import { kTransport } from '../src/internal.ts';
 
 describe('hasSafeKeepAlive (CVE-2026-105481)', () => {
     it('is true on the fixed releases and anything newer on their line, and on later lines', () => {
@@ -108,5 +110,27 @@ describe('createSecureAgents() cannot be switched back to socket reuse (CVE-2026
         assert.equal(await get(), 200);
         assert.equal(await get(), 200);
         assert.equal(server.accepted(), KEEP_ALIVE ? 1 : 2);
+    });
+});
+
+describe("the client's HTTP/1.1 pools", () => {
+    it('keep up to MAX_FREE_SOCKETS idle sockets per policy, each reaped after IDLE_SOCKET_TIMEOUT_MS', async t => {
+        const agents: http.Agent[] = [];
+        // The transport seam sees the agent of every request; the request itself is never sent.
+        const transport = (_url: URL, options: { agent: http.Agent }) => {
+            agents.push(options.agent);
+            throw new Error('not sent');
+        };
+        const client = new UltraTonClient({ permitReservedIps: true, [kTransport]: transport } as never);
+        t.after(() => client.close());
+        await assert.rejects(client.get('http://127.0.0.1:1/'));
+        await assert.rejects(client.get('http://127.0.0.1:1/', { permitReservedIps: ['127.0.0.1'] }));
+        assert.equal(agents.length, 2);
+        assert.notEqual(agents[0], agents[1], 'one pool per policy');
+        for (const agent of agents) {
+            assert.equal(agent.maxFreeSockets, MAX_FREE_SOCKETS);
+            assert.equal((agent as unknown as { options: { timeout: number } }).options.timeout, IDLE_SOCKET_TIMEOUT_MS);
+            assert.equal(agent.maxSockets, Infinity, 'no socket limit: a limit would queue requests');
+        }
     });
 });

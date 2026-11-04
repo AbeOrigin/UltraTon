@@ -10,7 +10,7 @@ import * as http from 'node:http';
 import * as https from 'node:https';
 import type { LookupOptions, LookupAddress } from 'node:dns';
 import { promisify } from 'node:util';
-import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, TLS_MIN_VERSION } from '../constants.ts';
+import { HTTP_CODES_REDIRECTS, IDLE_SOCKET_TIMEOUT_MS, MAX_FREE_SOCKETS, TLS_MIN_VERSION } from '../constants.ts';
 import { followRedirect } from '../helpers/redirect-headers.ts';
 import { createResponse, createStreamResponse, declaredBodyLength, incompleteResponse, NO_REDIRECTS } from '../helpers/response.ts';
 import { BodyReader, createBodyStream } from '../helpers/body-reader.ts';
@@ -116,10 +116,10 @@ export class Http1Engine {
         if (!agents) {
             agents = {
                 // keepAlive is off on a Node whose pooled-socket reuse is unsafe (CVE-2026-105481): see KEEP_ALIVE.
-                http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS }),
+                http: new http.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS }),
                 https: this.#proxy
-                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }, this.#proxy, this.#closing.signal)
-                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, minVersion: TLS_MIN_VERSION, ...this.#tls }),
+                    ? new TunnelAgent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS, minVersion: TLS_MIN_VERSION, ...this.#tls }, this.#proxy, this.#closing.signal)
+                    : new https.Agent({ keepAlive: KEEP_ALIVE, timeout: IDLE_SOCKET_TIMEOUT_MS, maxFreeSockets: MAX_FREE_SOCKETS, minVersion: TLS_MIN_VERSION, ...this.#tls }),
             };
             this.#agentsByPolicy.set(key, agents);
         }
