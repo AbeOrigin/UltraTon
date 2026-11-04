@@ -6,6 +6,8 @@ export const ERROR_CODES = [
     'ERR_ULTRATON_AGENT_PROXY',
     'ERR_ULTRATON_CONTENT_ENCODING',
     'ERR_ULTRATON_DOWNGRADE',
+    'ERR_ULTRATON_EVENT_STREAM',
+    'ERR_ULTRATON_EVENT_TOO_LARGE',
     'ERR_ULTRATON_HTTP_STATUS',
     'ERR_ULTRATON_MAX_PAGES',
     'ERR_ULTRATON_NON_CANONICAL_IP',
@@ -94,6 +96,15 @@ export const idleTimeout = (socketTimeoutMs: number) =>
  */
 export class UltraTonMemoryError extends SecureHttpError {}
 /** The response body went past `maxBodySize` and the response was aborted. One message for `get()` and `stream()`: the body-parity test holds them to it. */
+/** `events()`: no complete line (an event or a keep-alive comment) for `idleMs`, however many bytes came. */
+export const eventStreamIdle = (idleMs: number) =>
+    new UltraTonNetworkTimeoutError(`UltraTon: No complete event-stream line for ${idleMs}ms.`, { code: 'ERR_ULTRATON_SOCKET_TIMEOUT' });
+/** `events()`: one event (its lines and field names) went past `maxEventSize` before it ended. */
+export const eventTooLarge = (maxEventSize: number) =>
+    new UltraTonMemoryError(`UltraTon: An event exceeded the maximum allowed size of ${maxEventSize} bytes. Raise maxEventSize.`, { code: 'ERR_ULTRATON_EVENT_TOO_LARGE' });
+/** `events()`: the response is not an event stream (200 with `content-type: text/event-stream`). Says nothing of what it was. */
+export const notEventStream = () =>
+    new SecureHttpError('UltraTon: The response is not an event stream (a 200 with content-type text/event-stream).', { code: 'ERR_ULTRATON_EVENT_STREAM' });
 export const bodyTooLarge = (maxBodySize: number) =>
     new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${maxBodySize} bytes. Raise maxBodySize.`);
 /** The request body went past `maxRequestBodySize`: before connecting for a buffered one, mid-upload for a stream. */

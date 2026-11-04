@@ -198,6 +198,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
 | `SecureHttpError` | `createSecureAgents()`, on a Node.js release without the keep-alive fix (see [SECURITY.md](SECURITY.md)): `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. Thrown by the assignment. | `ERR_ULTRATON_AGENT_KEEP_ALIVE` |
 | `SecureHttpError` | A request on a closed client | — |
+| `SecureHttpError` | `events()`: the response is a 2xx but not a 200 with `content-type: text/event-stream` (a status that is not 2xx is an `UltraTonHttpError`) | `ERR_ULTRATON_EVENT_STREAM` |
+| `UltraTonMemoryError` | `events()`: a line, or one event's `data`, went past `maxEventSize` | `ERR_ULTRATON_EVENT_TOO_LARGE` |
 | `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |
 | `UltraTonNetworkError` | HTTP/2: the server never processed the request (a `REFUSED_STREAM` reset, or above a GOAWAY's last stream). `retry` retries it. | `NGHTTP2_REFUSED_STREAM` |
@@ -242,7 +244,9 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
 | `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
-| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
+| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). |
+| `ERR_ULTRATON_EVENT_STREAM` | `events()`: the response is not a 200 with `content-type: text/event-stream`. | Check the URL and the `accept` the endpoint wants; `stream()` reads any response. |
+| `ERR_ULTRATON_EVENT_TOO_LARGE` | `events()`: one event (or one line) went past `maxEventSize`. | Raise `maxEventSize` for that call. |
 | `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |
 | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` | The request body went past `maxRequestBodySize`. | Raise `maxRequestBodySize`, or send less. |
 | `ERR_ULTRATON_REQUEST_BODY_LENGTH` | A streamed request body sent more or fewer bytes than its `content-length`. | Fix the `content-length` you set, or leave it out and let the body go chunked. |
@@ -454,6 +458,42 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 - **Bounded:** `maxPages` (default 100). A next page left after it rejects with `ERR_ULTRATON_MAX_PAGES`, after the pages already yielded: a collection is never cut short in silence.
 - **Errors:** a non-2xx page is yielded and ends the walk. A relative `Link` resolves against the page's final `url`, as RFC 8288 says. A path from `next()` reads like a `get()` path: under `baseUrl`, `'/items?cursor=x'` and `'items?cursor=x'` are both from the base. An absolute URL from `next()` (a `next_url` field in the body, say) works too, as long as it stays in scope.
 - **Options:** `query` applies to the first page only, since a next link carries its own; every other option (headers, `signal`, `retry`, …) to every page. There is no body: every page is a GET.
+
+### Server-Sent Events
+
+`client.events(url, options)` opens a Server-Sent Events stream (notifications, progress, model output) with a GET request and resolves once the headers arrive; read the events with `for await`. It goes the way of `stream()`: every check (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`) applies, on both engines.
+
+```ts
+const stream = await client.events('https://api.example.com/v1/updates', {
+  headers: { authorization: `Bearer ${token}` },
+  maxBodySize: 64 * 1024 * 1024, // the whole stream; raise it for a long one
+  signal: AbortSignal.timeout(10 * 60_000), // how long it may last is yours to bound
+});
+for await (const { event, data, id } of stream) {
+  if (event === 'done') break; // leaving the loop releases the connection
+  handle(data); // a string, never parsed
+}
+```
+
+- **Events** are `{ event, data, id, retry }`: `event` is `'message'` unless the server names one, `data` its lines joined with `\n`, `id` the last event ID the server set (`''` until it sets one), `retry` the server's last reconnection hint in ms. Parsing follows the WHATWG standard: comments are skipped, a leading BOM dropped, CR, LF and CRLF all end a line, an event the stream ends in the middle of is dropped.
+- **Limits:** `maxBodySize` bounds the whole stream (the client's default is 2 MiB, so a long stream needs more), `maxEventSize` (default 64 KiB) one line or one event's `data`, and `socketTimeoutMs` the time without a complete line: a keep-alive comment keeps a quiet stream open, bytes that never end a line do not. There is no limit on how long a stream may last unless you set one with `signal`.
+- **Responses:** a status that is not 2xx rejects with `UltraTonHttpError`; any other response that is not a 200 with `content-type: text/event-stream` with `ERR_ULTRATON_EVENT_STREAM`. Either way the connection is released.
+- **No automatic reconnection**, on purpose: a server that ends the stream, or answers `retry: 0`, cannot make the client loop. To resume, open a new stream with the last `id` and a wait of your own:
+
+```ts
+let lastId = '';
+for (let attempt = 0; attempt < 5; attempt++) {
+  try {
+    const stream = await client.events(url, { headers: lastId ? { 'last-event-id': lastId } : {} });
+    for await (const event of stream) { lastId = event.id; handle(event.data); }
+  } catch (err) {
+    if (!isUltraTonError(err)) throw err;
+  }
+  await new Promise(r => setTimeout(r, 1000 * 2 ** attempt)); // your floor and ceiling, not the server's
+}
+```
+
+A `last-event-id` you send is server data going back into a header: UltraTon refuses CR, LF and NUL in any header, so a hostile id cannot inject one.
 
 ### Retries
 

@@ -231,6 +231,16 @@ export interface UltraTonStreamOptions extends Omit<UltraTonRequestOptions, 'max
     readonly maxBodySize?: number;
 }
 
+/** Options of `client.events()`: those of `stream()` but `method` and a body (it sends a GET), plus `maxEventSize`. */
+export interface UltraTonEventsOptions extends Omit<UltraTonStreamOptions, 'method' | 'json' | 'form' | 'body'> {
+    /**
+     * The most bytes one line may take, and the most bytes of `data` lines one event may gather before it ends: past
+     * it, the loop fails with `UltraTonMemoryError` (`ERR_ULTRATON_EVENT_TOO_LARGE`), whatever `maxBodySize` allows.
+     * An integer from 1. Default 65536 (64 KiB).
+     */
+    readonly maxEventSize?: number;
+}
+
 /** The options of `client.paginate()`: the GET options (no body), plus how to find the next page and when to stop. */
 export interface UltraTonPaginateOptions<T = unknown> extends Omit<UltraTonRequestOptions, 'json' | 'form' | 'body' | 'discardBody'> {
     /**

@@ -2,12 +2,12 @@ import type * as http from 'node:http';
 import type * as https from 'node:https';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { SecureHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, remainingBudget } from './errors.ts';
-import { VERSION } from './constants.ts';
+import { SecureHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, notEventStream, remainingBudget } from './errors.ts';
+import { IDLE_TIMEOUT, VERSION } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitPaginateOptions, splitStreamOptions, timingsOption, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitEventsOptions, splitPaginateOptions, splitStreamOptions, timingsOption, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
@@ -18,11 +18,12 @@ import { resolveRetry, withRetry } from './helpers/retry.ts';
 import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
 import { createStreamResponse } from './helpers/response.ts';
+import { createEventStream, isEventStreamType } from './helpers/event-stream.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
-import type { ResolvedRequestOptions, UltraTonClientOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
-import type { UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+import type { ResolvedRequestOptions, UltraTonClientOptions, UltraTonEventsOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
+import type { UltraTonEventStream, UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
 /** A copy of `value` with its arrays and plain objects copied down to `depth` levels; anything else (a Buffer, a function) as is. */
@@ -294,6 +295,33 @@ export class UltraTonClient {
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);
         return this.#request(method, url, rest, { maxBodySize }) as Promise<UltraTonStreamResponse>;
+    }
+
+    /**
+     * Opens a Server-Sent Events stream with a GET request and resolves once the headers arrive; read its events with
+     * `for await`. It goes the way of `stream()`, with every check (SSRF, redirects only with `maxRedirects`, TLS,
+     * `maxConcurrency`) and limit: `maxBodySize` bounds the whole stream (raise it for a long one), `maxEventSize` one
+     * event, and `socketTimeoutMs` the time without a complete line, so a keep-alive comment keeps a quiet stream open
+     * but bytes that never end a line do not. How long the stream may last is yours to bound, with `signal`. It sends
+     * `accept: text/event-stream` and `cache-control: no-cache` unless you set them, and never reconnects: when the
+     * stream ends or fails, open a new one, with `last-event-id` set from the last event's `id` and a wait of your own
+     * choosing (the server's `retry` is on each event, as a hint).
+     * @throws {UltraTonHttpError} For a status that is not 2xx (the body is cancelled first).
+     * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` for anything but a 200 with `content-type: text/event-stream`.
+     * @throws {TypeError} As `stream()`, and for `method`, a body, or a `maxEventSize` that is not an integer from 1.
+     */
+    public async events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream> {
+        const { maxEventSize, rest } = splitEventsOptions(options);
+        const res = await this.stream(url, rest as UltraTonStreamOptions);
+        res.assertOk();
+        if (res.statusCode !== 200 || !isEventStreamType(res.headers['content-type'])) {
+            await res.body.cancel().catch(() => {});
+            throw notEventStream();
+        }
+        // stream() validated it: the call's own, else the client's, else the default.
+        const own = (rest as { socketTimeoutMs?: number } | undefined)?.socketTimeoutMs;
+        const idleMs = own ?? this.#defaults.socketTimeoutMs ?? IDLE_TIMEOUT;
+        return createEventStream(res, { maxEventSize, idleMs });
     }
 
     /**

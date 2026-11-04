@@ -37,6 +37,7 @@ export declare class UltraTonClient {
     options<T = unknown>(url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
+    events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream>;
     paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
     explain(url: string, options?: {
         readonly permitReservedIps?: ReservedIpPolicy;
@@ -87,6 +88,28 @@ export interface UltraTonDiagnosticsRequest {
 
 ## UltraTonErrorCode (errors.d.ts)
 export type UltraTonErrorCode = (typeof ERROR_CODES)[number];
+
+## UltraTonEvent (types/request-response.d.ts)
+export interface UltraTonEvent {
+    readonly event: string;
+    readonly data: string;
+    readonly id: string;
+    readonly retry: number | undefined;
+}
+
+## UltraTonEventsOptions (types/request-options.types.d.ts)
+export interface UltraTonEventsOptions extends Omit<UltraTonStreamOptions, 'method' | 'json' | 'form' | 'body'> {
+    readonly maxEventSize?: number;
+}
+
+## UltraTonEventStream (types/request-response.d.ts)
+export interface UltraTonEventStream extends AsyncIterable<UltraTonEvent> {
+    readonly statusCode: number;
+    readonly headers: IncomingHttpHeaders;
+    readonly url: string;
+    readonly redirects: readonly UltraTonRedirect[];
+    cancel(): Promise<void>;
+}
 
 ## UltraTonExplainedAddress (types/request-response.d.ts)
 export interface UltraTonExplainedAddress {
@@ -300,6 +323,8 @@ ERR_ULTRATON_AGENT_KEEP_ALIVE
 ERR_ULTRATON_AGENT_PROXY
 ERR_ULTRATON_CONTENT_ENCODING
 ERR_ULTRATON_DOWNGRADE
+ERR_ULTRATON_EVENT_STREAM
+ERR_ULTRATON_EVENT_TOO_LARGE
 ERR_ULTRATON_HTTP_STATUS
 ERR_ULTRATON_MAX_PAGES
 ERR_ULTRATON_NON_CANONICAL_IP

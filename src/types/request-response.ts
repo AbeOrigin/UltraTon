@@ -14,6 +14,40 @@ export interface UltraTonRedirect {
     readonly headers?: IncomingHttpHeaders;
 }
 
+/**
+ * One Server-Sent Event from `client.events()`. Built without a prototype and frozen. `data` is the server's text,
+ * never parsed.
+ */
+export interface UltraTonEvent {
+    /** The `event` field, or `'message'` when the server sent none. */
+    readonly event: string;
+    /** The `data` lines of the event, joined with `'
+'`. */
+    readonly data: string;
+    /** The last event ID the server set, when this event was dispatched: `''` until it sets one. */
+    readonly id: string;
+    /** The last `retry` the server sent, in milliseconds; `undefined` until it sends one. A hint, never acted on. */
+    readonly retry: number | undefined;
+}
+
+/**
+ * What `client.events()` resolves with once the headers arrive: the response's status and headers, and its events,
+ * read with `for await`. Read only once. Leaving the loop (`break`, `return`, a throw) or `cancel()` ends the stream
+ * and releases its connection.
+ */
+export interface UltraTonEventStream extends AsyncIterable<UltraTonEvent> {
+    /** Always 200: anything else rejected `events()`. */
+    readonly statusCode: number;
+    /** The response headers. Never contains HTTP/2 pseudo-headers. */
+    readonly headers: IncomingHttpHeaders;
+    /** The final URL, after any redirect that was followed. */
+    readonly url: string;
+    /** The redirects followed to get here. See {@link UltraTonResponse.redirects}. */
+    readonly redirects: readonly UltraTonRedirect[];
+    /** Ends the stream and releases its connection; a `for await` in progress ends. Safe to call more than once. */
+    cancel(): Promise<void>;
+}
+
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */
 export interface UltraTonResponse<T = unknown> {
     /**
