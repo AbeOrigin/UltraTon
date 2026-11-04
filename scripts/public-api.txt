@@ -38,6 +38,7 @@ export declare class UltraTonClient {
     request<T = unknown>(method: string, url: string, options?: UltraTonRequestOptions): Promise<UltraTonResponse<T>>;
     stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse>;
     events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream>;
+    websocket(url: string, options?: UltraTonWebSocketOptions): Promise<UltraTonWebSocket>;
     paginate<T = unknown>(url: string, options?: UltraTonPaginateOptions<T>): AsyncGenerator<UltraTonResponse<T>, void, undefined>;
     explain(url: string, options?: {
         readonly permitReservedIps?: ReservedIpPolicy;
@@ -318,6 +319,24 @@ export interface UltraTonTimings {
     readonly reusedConnection: boolean;
 }
 
+## UltraTonWebSocket (types/request-response.d.ts)
+export interface UltraTonWebSocket extends AsyncIterable<string | Buffer>, AsyncDisposable {
+    readonly url: string;
+    readonly headers: IncomingHttpHeaders;
+    readonly protocol: string;
+    readonly closeCode: number | undefined;
+    readonly closeReason: string | undefined;
+    send(data: string | Uint8Array): Promise<void>;
+    close(code?: number, reason?: string): Promise<void>;
+}
+
+## UltraTonWebSocketOptions (types/request-options.types.d.ts)
+export interface UltraTonWebSocketOptions extends Pick<UltraTonRequestOptions, 'headers' | 'query' | 'timeoutMs' | 'socketTimeoutMs' | 'signal' | 'permitReservedIps' | 'auth'> {
+    readonly protocols?: readonly string[];
+    readonly maxMessageSize?: number;
+    readonly pingIntervalMs?: number;
+}
+
 ## error codes
 ERR_ULTRATON_AGENT_KEEP_ALIVE
 ERR_ULTRATON_AGENT_PROXY
@@ -337,3 +356,8 @@ ERR_ULTRATON_REQUEST_BODY_TOO_LARGE
 ERR_ULTRATON_RESERVED_IP
 ERR_ULTRATON_SOCKET_TIMEOUT
 ERR_ULTRATON_TIMEOUT
+ERR_ULTRATON_WS_CLOSED
+ERR_ULTRATON_WS_HANDSHAKE
+ERR_ULTRATON_WS_MESSAGE_TOO_LARGE
+ERR_ULTRATON_WS_PROTOCOL
+ERR_ULTRATON_WS_SEND_BUFFER
