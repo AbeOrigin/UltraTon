@@ -193,8 +193,9 @@ export class Http1Engine {
         currentTimeoutMs: number,
         followRedirects: boolean,
         stream?: { maxBodySize: number },
-        phases?: HopTimings
-    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, bodySize?: number, isRedirect: boolean, body?: ReadableStream<Uint8Array> }> {
+        phases?: HopTimings,
+        upgrade?: boolean
+    ): Promise<{ statusCode: number, headers: import('node:http').IncomingHttpHeaders, data: Buffer, bodySize?: number, isRedirect: boolean, body?: ReadableStream<Uint8Array>, socket?: Duplex, head?: Buffer }> {
         return new Promise((resolve, reject) => {
             let executionTimer: NodeJS.Timeout | undefined;
 
@@ -282,8 +283,26 @@ export class Http1Engine {
                 req.once('finish', () => phases.mark('sent'));
             }
 
+            if (upgrade) {
+                // Node hands the socket over and takes it out of the agent's pool: it never serves HTTP again. The
+                // request's timeout and the agent's idle timeout stay armed on it until the WebSocket disarms them.
+                req.on('upgrade', (res: IncomingMessage, socket: Duplex, head: Buffer) => {
+                    clearTimeout(executionTimer);
+                    req.off('timeout', onSocketTimeout);
+                    resolve({ statusCode: res.statusCode as number, headers: res.headers, data: Buffer.alloc(0), isRedirect: false, socket, head });
+                });
+            }
+
             req.on('response', (res: IncomingMessage) => {
                 phases?.mark('response');
+                // An upgrade the server declined (any status, a 101 without the upgrade headers included): the
+                // status and headers only, the body unread, the socket destroyed rather than pooled.
+                if (upgrade) {
+                    clearTimeout(executionTimer);
+                    res.destroy();
+                    req.destroy();
+                    return resolve({ statusCode: res.statusCode as number, headers: res.headers, data: Buffer.alloc(0), isRedirect: false });
+                }
                 const isRedirect = res.statusCode !== undefined && HTTP_CODES_REDIRECTS.has(res.statusCode);
                 const location = res.headers.location;
 
@@ -385,6 +404,37 @@ export class Http1Engine {
     }
 
     /**
+     * The checks every hop passes before anything is resolved or opened: a closed engine, an aborted signal (its reason
+     * is thrown), the URL, a reserved IP literal (Node never calls `lookup` for one, so the DNS pinner cannot guard it)
+     * and, through a proxy, whether the target can be tunnelled.
+     */
+    #hopTarget(url: string, reqOpts: SecureUltraTonRequestOptions): URL {
+        if (this.#closed) throw clientClosed();
+        reqOpts.signal?.throwIfAborted();
+        const urlObj: URL = parseSafeUrl(url, undefined, this.#allowPlainHttp);
+        // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
+        // For a literal the "hostname" is the literal itself, which no hostname entry of an allowlist can match.
+        const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
+        assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
+        if (this.#proxy && urlObj.protocol === 'https:') assertTunnelable(this.#proxy, bareHostname);
+        return urlObj;
+    }
+
+    /**
+     * Sends a WebSocket upgrade (a GET with `upgradeHeaders` on top of the request's) over the same pinned path as any
+     * request: the policy's agent, the pinned `lookup`, the proxy tunnel for `https:`, `timeoutMs` until the answer.
+     * Redirects are never followed. With a 101 that Node took for an upgrade, resolves with the socket (no longer in
+     * the pool) and the bytes that came after the headers; with any other answer, with its status and headers only.
+     */
+    public async upgrade(url: string, options: ResolvedRequestOptions, upgradeHeaders: Record<string, string>): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; socket?: Duplex; head?: Buffer }> {
+        const reqOpts = buildSafeRequestOptions(options);
+        const urlObj = this.#hopTarget(url, reqOpts);
+        const sent = { ...reqOpts, headers: { ...reqOpts.headers, ...upgradeHeaders } } as SecureUltraTonRequestOptions;
+        const hop = await this._executeSingleNetworkHop(urlObj, sent, undefined, reqOpts.timeoutMs, false, undefined, undefined, true);
+        return { statusCode: hop.statusCode, headers: hop.headers, socket: hop.socket, head: hop.head };
+    }
+
+    /**
      * @param options - Already validated, serialized (`json`) and merged with the client defaults by `UltraTonClient`.
      * @param timings - Where each hop records its phases; only while someone listens to the diagnostics events.
      */
@@ -402,18 +452,7 @@ export class Http1Engine {
         limitRequestBody(currentOptions.body, reqOpts.maxRequestBodySize);
 
         while (true) {
-            if (this.#closed) throw clientClosed();
-            // Before anything is resolved or opened; throws the signal's reason (an AbortError when it had none).
-            reqOpts.signal?.throwIfAborted();
-            const urlObj: URL = parseSafeUrl(currentUrl, undefined, this.#allowPlainHttp);
-
-            // Node never calls `lookup` for IP-literal hosts, so the DNS pinner cannot guard them.
-            // URL.hostname keeps the brackets on IPv6 literals; strip them so they parse as IPs. Hostnames pass through.
-            // For a literal the "hostname" is the literal itself, which no hostname entry of an allowlist can match.
-            const bareHostname = urlObj.hostname.replace(/^\[|\]$/g, '');
-            assertAllowedIp(bareHostname, reqOpts.permitReservedIps, bareHostname);
-            if (this.#proxy && urlObj.protocol === 'https:') assertTunnelable(this.#proxy, bareHostname);
-
+            const urlObj = this.#hopTarget(currentUrl, reqOpts);
             const currentTimeoutMs = remainingBudget(reqOpts.timeoutMs, startTime);
 
             const hop = await this._executeSingleNetworkHop(urlObj, reqOpts, currentOptions.body, currentTimeoutMs, reqOpts.maxRedirects > 0,

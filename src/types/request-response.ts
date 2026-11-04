@@ -47,6 +47,43 @@ export interface UltraTonEventStream extends AsyncIterable<UltraTonEvent> {
     cancel(): Promise<void>;
 }
 
+/**
+ * What `client.websocket()` resolves with once the server accepted the upgrade. Read messages with `for await`: a text
+ * message is a `string`, a binary one a `Buffer`. The connection is read only while you wait for a message, so a
+ * server that sends faster than you read is held back by TCP, not buffered; keep a loop reading for pings to be
+ * answered. The loop ends without error when the server closes the connection (`closeCode` and `closeReason` say how),
+ * and rejects when the connection fails. Leaving the loop (`break`, `return`, a throw) closes the connection, as
+ * `close()` does. Read only once.
+ */
+export interface UltraTonWebSocket extends AsyncIterable<string | Buffer>, AsyncDisposable {
+    /** The URL connected to, as `ws:` or `wss:`. */
+    readonly url: string;
+    /** The headers of the server's 101 response. Never contains HTTP/2 pseudo-headers. */
+    readonly headers: IncomingHttpHeaders;
+    /** The subprotocol the server chose from `protocols`, `''` for none. */
+    readonly protocol: string;
+    /** The close code the server sent (1005 when it sent none); `undefined` until its close frame arrives. */
+    readonly closeCode: number | undefined;
+    /** The reason the server sent with its close frame (`''` for none): server data, never parsed. */
+    readonly closeReason: string | undefined;
+    /**
+     * Sends one message: a string as text (UTF-8), bytes as binary. Resolves once the frame is written to the socket.
+     * Await it: with more than 1 MiB still waiting for the server to read, it rejects with `UltraTonMemoryError`
+     * (`ERR_ULTRATON_WS_SEND_BUFFER`), and a write that makes no progress for `socketTimeoutMs` fails the connection.
+     * @throws {SecureHttpError} `ERR_ULTRATON_WS_CLOSED` once the connection is closing or closed.
+     * @throws {TypeError} For anything but a string or a `Uint8Array`.
+     */
+    send(data: string | Uint8Array): Promise<void>;
+    /**
+     * Closes the connection with the close handshake: sends `code` (1000 or 3000 to 4999, default 1000) and `reason`
+     * (at most 123 bytes of UTF-8), waits for the server's close, then for the server to end the connection, 5 seconds
+     * at most in all, after which the socket is destroyed. Messages that arrive meanwhile are dropped. Resolves once
+     * the socket is closed; safe to call more than once.
+     * @throws {TypeError} For a code or a reason outside those bounds.
+     */
+    close(code?: number, reason?: string): Promise<void>;
+}
+
 /** A complete response, whatever its status code. `T` is the default type of `json()`. */
 export interface UltraTonResponse<T = unknown> {
     /**

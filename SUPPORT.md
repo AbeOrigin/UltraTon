@@ -32,7 +32,7 @@ When a new major ships, the previous one keeps getting **security fixes for 6 mo
 What holds instead, and what you can check:
 
 - **Semver, as below.** A new option, method or error code ships in a minor; nothing you rely on changes outside a major.
-- **Every addition is opt-in, and no default moves without a major**, except to close a security hole (see below). 2.9.0 and 2.10.0 kept to that: every change in both is opt-in or additive.
+- **Every addition is opt-in, and no default moves without a major**, except to close a security hole (see below). 2.9.0, 2.10.0 and 2.11.0 kept to that: every change in them is opt-in or additive.
 - **The public API is recorded and CI enforces it.** `scripts/public-api.txt` is the snapshot of every exported type and signature, and of every error code; a change fails CI unless the snapshot is updated on purpose, in the same commit, where the diff shows exactly what changed.
 - **The CHANGELOG lists every change**, and candidates for a later major as they come up (today: `redirectHeaders: 'safe'` as the default).
 

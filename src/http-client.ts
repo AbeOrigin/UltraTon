@@ -2,28 +2,29 @@ import type * as http from 'node:http';
 import type * as https from 'node:https';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { SecureHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, notEventStream, remainingBudget } from './errors.ts';
-import { IDLE_TIMEOUT, VERSION } from './constants.ts';
+import { SecureHttpError, UltraTonHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, notEventStream, remainingBudget, wsHandshake } from './errors.ts';
+import { IDLE_TIMEOUT, VERSION, WS_CLOSE_TIMEOUT_MS } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
 import { Http2SessionManager } from './engines/http2-session-manager.ts';
-import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitEventsOptions, splitPaginateOptions, splitStreamOptions, timingsOption, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
+import { buildSafeRequestOptions, mergeClientDefaults, mergeClientOptions, resolveClientOptions, resolveRequestBody, retryOption, splitEventsOptions, splitPaginateOptions, splitStreamOptions, splitWebSocketOptions, timingsOption, withBodyContentType, withJsonContentType, withMethod, withQuery } from './helpers/request-options.ts';
 import { judgeAddresses, type ReservedIpPolicy } from './security/dns-pinner.ts';
 import { parseSafeUrl } from './helpers/url-parser.ts';
 import type { ClientDefaults } from './helpers/request-options.ts';
-import { kSessionManager, kSharedEngine, kTransport } from './internal.ts';
+import { kSessionManager, kSharedEngine, kTransport, kWebSocketCloseTimeout } from './internal.ts';
 import { fetchWith } from './helpers/fetch.ts';
 import { discardBody, StreamedBody } from './helpers/request-body.ts';
 import { resolveRetry, withRetry } from './helpers/retry.ts';
 import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
-import { createStreamResponse } from './helpers/response.ts';
+import { createResponse, createStreamResponse } from './helpers/response.ts';
+import { acceptedProtocol, upgradeRequest, WebSocketConnection, WS_RESERVED_HEADERS } from './helpers/websocket.ts';
 import { createEventStream, isEventStreamType } from './helpers/event-stream.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
-import type { ResolvedRequestOptions, UltraTonClientOptions, UltraTonEventsOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions } from './types/request-options.types.ts';
-import type { UltraTonEventStream, UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse } from './types/request-response.ts';
+import type { ResolvedRequestOptions, UltraTonClientOptions, UltraTonEventsOptions, UltraTonPaginateOptions, UltraTonRequestOptions, UltraTonStreamOptions, UltraTonWebSocketOptions } from './types/request-options.types.ts';
+import type { UltraTonEventStream, UltraTonExplanation, UltraTonResponse, UltraTonStreamResponse, UltraTonWebSocket } from './types/request-response.ts';
 
 /** The constructor options plus the internal test seams, which are symbols and never part of the public types. */
 /** A copy of `value` with its arrays and plain objects copied down to `depth` levels; anything else (a Buffer, a function) as is. */
@@ -41,6 +42,13 @@ function snapshot(value: unknown, depth: number): unknown {
 /** An engine and the number of clients using it: the last one to close closes the engine. */
 interface SharedEngine {
     readonly engine: Http1Engine | Http2Engine;
+    /**
+     * The HTTP/1.1 engine `websocket()` upgrades on: the engine itself, or for an HTTP/2 client one made on first use
+     * with the same `tls`, `proxy` and `allowPlainHttp`, shared and closed like the engine.
+     */
+    readonly upgrades: () => Http1Engine;
+    /** Closes the engine and, if one was made, the upgrade engine. */
+    readonly close: () => void;
     refs: number;
 }
 
@@ -48,7 +56,18 @@ interface InternalClientOptions extends UltraTonClientOptions {
     readonly [kSharedEngine]?: SharedEngine;
     readonly [kTransport]?: typeof https.request | typeof http.request;
     readonly [kSessionManager]?: Http2SessionManager;
+    readonly [kWebSocketCloseTimeout]?: number;
 }
+
+/** `ws:` as `http:` and `wss:` as `https:`, the schemes every check and both engines know; anything else is left as is. */
+function asHttpUrl(url: URL): string {
+    if (url.protocol === 'ws:') url.protocol = 'http:';
+    else if (url.protocol === 'wss:') url.protocol = 'https:';
+    return url.href;
+}
+
+/** An `http(s):` URL as the `ws(s):` one the caller connected to. */
+const asWsUrl = (href: string): string => `ws${href.slice('http'.length)}`;
 
 const MUST_BE_RELATIVE = 'UltraTon: With baseUrl set, request paths must be relative.';
 const ESCAPES_BASE = 'UltraTon: Request path escapes baseUrl.';
@@ -163,6 +182,9 @@ export class UltraTonClient {
     readonly #limiter?: OriginLimiter;
     /** `allowPlainHttp`: plain http to any host. Its engine has the same setting (a variant with another gets its own). */
     readonly #allowPlainHttp: boolean;
+    /** This client's open WebSockets: close() ends them, and only them (a variant from `extend()` has its own). */
+    readonly #websockets = new Set<WebSocketConnection>();
+    readonly #wsCloseTimeoutMs: number;
     #closed = false;
 
     /**
@@ -194,8 +216,9 @@ export class UltraTonClient {
 
         // The seams are read only once the options validated as an object, and only as own properties.
         const internal = (options ?? {}) as InternalClientOptions;
-        const own = <K extends typeof kTransport | typeof kSessionManager | typeof kSharedEngine>(key: K) =>
+        const own = <K extends typeof kTransport | typeof kSessionManager | typeof kSharedEngine | typeof kWebSocketCloseTimeout>(key: K) =>
             Object.hasOwn(internal, key) ? internal[key] : undefined;
+        this.#wsCloseTimeoutMs = own(kWebSocketCloseTimeout) ?? WS_CLOSE_TIMEOUT_MS;
         const shared = own(kSharedEngine);
         if (shared) {
             shared.refs++;
@@ -205,7 +228,22 @@ export class UltraTonClient {
             const engine = resolved.http2
                 ? new Http2Engine(own(kSessionManager) ?? new Http2SessionManager(resolved.tls, undefined, undefined, resolved.proxy, resolved.allowPlainHttp))
                 : new Http1Engine(resolved.tls, own(kTransport), resolved.proxy, resolved.allowPlainHttp);
-            this.#shared = { engine, refs: 1 };
+            let upgrades = engine instanceof Http1Engine ? engine : undefined;
+            let engineClosed = false;
+            this.#shared = {
+                engine,
+                // Never made once closed: an engine made after close() would never be closed.
+                upgrades: () => {
+                    if (engineClosed) throw clientClosed();
+                    return (upgrades ??= new Http1Engine(resolved.tls, undefined, resolved.proxy, resolved.allowPlainHttp));
+                },
+                close: () => {
+                    engineClosed = true;
+                    engine.close();
+                    if (upgrades !== engine) upgrades?.close();
+                },
+                refs: 1,
+            };
         }
         this.#engine = this.#shared.engine;
     }
@@ -325,6 +363,107 @@ export class UltraTonClient {
     }
 
     /**
+     * Opens a WebSocket (RFC 6455) and resolves once the server accepted the upgrade; read its messages with
+     * `for await` and send with `send()`. The upgrade is an HTTP/1.1 request with every check of the other methods
+     * (SSRF, pinned DNS, TLS, the proxy, `maxConcurrency`, whose slot it holds until it closes), over HTTP/1.1 even on
+     * an `http2` client. It follows no redirect, offers no extension (no compression), and every frame the server sends
+     * is bounded before it is buffered: `maxMessageSize` per message, `socketTimeoutMs` without a frame while you wait
+     * for one (with `pingIntervalMs`, after a ping), 5 seconds for the close handshake. It never reconnects.
+     * @param url - A `ws:` or `wss:` URL (`ws:` only to loopback, as `http:`, unless `allowPlainHttp`), or with
+     *   `baseUrl` a relative path, which connects as `wss:` (or `ws:` for an `http:` base).
+     * @throws {UltraTonHttpError} For an answer that is not 101 and not 2xx (a redirect included), with its status
+     *   and headers; its body is not read.
+     * @throws {SecureHttpError} `ERR_ULTRATON_WS_HANDSHAKE` for a 2xx, or a 101 that is not a valid WebSocket
+     *   handshake; and as the other methods for a policy rejection.
+     * @throws {TypeError} As the other methods, for an absolute URL that is not `ws:` or `wss:`, for a request option
+     *   that does not apply to an upgrade, and for a header the handshake sets (`upgrade`, `sec-websocket-*`, ...).
+     */
+    public async websocket(url: string, options?: UltraTonWebSocketOptions): Promise<UltraTonWebSocket> {
+        const { protocols, maxMessageSize, pingIntervalMs, rest } = splitWebSocketOptions(options);
+        if (this.#closed) throw clientClosed();
+        let resolved: string;
+        if (this.#baseUrl) {
+            resolved = resolveAgainstBase(url, this.#baseUrl);
+        } else if (typeof url === 'string' && URL.canParse(url)) {
+            const parsed = new URL(url);
+            if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+                throw new TypeError(`UltraTon: Expected a ws: or wss: URL for websocket(), received a ${parsed.protocol} URL.`);
+            }
+            resolved = asHttpUrl(parsed);
+        } else {
+            // Not a URL: left for the engine to reject as it rejects any malformed URL.
+            resolved = url;
+        }
+        // Nothing but the upgrade's own: no body, no redirect, no accept-encoding (no body to decode).
+        const requested = Object.assign(withMethod('GET', rest), { maxRedirects: 0, decompress: false });
+        const target = withQuery(resolved, requested.query);
+        Reflect.deleteProperty(requested, 'query');
+        const wsUrl = asWsUrl(parseSafeUrl(target, undefined, this.#allowPlainHttp).href);
+        const headersFn = this.#defaults.headersFn;
+        const defaults = headersFn ? { ...this.#defaults, headers: headersFn(Object.freeze({ method: 'GET', url: wsUrl })) } : this.#defaults;
+        const merged = mergeClientDefaults((await resolveRequestBody(requested)).options, defaults);
+        // close() may have run during that await: nothing may be resolved, opened or sent after it.
+        if (this.#closed) throw clientClosed();
+        const headers = (merged.headers ?? {}) as Record<string, unknown>;
+        for (const name of Object.keys(headers)) {
+            const lower = name.toLowerCase();
+            if (!WS_RESERVED_HEADERS.has(lower) || headers[name] === undefined || headers[name] === null) continue;
+            const hint = lower === 'sec-websocket-protocol' ? " Offer subprotocols with 'protocols'." : '';
+            throw new TypeError(`UltraTon: The '${name}' header is set by websocket() for the handshake.${hint}`);
+        }
+        // Validated now, before the queue: the connection's own timers use the same values the engine does.
+        const safe = buildSafeRequestOptions(merged);
+        const { key, headers: upgradeHeaders } = upgradeRequest(protocols);
+        const engine = this.#shared.upgrades();
+        let release: (() => void) | undefined;
+        let socketClosed = false;
+        const connect = async (attempt: ResolvedRequestOptions): Promise<WebSocketConnection> => {
+            const answer = await engine.upgrade(target, attempt, upgradeHeaders);
+            const { statusCode, socket } = answer;
+            if (!socket || statusCode !== 101) {
+                socket?.destroy();
+                if (statusCode === 101 || (statusCode >= 200 && statusCode < 300)) throw wsHandshake(`the server answered ${statusCode} without upgrading`);
+                throw new UltraTonHttpError(statusCode, createResponse(statusCode, answer.headers, Buffer.alloc(0), wsUrl));
+            }
+            let protocol: string;
+            try {
+                protocol = acceptedProtocol(answer.headers, key, protocols);
+            } catch (err) {
+                socket.destroy();
+                throw err;
+            }
+            const ws = new WebSocketConnection(socket, answer.head ?? Buffer.alloc(0), {
+                url: wsUrl,
+                headers: answer.headers,
+                protocol,
+                maxMessageSize,
+                socketTimeoutMs: safe.socketTimeoutMs,
+                pingIntervalMs,
+                closeTimeoutMs: this.#wsCloseTimeoutMs,
+                signal: safe.signal,
+                onClosed: () => {
+                    socketClosed = true;
+                    this.#websockets.delete(ws);
+                    release?.();
+                },
+            });
+            this.#websockets.add(ws);
+            // close() ran during the handshake.
+            if (this.#closed) ws.destroy(clientClosed());
+            return ws;
+        };
+        // With maxConcurrency, the connection holds its origin's slot until its socket closes.
+        const hold = (ws: WebSocketConnection, giveBack: () => void) => {
+            if (socketClosed) giveBack();
+            else release = giveBack;
+            return ws;
+        };
+        const ws = this.#limiter ? await this.#limited(this.#limiter, target, merged, hold, undefined, connect) : await connect(merged);
+        if (this.#closed) throw clientClosed();
+        return ws;
+    }
+
+    /**
      * Walks a paginated collection with GET requests, yielding each page as a complete response once it arrives: every
      * page is a full `get()`, with all its checks. The next page is the `rel="next"` link of the `Link` header (RFC 8288)
      * (resolved against the page's final `url`) or what `next(page)` returns (an absolute URL, or a path read as `get()`
@@ -440,7 +579,8 @@ export class UltraTonClient {
         if (this.#closed) return;
         this.#closed = true;
         this.#limiter?.close(clientClosed());
-        if (--this.#shared.refs === 0) this.#engine.close();
+        for (const ws of this.#websockets) ws.destroy(clientClosed());
+        if (--this.#shared.refs === 0) this.#shared.close();
     }
 
     /** Closes the client, as `close()` does: lets `await using client = new UltraTonClient()` close it when the block ends. */
@@ -506,8 +646,16 @@ export class UltraTonClient {
             return policy ? withRetry(send, policy, options.timeoutMs, options.signal) : send();
         };
         // Without maxConcurrency nothing is queued nor measured: the call goes straight to the engine, as it always did.
+        // A stream with a body holds its slot until the body ends, fails or is cancelled: a new response around a new
+        // body, so that assertOk() cancels that one (and gives the slot back with it).
+        const holdBody = stream !== undefined && method !== 'HEAD'
+            ? (res: UltraTonResponse<T> | UltraTonStreamResponse, release: () => void) => {
+                const streamed = res as UltraTonStreamResponse;
+                return createStreamResponse(streamed.statusCode, streamed.headers, releasingBody(streamed.body, release), streamed.url, streamed.redirects);
+            }
+            : undefined;
         const sent = this.#limiter
-            ? this.#limited(this.#limiter, target, resolvedOptions, stream !== undefined && method !== 'HEAD', timings, call)
+            ? this.#limited(this.#limiter, target, resolvedOptions, holdBody, timings, call)
             : call(resolvedOptions);
         // Set on the response itself, which assertOk() returns and UltraTonHttpError carries.
         const result = own ? sent.then(res => Object.assign(res, { timings: own.snapshot() })) : sent;
@@ -516,15 +664,15 @@ export class UltraTonClient {
 
     /**
      * Runs `call` once a slot for the target's origin is free (`maxConcurrency`), and gives the slot back exactly once
-     * when the call is over: when it settles or, for a stream with a body (`holdsBody`), once that body ends, fails or
-     * is cancelled. The time queued comes out of `timeoutMs`: the call gets what is left of it, and a timeout still
-     * names the configured value, as a retry's does.
+     * when the call is over: when it fails, when it settles or, with `hold`, when what `hold` ties the release to is over
+     * (a stream's body, a WebSocket's connection). The time queued comes out of `timeoutMs`: the call gets what is left
+     * of it, and a timeout still names the configured value, as a retry's does.
      */
-    async #limited<R extends UltraTonResponse<unknown> | UltraTonStreamResponse>(
+    async #limited<R>(
         limiter: OriginLimiter,
         target: string,
         options: ResolvedRequestOptions,
-        holdsBody: boolean,
+        hold: ((result: R, release: () => void) => R) | undefined,
         timings: TimingsCollector | undefined,
         call: (options: ResolvedRequestOptions) => Promise<R>,
     ): Promise<R> {
@@ -559,12 +707,10 @@ export class UltraTonClient {
             const shortened = attempt !== options && err instanceof UltraTonNetworkError && err.code === 'ERR_ULTRATON_TIMEOUT';
             throw shortened ? absoluteTimeout(budget) : err;
         }
-        if (!holdsBody) {
+        if (!hold) {
             release();
             return response;
         }
-        // A new response around the new body, so that assertOk() cancels that one (and gives the slot back with it).
-        const res = response as UltraTonStreamResponse;
-        return createStreamResponse(res.statusCode, res.headers, releasingBody(res.body, release), res.url, res.redirects) as R;
+        return hold(response, release);
     }
 }

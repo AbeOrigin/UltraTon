@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-04
+
+The last of what the first application built on UltraTon asked for: WebSocket to endpoints chosen by someone else, with the same SSRF protection as every other request. Opt-in, a new method; no default moved.
+
+### Added
+
+- **`client.websocket()`: WebSocket to endpoints you do not control.** A client for RFC 6455 over an HTTP/1.1 upgrade that goes through the same path as any request: SSRF checks and pinned DNS, TLS, the proxy (`wss:` through the tunnel), `maxConcurrency` (the connection holds its slot until it closes), and over HTTP/1.1 on an `http2` client too. Node's global `WebSocket` cannot pin the addresses it connects to; this one can, and takes any header on the upgrade. Read messages with `for await` (text as `string`, binary as `Buffer`), send with `send()`, end with `close()`. What a hostile server controls is bounded: `maxMessageSize` (default 1 MiB) per message and frame, checked from the frame header before buffering; `socketTimeoutMs` between frames while a message is awaited, with an opt-in `pingIntervalMs` to keep a quiet connection alive; at most one pending pong; 1 MiB of queued sends; 5 s for the close handshake. No redirect is followed, no extension offered (no compression), no reconnection. New types: `UltraTonWebSocket`, `UltraTonWebSocketOptions`. New codes: `ERR_ULTRATON_WS_HANDSHAKE`, `ERR_ULTRATON_WS_PROTOCOL`, `ERR_ULTRATON_WS_MESSAGE_TOO_LARGE`, `ERR_ULTRATON_WS_SEND_BUFFER`, `ERR_ULTRATON_WS_CLOSED`.
+- The Autobahn testsuite's client cases run in CI against the WebSocket client (compression cases excluded).
+
 ## [2.10.0] - 2026-11-04
 
 What the first application built on UltraTon (an API testing tool that runs requests in parallel) asked for after its load tests: Server-Sent Events from servers you do not control, the headers of each redirect hop, a way to read a body without keeping it, and less CPU per request. It ends the patches-only period restarted with 2.9.0; SUPPORT.md says why and what holds instead. Every addition is opt-in and no default moved.

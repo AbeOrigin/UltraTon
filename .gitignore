@@ -21,3 +21,6 @@ _agent/
 compat/*.tgz
 # CPU profiles written by compat/bench/profile.ts (CI artifacts)
 compat/bench/profile/
+
+# Autobahn reports written by compat/autobahn (CI artifacts)
+compat/autobahn/reports/

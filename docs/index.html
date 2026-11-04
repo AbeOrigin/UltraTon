@@ -106,8 +106,8 @@
 
                 <div class="card glass">
                     <div class="card-icon secure-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 13c2-2 4-2 6 0s4 2 6 0 4-2 6 0M3 18c2-2 4-2 6 0s4 2 6 0 4-2 6 0"/></svg></div>
-                    <h3>Bounded Streaming &amp; Events</h3>
-                    <p><code>client.stream()</code> resolves on the headers and hands you a <code>ReadableStream</code>. The size limit, content-length check, decoding and idle timeout keep applying as you read, so large downloads never sit in memory. <code>client.events()</code> reads Server-Sent Events the same way with <code>for await</code>, each event capped by <code>maxEventSize</code> (64 KiB); it never reconnects on its own.</p>
+                    <h3>Bounded Streaming, Events &amp; WebSocket</h3>
+                    <p><code>client.stream()</code> resolves on the headers and hands you a <code>ReadableStream</code>. The size limit, content-length check, decoding and idle timeout keep applying as you read, so large downloads never sit in memory. <code>client.events()</code> reads Server-Sent Events the same way with <code>for await</code>, each event capped by <code>maxEventSize</code> (64 KiB); it never reconnects on its own. <code>client.websocket()</code> opens a WebSocket over the same pinned path, each message capped by <code>maxMessageSize</code> (1 MiB) before it is buffered, with no compression and no redirects.</p>
                 </div>
 
                 <div class="card glass">

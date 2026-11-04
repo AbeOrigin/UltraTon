@@ -20,6 +20,11 @@ export const ERROR_CODES = [
     'ERR_ULTRATON_RESERVED_IP',
     'ERR_ULTRATON_SOCKET_TIMEOUT',
     'ERR_ULTRATON_TIMEOUT',
+    'ERR_ULTRATON_WS_CLOSED',
+    'ERR_ULTRATON_WS_HANDSHAKE',
+    'ERR_ULTRATON_WS_MESSAGE_TOO_LARGE',
+    'ERR_ULTRATON_WS_PROTOCOL',
+    'ERR_ULTRATON_WS_SEND_BUFFER',
 ] as const;
 
 /** A code UltraTon raises its own errors with. `error.code` may also hold a Node, zlib or resolver code (`ECONNRESET`, `ENOTFOUND`). */
@@ -104,6 +109,21 @@ export const eventTooLarge = (maxEventSize: number) =>
 /** `events()`: the response is not an event stream (200 with `content-type: text/event-stream`). Says nothing of what it was. */
 export const notEventStream = () =>
     new SecureHttpError('UltraTon: The response is not an event stream (a 200 with content-type text/event-stream).', { code: 'ERR_ULTRATON_EVENT_STREAM' });
+/** `websocket()`: the server's answer to the upgrade is not a valid WebSocket handshake. Says nothing of what it was. */
+export const wsHandshake = (reason: string) =>
+    new SecureHttpError(`UltraTon: Invalid WebSocket handshake: ${reason}.`, { code: 'ERR_ULTRATON_WS_HANDSHAKE' });
+/** `websocket()`: the server broke RFC 6455 (a frame or a message it may not send). The connection is failed. */
+export const wsProtocol = (reason: string) =>
+    new SecureHttpError(`UltraTon: WebSocket protocol error: ${reason}.`, { code: 'ERR_ULTRATON_WS_PROTOCOL' });
+/** `websocket()`: a received message, or one frame of it, went past `maxMessageSize` (checked before it is buffered). */
+export const wsMessageTooLarge = (maxMessageSize: number) =>
+    new UltraTonMemoryError(`UltraTon: A WebSocket message exceeded the maximum allowed size of ${maxMessageSize} bytes. Raise maxMessageSize.`, { code: 'ERR_ULTRATON_WS_MESSAGE_TOO_LARGE' });
+/** `websocket()`: `send()` while more than the send buffer's limit is still waiting for the server to read it. */
+export const wsSendBuffer = (limit: number) =>
+    new UltraTonMemoryError(`UltraTon: More than ${limit} bytes are waiting to be sent on this WebSocket. Await send().`, { code: 'ERR_ULTRATON_WS_SEND_BUFFER' });
+/** `websocket()`: `send()` on a connection that is closing or closed. */
+export const wsClosed = () =>
+    new SecureHttpError('UltraTon: The WebSocket is closed.', { code: 'ERR_ULTRATON_WS_CLOSED' });
 /** The response body went past `maxBodySize` and the response was aborted. One message for `get()` and `stream()`: the body-parity test holds them to it. */
 export const bodyTooLarge = (maxBodySize: number) =>
     new UltraTonMemoryError(`UltraTon: Body size exceeded the maximum allowed size of ${maxBodySize} bytes. Raise maxBodySize.`);

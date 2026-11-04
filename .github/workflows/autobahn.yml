@@ -1,0 +1,67 @@
+# The Autobahn testsuite's client cases (framing, pings, reserved bits and opcodes, fragmentation, UTF-8, the close
+# handshake, limits) against client.websocket(). Compression (cases 12 and 13) is excluded: no extension is offered.
+# CI only: case 9 sends messages of up to 16 MiB. The image is pinned by digest (25.10.1).
+name: Autobahn
+
+on:
+  pull_request:
+    paths:
+      - 'src/helpers/websocket.ts'
+      - 'src/engines/http1.ts'
+      - 'src/http-client.ts'
+      - 'compat/autobahn/**'
+      - '.github/workflows/autobahn.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  autobahn:
+    name: Autobahn client cases
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
+
+    - name: Use Node.js 24.x
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: 24.x
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci --ignore-scripts
+
+    - name: Build
+      run: npm run build
+
+    - name: Start the fuzzing server
+      run: |
+        mkdir -p compat/autobahn/reports
+        chmod 777 compat/autobahn/reports
+        docker run -d --name fuzzingserver -p 127.0.0.1:9001:9001 \
+          -v "$PWD/compat/autobahn/config:/config:ro" \
+          -v "$PWD/compat/autobahn/reports:/reports" \
+          crossbario/autobahn-testsuite@sha256:519915fb568b04c9383f70a1c405ae3ff44ab9e35835b085239c258b6fac3074
+        for i in $(seq 30); do curl -s -o /dev/null http://127.0.0.1:9001 && exit 0; sleep 1; done
+        docker logs fuzzingserver
+        exit 1
+
+    - name: Run the client cases
+      run: node compat/autobahn/client.mjs
+
+    - name: Server log
+      if: failure()
+      run: docker logs fuzzingserver
+
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: autobahn-report
+        path: compat/autobahn/reports
+        if-no-files-found: ignore

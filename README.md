@@ -201,6 +201,11 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | A request on a closed client | — |
 | `SecureHttpError` | `events()`: the response is a 2xx but not a 200 with `content-type: text/event-stream` (a status that is not 2xx is an `UltraTonHttpError`) | `ERR_ULTRATON_EVENT_STREAM` |
 | `UltraTonMemoryError` | `events()`: a line, or one event's `data`, went past `maxEventSize` | `ERR_ULTRATON_EVENT_TOO_LARGE` |
+| `SecureHttpError` | `websocket()`: the server answered the upgrade with a 2xx, or with a 101 that is not a valid WebSocket handshake (a status that is neither is an `UltraTonHttpError`) | `ERR_ULTRATON_WS_HANDSHAKE` |
+| `SecureHttpError` | `websocket()`: the server broke RFC 6455 (a masked frame, a reserved bit or opcode, invalid UTF-8, an invalid close code, ...). The connection is failed with close code 1002 or 1007. | `ERR_ULTRATON_WS_PROTOCOL` |
+| `UltraTonMemoryError` | `websocket()`: a received message (or one frame of it) went past `maxMessageSize`. The connection is failed with close code 1009. | `ERR_ULTRATON_WS_MESSAGE_TOO_LARGE` |
+| `UltraTonMemoryError` | `websocket()`: `send()` while more than 1 MiB is still waiting for the server to read it | `ERR_ULTRATON_WS_SEND_BUFFER` |
+| `SecureHttpError` | `websocket()`: `send()` on a connection that is closing or closed | `ERR_ULTRATON_WS_CLOSED` |
 | `UltraTonNetworkTimeoutError` | `timeoutMs` expired (the whole budget, retries included), or no data arrived for `socketTimeoutMs` (the server or the network stalled) | `ERR_ULTRATON_TIMEOUT`, `ERR_ULTRATON_SOCKET_TIMEOUT` |
 | `UltraTonNetworkError` | DNS, connect, TLS, reset or truncated response, or a compressed body that is corrupt or cut short | Node's or zlib's code (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `Z_DATA_ERROR`, …) |
 | `UltraTonNetworkError` | HTTP/2: the server never processed the request (a `REFUSED_STREAM` reset, or above a GOAWAY's last stream). `retry` retries it. | `NGHTTP2_REFUSED_STREAM` |
@@ -246,9 +251,14 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_DOWNGRADE` | A redirect from https to http. | Nothing on your side: the server tried to move you onto plaintext. |
 | `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
-| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). On `events()` the stream had already started, so nothing retries it: open a new one. |
+| `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`; on `websocket()`, no frame for `socketTimeoutMs` while a message is awaited (with `pingIntervalMs`, after a ping), or a `send()` that made no progress. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). On `events()` and `websocket()` the connection had already started, so nothing retries it: open a new one (`pingIntervalMs` keeps a quiet WebSocket alive). |
 | `ERR_ULTRATON_EVENT_STREAM` | `events()`: the response is not a 200 with `content-type: text/event-stream`. | Check the URL and the `accept` the endpoint wants; `stream()` reads any response. |
 | `ERR_ULTRATON_EVENT_TOO_LARGE` | `events()`: one event (or one line) went past `maxEventSize`. | Raise `maxEventSize` for that call. |
+| `ERR_ULTRATON_WS_HANDSHAKE` | `websocket()`: the server answered the upgrade without upgrading (a 2xx), or its 101 is not a valid handshake: a wrong `Sec-WebSocket-Accept`, an extension, a subprotocol you did not offer. | Check the URL is a WebSocket endpoint, and the `protocols` it expects. UltraTon offers no extension (no compression). |
+| `ERR_ULTRATON_WS_PROTOCOL` | `websocket()`: the server sent a frame or a message RFC 6455 does not allow. | Nothing on your side: the server is broken or hostile. |
+| `ERR_ULTRATON_WS_MESSAGE_TOO_LARGE` | `websocket()`: a message went past `maxMessageSize`. | Raise `maxMessageSize` for that connection. |
+| `ERR_ULTRATON_WS_SEND_BUFFER` | `websocket()`: more than 1 MiB was still queued for a server that is not reading. | Await `send()` before sending more. |
+| `ERR_ULTRATON_WS_CLOSED` | `websocket()`: `send()` after the connection started closing. | Open a new connection. |
 | `ERR_ULTRATON_HTTP_STATUS` | `assertOk()` on a response that is not 2xx. | Read `err.statusCode` and `err.response`; or check `res.ok` instead of asserting. |
 | `ERR_ULTRATON_REQUEST_BODY_TOO_LARGE` | The request body went past `maxRequestBodySize`. | Raise `maxRequestBodySize`, or send less. |
 | `ERR_ULTRATON_REQUEST_BODY_LENGTH` | A streamed request body sent more or fewer bytes than its `content-length`. | Fix the `content-length` you set, or leave it out and let the body go chunked. |
@@ -501,6 +511,31 @@ for (let attempt = 0; attempt < 5; attempt++) {
 
 A `last-event-id` you send is server data going back into a header. UltraTon refuses CR, LF and NUL in any header, so a hostile id cannot inject one; but an id with other characters a header cannot carry (control characters, non-ASCII) would make the next call throw a `TypeError`, which is why the loop keeps only printable ASCII ids, and only short ones.
 
+### WebSocket
+
+`client.websocket(url, options)` opens a WebSocket (RFC 6455) to an endpoint someone else chose (an integration, a URL from a user) and resolves once the server accepted the upgrade. The upgrade is an HTTP/1.1 request with every check of the other methods: SSRF and pinned DNS, TLS, the proxy, `maxConcurrency` (the connection holds its slot until it closes), over HTTP/1.1 even on an `http2` client. Node's global `WebSocket` has no `lookup` hook to pin the addresses it connects to, which is why UltraTon has its own.
+
+```ts
+const ws = await client.websocket('wss://api.example.com/v1/live', {
+  headers: { authorization: `Bearer ${token}` }, // any header, on the upgrade
+  protocols: ['v2.json'], // the server's choice is ws.protocol
+  pingIntervalMs: 15_000, // keep a quiet connection alive
+});
+await ws.send(JSON.stringify({ subscribe: 'orders' }));
+for await (const message of ws) {
+  if (typeof message !== 'string') continue; // binary messages are Buffers
+  if (handle(message) === 'done') break; // leaving the loop closes with 1000
+}
+console.log(ws.closeCode, ws.closeReason); // set when the server closed
+```
+
+- **URLs:** `ws:` or `wss:`, with `ws:` only to loopback unless `allowPlainHttp`, as `http:`; with `baseUrl`, a relative path, which connects as `wss:` (`ws:` for an `http:` base). An `http(s):` URL throws.
+- **The handshake:** no redirect is followed and no extension offered (no compression: `permessage-deflate` is where decompression bombs live). A status that is not 101 or 2xx rejects with `UltraTonHttpError`, its body unread; a 2xx, or a 101 that is not a valid handshake, with `ERR_ULTRATON_WS_HANDSHAKE`. No `Origin` is sent unless you set one. The headers the handshake owns (`upgrade`, `sec-websocket-*`) cannot be set.
+- **Limits:** `maxMessageSize` (default 1 MiB) bounds one message and so one frame, checked from the frame's header before anything is buffered. `socketTimeoutMs` bounds the time without a frame while you wait for a message; with `pingIntervalMs`, the client pings a quiet server first and `socketTimeoutMs` is then the deadline for an answer. The close handshake takes 5 s at most. There is no limit on how long a connection may last, or on the bytes it carries in all, unless you set one with `signal`: memory is bounded per message.
+- **Reading:** the socket is read only while you wait for a message, so a server that sends faster than you read is held back by TCP, not buffered. Pings are answered while you read: keep a loop reading. The loop ends without error when the server closes (`closeCode`, `closeReason`), and rejects when the connection fails or ends without a close frame.
+- **Sending:** `send(string)` sends text, `send(bytes)` binary, and resolves once the frame is on the socket. Await it: with more than 1 MiB still queued for a server that is not reading, it rejects with `ERR_ULTRATON_WS_SEND_BUFFER`, and a write that makes no progress for `socketTimeoutMs` fails the connection.
+- **Closing:** `close(code?, reason?)` (1000, or 3000 to 4999), `break`, `await using`, `signal` (at once, without the close handshake) and `client.close()` all end it. It never reconnects: open a new connection, with a wait of your own.
+
 ### Retries
 
 Off by default. `retry: n` retries up to `n` times (at most 10) with these rules:
@@ -703,7 +738,7 @@ A path that would land outside the base throws as well. That includes encoded an
 - **DNS lookups cannot be cancelled.** `timeoutMs` and `signal` reject the request on time, but Node's `getaddrinfo` keeps running in the libuv threadpool until the resolver answers.
 - **A closed client rejects new requests at once; its pools live on while a variant from `extend()` uses them.** Requests in flight on such a pool are allowed to finish; the pools close with the last client sharing them.
 - **`close()` does not wait for the sockets to finish closing.** It destroys them and returns, and requests still in flight reject with `UltraTon: Client is closed.`
-- **`maxConcurrency` counts calls per origin, per client.** The origin is that of the URL called, before any redirect; retries and redirect hops run on the slot of their call. The wait in the queue counts against `timeoutMs`: a call still queued when it runs out rejects with `ERR_ULTRATON_TIMEOUT` without connecting, and with `timeoutMs: 0` it waits as long as it takes. An abort takes a call out of the queue and `close()` rejects every queued call. A `stream()` (and so `fetch()`) holds its slot until its body ends, fails or is cancelled: read it or cancel it, or the calls behind it keep waiting. A variant from `extend()` has a counter of its own.
+- **`maxConcurrency` counts calls per origin, per client.** The origin is that of the URL called, before any redirect; retries and redirect hops run on the slot of their call. The wait in the queue counts against `timeoutMs`: a call still queued when it runs out rejects with `ERR_ULTRATON_TIMEOUT` without connecting, and with `timeoutMs: 0` it waits as long as it takes. An abort takes a call out of the queue and `close()` rejects every queued call. A `stream()` (and so `fetch()`) holds its slot until its body ends, fails or is cancelled: read it or cancel it, or the calls behind it keep waiting. A `websocket()` holds its slot until the connection closes. A variant from `extend()` has a counter of its own.
 - **`json()` strips `constructor` and `prototype` keys.** A legitimate field with one of those names disappears. Use `JSON.parse(res.text())` if you need it and trust the source.
 - **Decoded bodies keep the wire headers.** With `decompress` on, `data` is decoded but `headers` stay as received: `content-length` is the compressed length and `content-encoding` is still there, as with `fetch`. An encoding UltraTon does not decode (zstd, for now) leaves the body raw. Raw (headerless) deflate from very old servers fails as `Z_DATA_ERROR`. Brotli can use up to 16 MiB of working memory per response whatever `maxBodySize` is. On a Node release without the fix for CVE-2026-111497 (before 22.23.4, 24.22.1 or 26.12.1), br is neither requested nor decoded: a server that sends it anyway gets its body back raw, even when you asked for br in your own `accept-encoding`.
 - **The request methods buffer; `stream()` does not.** `get`, `post` and the others read the body into memory up to `maxBodySize` (at most 2 GiB). Use `stream()` for large downloads. A `File` or `Blob` body is read whole into memory first: pass a stream (`createReadStream`) to upload a large file. Over HTTP/2, a `stream()` body you have not read yet can hold up to 1 MiB (the stream's flow-control window) until you read or cancel it.

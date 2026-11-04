@@ -37,9 +37,20 @@ export const IDLE_SOCKET_TIMEOUT_MS = 5000;
  * (a lookup and a handshake each). The idle ones are still reaped after IDLE_SOCKET_TIMEOUT_MS.
  */
 export const MAX_FREE_SOCKETS = 1024;
+/** `websocket()`: the most bytes of one received message (and so of one frame) unless `maxMessageSize` says otherwise. */
+export const WS_MAX_MESSAGE_SIZE = 1024 * 1024;
+/**
+ * `websocket()`: `send()` rejects while more than this is still queued on the socket, so a server that stops reading
+ * cannot make a caller who does not await `send()` hold an unbounded queue. A single larger message on an empty queue
+ * still goes.
+ */
+// ponytail: fixed, not an option; make it one if a caller ever needs to queue more without awaiting.
+export const WS_MAX_BUFFERED_BYTES = 1024 * 1024;
+/** `websocket()`: the longest the close handshake (the server's close frame, then the end of the connection) may take. */
+export const WS_CLOSE_TIMEOUT_MS = 5000;
 /** The largest delay `setTimeout` takes: the ceiling of every millisecond option. */
 export const INT32_MAX = 2147483647;
 export const MAX_SESSION_LIFESPAN = 30 * 60 * 1000;
 
 /** The package version, sent in the default `user-agent`. A test keeps it equal to `package.json` `version`. */
-export const VERSION = '2.10.0';
+export const VERSION = '2.11.0';
