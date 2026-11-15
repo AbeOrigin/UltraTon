@@ -10,8 +10,8 @@
     "profile": "node bench/profile.ts"
   },
   "devDependencies": {
-    "axios": "1.20.0",
-    "got": "16.1.0",
+    "axios": "1.21.0",
+    "got": "16.2.0",
     "node-fetch": "3.3.2"
   }
 }
