@@ -2,7 +2,7 @@ import type * as http from 'node:http';
 import type * as https from 'node:https';
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
-import { SecureHttpError, UltraTonHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, notEventStream, remainingBudget, wsHandshake } from './errors.ts';
+import { SecureHttpError, UltraTonHttpError, UltraTonNetworkError, absoluteTimeout, clientClosed, remainingBudget, wsHandshake } from './errors.ts';
 import { IDLE_TIMEOUT, VERSION, WS_CLOSE_TIMEOUT_MS } from './constants.ts';
 import { Http1Engine } from './engines/http1.ts';
 import { Http2Engine } from './engines/http2.ts';
@@ -19,7 +19,7 @@ import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
 import { createResponse, createStreamResponse } from './helpers/response.ts';
 import { acceptedProtocol, upgradeRequest, WebSocketConnection, WS_RESERVED_HEADERS } from './helpers/websocket.ts';
-import { createEventStream, isEventStreamType } from './helpers/event-stream.ts';
+import { withEvents } from './helpers/event-stream.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
@@ -332,7 +332,10 @@ export class UltraTonClient {
      */
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);
-        return this.#request(method, url, rest, { maxBodySize }) as Promise<UltraTonStreamResponse>;
+        const res = await this.#request(method, url, rest, { maxBodySize }) as UltraTonStreamResponse;
+        // #request validated it: the call's own, else the client's, else the default, for res.events().
+        const own = (rest as { socketTimeoutMs?: number } | undefined)?.socketTimeoutMs;
+        return withEvents(res, own ?? this.#defaults.socketTimeoutMs ?? IDLE_TIMEOUT);
     }
 
     /**
@@ -351,15 +354,7 @@ export class UltraTonClient {
     public async events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream> {
         const { maxEventSize, rest } = splitEventsOptions(options);
         const res = await this.stream(url, rest as UltraTonStreamOptions);
-        res.assertOk();
-        if (res.statusCode !== 200 || !isEventStreamType(res.headers['content-type'])) {
-            await res.body.cancel().catch(() => {});
-            throw notEventStream();
-        }
-        // stream() validated it: the call's own, else the client's, else the default.
-        const own = (rest as { socketTimeoutMs?: number } | undefined)?.socketTimeoutMs;
-        const idleMs = own ?? this.#defaults.socketTimeoutMs ?? IDLE_TIMEOUT;
-        return createEventStream(res, { maxEventSize, idleMs });
+        return res.assertOk().events({ maxEventSize });
     }
 
     /**

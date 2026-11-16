@@ -434,6 +434,14 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
 const DEFAULT_MAX_EVENT_SIZE = 64 * 1024;
 
 /**
+ * `maxEventSize` as `events()` and `res.events()` take it: the default when `undefined`.
+ * @throws {TypeError} If it is not an integer from 1.
+ */
+export function maxEventSizeOption(value: unknown): number {
+    return intOption('maxEventSize', value, DEFAULT_MAX_EVENT_SIZE, INT32_MAX, 1);
+}
+
+/**
  * Takes `maxEventSize` out of the options of `client.events()`, validated, and adds `accept: text/event-stream` and
  * `cache-control: no-cache` unless the call sets them (a client default `accept` is replaced: an event stream is what
  * this call asks for). The rest goes to `stream()`, which checks it.
@@ -450,7 +458,7 @@ export function splitEventsOptions(options: unknown): { maxEventSize: number; re
         discardBody(rest.body);
         throw new TypeError(`UltraTon: events() sends a GET request; '${key}' is not accepted.`);
     }
-    intOption('maxEventSize', maxEventSize, DEFAULT_MAX_EVENT_SIZE, INT32_MAX, 1);
+    maxEventSizeOption(maxEventSize);
     const headers: unknown = rest.headers;
     // Not a plain object: left for stream() to reject with its usual message.
     if (headers === undefined || isPlainObject(headers)) {

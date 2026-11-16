@@ -1,4 +1,6 @@
-import { eventStreamIdle, eventTooLarge } from '../errors.ts';
+import { Readable } from 'node:stream';
+import { eventStreamIdle, eventTooLarge, notEventStream } from '../errors.ts';
+import { maxEventSizeOption } from './request-options.ts';
 import type { UltraTonEvent, UltraTonEventStream, UltraTonStreamResponse } from '../types/request-response.ts';
 
 const LF = 0x0a;
@@ -229,4 +231,32 @@ export function createEventStream(res: UltraTonStreamResponse, limits: EventStre
             await events.return(undefined);
         })()),
     });
+}
+
+/**
+ * Gives a stream response its `events()`: the body read as an event stream, `idleMs` allowed between complete lines.
+ * Only a 200 `text/event-stream` is read (anything else is cancelled, so its connection is not held), and only once:
+ * a body locked or already read from is refused, and a second call returns the first call's stream.
+ */
+export function withEvents<R extends UltraTonStreamResponse>(res: R, idleMs: number): R {
+    let opened: UltraTonEventStream | undefined;
+    const events = (options?: { readonly maxEventSize?: number }): UltraTonEventStream => {
+        if (options !== undefined && (typeof options !== 'object' || options === null)) {
+            throw new TypeError('UltraTon: the options of events() must be an object.');
+        }
+        const maxEventSize = maxEventSizeOption(options && Object.hasOwn(options, 'maxEventSize') ? options.maxEventSize : undefined);
+        if (opened) return opened;
+        // Node's isDisturbed takes a web ReadableStream too; its typings name only Node's own streams.
+        if (res.body.locked || Readable.isDisturbed(res.body as never)) {
+            throw new TypeError('UltraTon: events() reads a body nobody has read; this one is locked or already read from.');
+        }
+        if (res.statusCode !== 200 || !isEventStreamType(res.headers['content-type'])) {
+            // Nobody will read it: cancelled so the connection is not held (its failure is irrelevant).
+            void res.body.cancel().catch(() => {});
+            throw notEventStream();
+        }
+        opened = createEventStream(res, { maxEventSize, idleMs });
+        return opened;
+    };
+    return Object.assign(res, { events });
 }

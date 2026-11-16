@@ -164,6 +164,17 @@ export interface UltraTonStreamResponse {
      * and throws `UltraTonHttpError` (`ERR_ULTRATON_HTTP_STATUS`). A redirect that was not followed is not `ok` either.
      */
     assertOk(): UltraTonStreamResponse;
+    /**
+     * Reads this response's body as a Server-Sent Events stream, with the limits `client.events()` has: `maxEventSize`
+     * per line and event, the idle time between complete lines (the `socketTimeoutMs` of the `stream()` call, else the
+     * client's), and the call's `maxBodySize` on the whole body. For an API that may answer the same request with a
+     * JSON document or an event stream: look at `headers['content-type']` first, and read `body` yourself when it is
+     * not an event stream. The body is read once: a second call returns the same event stream.
+     * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` (the body cancelled first) unless the status is 200 and the
+     *   content type `text/event-stream`.
+     * @throws {TypeError} When the body is locked or already read from, or `maxEventSize` is not an integer from 1.
+     */
+    events(options?: { readonly maxEventSize?: number }): UltraTonEventStream;
 }
 
 /** One address a host resolved to, as the client's policy judges it. See {@link UltraTonExplanation}. */
