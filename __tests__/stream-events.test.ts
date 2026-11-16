@@ -170,14 +170,23 @@ for (const http2 of [false, true]) {
             await first.cancel();
         });
 
-        it('refuses a maxEventSize that is not an integer from 1 before reading anything', async t => {
+        it('refuses a maxEventSize that is not an integer from 1, and any other option, before reading anything', async t => {
             const { base } = await server(t, http2);
             const res = await clientOf(t, http2).stream(`${base}/endless`);
             for (const maxEventSize of [0, 1.5, -1, 'x']) {
                 assert.throws(() => res.events({ maxEventSize } as never), TypeError, String(maxEventSize));
             }
+            for (const options of [[], { socketTimeoutMs: 1 }]) {
+                assert.throws(() => res.events(options as never), TypeError, JSON.stringify(options));
+            }
             assert.equal(res.body.locked, false);
             await res.body.cancel();
+        });
+
+        it("maxBodySize of the stream() call bounds the whole stream", async t => {
+            const { base } = await server(t, http2);
+            const res = await clientOf(t, http2).stream(`${base}/endless`, { maxBodySize: 64 });
+            await assert.rejects(all(res.events()), { name: 'UltraTonMemoryError' });
         });
     });
 }

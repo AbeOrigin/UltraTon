@@ -415,18 +415,23 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedBod
  * Takes `method` and `maxBodySize` out of the options of `client.stream()`, validated. The rest goes through the usual
  * request firewall; `maxBodySize` stays out of it because a stream may go past the 2 GiB a buffered body is held to.
  * @throws {TypeError} If the method is not an uppercase method token (see methodOption) or maxBodySize is not a safe
- *   integer >= 0.
+ *   integer >= 0. A stream body is released first.
  */
 export function splitStreamOptions(options: unknown): { method: string; maxBodySize?: number; rest: unknown } {
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
     const own = ownOptions(options as Record<string, unknown>);
     const { method = 'GET', maxBodySize, ...rest } = own;
-    if (rest.discardBody !== undefined) {
-        throw new TypeError("UltraTon: 'discardBody' is not an option of stream(): its body is yours to read, or to cancel().");
+    try {
+        if (rest.discardBody !== undefined) {
+            throw new TypeError("UltraTon: 'discardBody' is not an option of stream(): its body is yours to read, or to cancel().");
+        }
+        methodOption(method);
+        if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
+    } catch (err) {
+        discardBody(rest.body);
+        throw err;
     }
-    methodOption(method);
-    if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
     return { method: method as string, maxBodySize: maxBodySize as number | undefined, rest };
 }
 

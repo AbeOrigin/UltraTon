@@ -241,9 +241,12 @@ export function createEventStream(res: UltraTonStreamResponse, limits: EventStre
 export function withEvents<R extends UltraTonStreamResponse>(res: R, idleMs: number): R {
     let opened: UltraTonEventStream | undefined;
     const events = (options?: { readonly maxEventSize?: number }): UltraTonEventStream => {
-        if (options !== undefined && (typeof options !== 'object' || options === null)) {
+        if (options !== undefined && (typeof options !== 'object' || options === null || Array.isArray(options))) {
             throw new TypeError('UltraTon: the options of events() must be an object.');
         }
+        // The other limits are the stream() call's: an option here that is not maxEventSize would be silently ignored.
+        const unknown = options && Object.keys(options).find(key => key !== 'maxEventSize');
+        if (unknown) throw new TypeError(`UltraTon: res.events() takes only maxEventSize, not '${unknown}'; set the other limits on the stream() call.`);
         const maxEventSize = maxEventSizeOption(options && Object.hasOwn(options, 'maxEventSize') ? options.maxEventSize : undefined);
         if (opened) return opened;
         // Node's isDisturbed takes a web ReadableStream too; its typings name only Node's own streams.

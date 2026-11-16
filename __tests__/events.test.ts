@@ -55,8 +55,9 @@ async function server(t: TestContext, http2: boolean) {
                 res.writeHead(307, { location: '/echo' });
                 return res.end();
             case '/unauthorized':
+                // Not ended: the stream closes only when the client lets it go.
                 res.writeHead(401, SSE);
-                return res.end('data: no\n\n');
+                return void res.write('data: no\n\n');
             case '/missing':
                 res.writeHead(404, SSE);
                 return res.end('data: no\n\n');
@@ -283,9 +284,14 @@ describe('client.events() options', () => {
         for (const maxEventSize of [0, -1, 1.5, 'x']) {
             await assert.rejects(client.events('http://127.0.0.1:1/', { maxEventSize } as never), TypeError, String(maxEventSize));
         }
-        const body = Readable.from(['x']);
-        await assert.rejects(client.events('http://127.0.0.1:1/', { method: 'POST', body, maxEventSize: 0 }), TypeError);
-        assert.ok(body.destroyed, 'the stream body was released');
+        for (const bad of [{ maxEventSize: 0 }, { method: 'post' }, { maxBodySize: -1 }, { discardBody: true }]) {
+            for (const call of ['events', 'stream'] as const) {
+                if (call === 'stream' && 'maxEventSize' in bad) continue;
+                const body = Readable.from(['x']);
+                await assert.rejects(client[call]('http://127.0.0.1:1/', { method: 'POST', body, ...bad } as never), TypeError, `${call} ${JSON.stringify(bad)}`);
+                assert.ok(body.destroyed, `${call} ${JSON.stringify(bad)}: the stream body was released`);
+            }
+        }
     });
 });
 

@@ -473,7 +473,7 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 
 ### Server-Sent Events
 
-`client.events(url, options)` opens a Server-Sent Events stream (notifications, progress, model output) and resolves once the headers arrive; read the events with `for await`. It goes the way of `stream()`: every check (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`) applies, on both engines. It sends a GET unless `method` says otherwise, and takes a body (`json`, `form` or `body`) as `stream()` does, for a stream that starts from a POST (graphql-sse, chat-completion APIs); a 303 turns it into a GET without the body, a 307 keeps it.
+`client.events(url, options)` opens a Server-Sent Events stream (notifications, progress, model output) and resolves once the headers arrive; read the events with `for await`. It goes the way of `stream()`: every check (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`) applies, on both engines. It sends a GET unless `method` says otherwise, and takes a body (`json`, `form` or `body`) as `stream()` does, for a stream that starts from a POST (graphql-sse, chat-completion APIs); a 303 turns it into a GET without the body, a 307 keeps it (a streamed body cannot be sent twice: the 307 is returned, not followed).
 
 ```ts
 const stream = await client.events('https://api.example.com/v1/updates', {
@@ -490,12 +490,12 @@ for await (const { event, data, id } of stream) {
 - **Events** are `{ event, data, id, retry }`: `event` is `'message'` unless the server names one, `data` its lines joined with `\n`, `id` the last event ID the server set (`''` until it sets one), `retry` the server's last reconnection hint in ms. Parsing follows the WHATWG standard: comments are skipped, a leading BOM dropped, CR, LF and CRLF all end a line, an event the stream ends in the middle of is dropped.
 - **Limits:** `maxBodySize` bounds the whole stream (the client's default is 2 MiB, so a long stream needs more), `maxEventSize` (default 64 KiB) one line or one event's `data`, and `socketTimeoutMs` the time without a complete line: a keep-alive comment keeps a quiet stream open, bytes that never end a line do not. There is no limit on how long a stream may last unless you set one with `signal`.
 - **Responses:** a status that is not 2xx rejects with `UltraTonHttpError`; any other response that is not a 200 with `content-type: text/event-stream` with `ERR_ULTRATON_EVENT_STREAM`. Either way the connection is released.
-- **A JSON document or an event stream:** some APIs answer the same POST either way (MCP's Streamable HTTP; chat-completion APIs that answer errors as JSON). Send it with `stream()`, look at the content type, then read the body yourself or call `res.events()`, which reads it with the same limits as `events()` (`maxEventSize`, the `socketTimeoutMs` of the `stream()` call between lines, its `maxBodySize` on the whole body). `res.events()` reads only a 200 `text/event-stream` (anything else is cancelled and throws `ERR_ULTRATON_EVENT_STREAM`) and only a body nobody has read; a second call returns the same stream.
+- **A JSON document or an event stream:** some APIs answer the same POST either way (MCP's Streamable HTTP; chat-completion APIs that answer errors as JSON). Send it with `stream()`, look at the content type, then read the body yourself or call `res.events()`, which reads it with the same limits as `events()` (`maxEventSize`, the `socketTimeoutMs` of the `stream()` call, else the client's, between lines, its `maxBodySize` on the whole body). `res.events()` reads only a 200 `text/event-stream` (anything else is cancelled and throws `ERR_ULTRATON_EVENT_STREAM`) and only a body nobody has read; a second call returns the same stream.
 
 ```ts
 const res = await client.stream(url, { method: 'POST', json: request, headers: { accept: 'application/json, text/event-stream' } });
 res.assertOk();
-if (res.headers['content-type']?.startsWith('text/event-stream')) {
+if (res.headers['content-type']?.toLowerCase().startsWith('text/event-stream')) {
   for await (const { data } of res.events({ maxEventSize: 1024 * 1024 })) handle(JSON.parse(data));
 } else {
   handle(JSON.parse(await new Response(res.body).text())); // still bounded by maxBodySize

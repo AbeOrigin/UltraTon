@@ -172,7 +172,8 @@ export interface UltraTonStreamResponse {
      * not an event stream. The body is read once: a second call returns the same event stream.
      * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` (the body cancelled first) unless the status is 200 and the
      *   content type `text/event-stream`.
-     * @throws {TypeError} When the body is locked or already read from, or `maxEventSize` is not an integer from 1.
+     * @throws {TypeError} When the body is locked or already read from, `maxEventSize` is not an integer from 1, or an
+     *   option other than `maxEventSize` is given (the other limits are set on the `stream()` call).
      */
     events(options?: { readonly maxEventSize?: number }): UltraTonEventStream;
 }
