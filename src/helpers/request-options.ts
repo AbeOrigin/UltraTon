@@ -415,18 +415,23 @@ export function resolveRequestBody(options: InternalRequestOptions): ResolvedBod
  * Takes `method` and `maxBodySize` out of the options of `client.stream()`, validated. The rest goes through the usual
  * request firewall; `maxBodySize` stays out of it because a stream may go past the 2 GiB a buffered body is held to.
  * @throws {TypeError} If the method is not an uppercase method token (see methodOption) or maxBodySize is not a safe
- *   integer >= 0.
+ *   integer >= 0. A stream body is released first.
  */
 export function splitStreamOptions(options: unknown): { method: string; maxBodySize?: number; rest: unknown } {
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { method: 'GET', rest: options };
     const own = ownOptions(options as Record<string, unknown>);
     const { method = 'GET', maxBodySize, ...rest } = own;
-    if (rest.discardBody !== undefined) {
-        throw new TypeError("UltraTon: 'discardBody' is not an option of stream(): its body is yours to read, or to cancel().");
+    try {
+        if (rest.discardBody !== undefined) {
+            throw new TypeError("UltraTon: 'discardBody' is not an option of stream(): its body is yours to read, or to cancel().");
+        }
+        methodOption(method);
+        if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
+    } catch (err) {
+        discardBody(rest.body);
+        throw err;
     }
-    methodOption(method);
-    if (maxBodySize !== undefined) intOption('maxBodySize', maxBodySize, 0, Number.MAX_SAFE_INTEGER);
     return { method: method as string, maxBodySize: maxBodySize as number | undefined, rest };
 }
 
@@ -434,23 +439,30 @@ export function splitStreamOptions(options: unknown): { method: string; maxBodyS
 const DEFAULT_MAX_EVENT_SIZE = 64 * 1024;
 
 /**
+ * `maxEventSize` as `events()` and `res.events()` take it: the default when `undefined`.
+ * @throws {TypeError} If it is not an integer from 1.
+ */
+export function maxEventSizeOption(value: unknown): number {
+    return intOption('maxEventSize', value, DEFAULT_MAX_EVENT_SIZE, INT32_MAX, 1);
+}
+
+/**
  * Takes `maxEventSize` out of the options of `client.events()`, validated, and adds `accept: text/event-stream` and
  * `cache-control: no-cache` unless the call sets them (a client default `accept` is replaced: an event stream is what
  * this call asks for). The rest goes to `stream()`, which checks it.
- * @throws {TypeError} If `maxEventSize` is not an integer from 1, or `method`, `json`, `form` or `body` is set (it is a
- *   GET). A stream body is released first.
+ * @throws {TypeError} If `maxEventSize` is not an integer from 1. A stream body is released first.
  */
 export function splitEventsOptions(options: unknown): { maxEventSize: number; rest: unknown } {
     if (options === undefined) options = {};
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { maxEventSize: DEFAULT_MAX_EVENT_SIZE, rest: options };
     const { maxEventSize = DEFAULT_MAX_EVENT_SIZE, ...rest } = ownOptions(options as Record<string, unknown>);
-    for (const key of ['method', 'json', 'form', 'body']) {
-        if (rest[key] === undefined) continue;
+    try {
+        maxEventSizeOption(maxEventSize);
+    } catch (err) {
         discardBody(rest.body);
-        throw new TypeError(`UltraTon: events() sends a GET request; '${key}' is not accepted.`);
+        throw err;
     }
-    intOption('maxEventSize', maxEventSize, DEFAULT_MAX_EVENT_SIZE, INT32_MAX, 1);
     const headers: unknown = rest.headers;
     // Not a plain object: left for stream() to reject with its usual message.
     if (headers === undefined || isPlainObject(headers)) {

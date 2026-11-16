@@ -19,7 +19,7 @@ import { observeRequest, TimingsCollector } from './helpers/diagnostics.ts';
 import { OriginLimiter, releasingBody } from './helpers/concurrency.ts';
 import { createResponse, createStreamResponse } from './helpers/response.ts';
 import { acceptedProtocol, upgradeRequest, WebSocketConnection, WS_RESERVED_HEADERS } from './helpers/websocket.ts';
-import { createEventStream, isEventStreamType } from './helpers/event-stream.ts';
+import { isEventStreamType, withEvents } from './helpers/event-stream.ts';
 // For its effect: subscribes the NODE_DEBUG=ultraton lines when that section is on.
 import './helpers/debug-log.ts';
 import { nextLink } from './helpers/link-header.ts';
@@ -332,12 +332,16 @@ export class UltraTonClient {
      */
     public async stream(url: string, options?: UltraTonStreamOptions): Promise<UltraTonStreamResponse> {
         const { method, maxBodySize, rest } = splitStreamOptions(options);
-        return this.#request(method, url, rest, { maxBodySize }) as Promise<UltraTonStreamResponse>;
+        const res = await this.#request(method, url, rest, { maxBodySize }) as UltraTonStreamResponse;
+        // #request validated it: the call's own, else the client's, else the default, for res.events().
+        const own = (rest as { socketTimeoutMs?: number } | undefined)?.socketTimeoutMs;
+        return withEvents(res, own ?? this.#defaults.socketTimeoutMs ?? IDLE_TIMEOUT);
     }
 
     /**
-     * Opens a Server-Sent Events stream with a GET request and resolves once the headers arrive; read its events with
-     * `for await`. It goes the way of `stream()`, with every check (SSRF, redirects only with `maxRedirects`, TLS,
+     * Opens a Server-Sent Events stream and resolves once the headers arrive; read its events with `for await`. It sends
+     * a GET unless `method` says otherwise, with a body (`json`, `form` or `body`) as `stream()` takes one, for a stream
+     * that starts from a POST. It goes the way of `stream()`, with every check (SSRF, redirects only with `maxRedirects`, TLS,
      * `maxConcurrency`) and limit: `maxBodySize` bounds the whole stream (raise it for a long one), `maxEventSize` one
      * event, and `socketTimeoutMs` the time without a complete line, so a keep-alive comment keeps a quiet stream open
      * but bytes that never end a line do not. How long the stream may last is yours to bound, with `signal`. It sends
@@ -346,20 +350,17 @@ export class UltraTonClient {
      * choosing (the server's `retry` is on each event, as a hint).
      * @throws {UltraTonHttpError} For a status that is not 2xx (the body is cancelled first).
      * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` for anything but a 200 with `content-type: text/event-stream`.
-     * @throws {TypeError} As `stream()`, and for `method`, a body, or a `maxEventSize` that is not an integer from 1.
+     * @throws {TypeError} As `stream()`, and for a `maxEventSize` that is not an integer from 1.
      */
     public async events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream> {
         const { maxEventSize, rest } = splitEventsOptions(options);
-        const res = await this.stream(url, rest as UltraTonStreamOptions);
-        res.assertOk();
+        const res = (await this.stream(url, rest as UltraTonStreamOptions)).assertOk();
+        // res.events() would refuse it too, without waiting: here the connection is let go before the call rejects.
         if (res.statusCode !== 200 || !isEventStreamType(res.headers['content-type'])) {
             await res.body.cancel().catch(() => {});
             throw notEventStream();
         }
-        // stream() validated it: the call's own, else the client's, else the default.
-        const own = (rest as { socketTimeoutMs?: number } | undefined)?.socketTimeoutMs;
-        const idleMs = own ?? this.#defaults.socketTimeoutMs ?? IDLE_TIMEOUT;
-        return createEventStream(res, { maxEventSize, idleMs });
+        return res.events({ maxEventSize });
     }
 
     /**

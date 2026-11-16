@@ -2,6 +2,8 @@ import type { IncomingHttpHeaders } from "node:http";
 import { Buffer } from "node:buffer";
 import { UltraTonHttpError, UltraTonNetworkError, UltraTonParseError } from "../errors.ts";
 import type { UltraTonRedirect, UltraTonResponse, UltraTonStreamResponse } from "../types/request-response.ts";
+import { IDLE_TIMEOUT } from "../constants.ts";
+import { withEvents } from "./event-stream.ts";
 
 /** The `redirects` of every response that followed none: frozen, so one array serves them all. */
 export const NO_REDIRECTS: readonly UltraTonRedirect[] = Object.freeze([]);
@@ -95,7 +97,10 @@ export function createResponse<T = unknown>(
   return response;
 }
 
-/** The stream counterpart of createResponse: same status and header rules, the body left to the caller. */
+/**
+ * The stream counterpart of createResponse: same status and header rules, the body left to the caller. Its `events()`
+ * waits the default idle time between lines; `client.stream()` gives it the call's own (see withEvents).
+ */
 export function createStreamResponse(
   statusCode: number,
   rawHeaders: IncomingHttpHeaders,
@@ -104,7 +109,7 @@ export function createStreamResponse(
   redirects: readonly UltraTonRedirect[],
 ): UltraTonStreamResponse {
   const { headers } = createResponse(statusCode, rawHeaders, Buffer.alloc(0));
-  const response: UltraTonStreamResponse = {
+  const response: UltraTonStreamResponse = withEvents({
     statusCode,
     ok: statusCode >= 200 && statusCode < 300,
     headers,
@@ -118,6 +123,6 @@ export function createStreamResponse(
       void body.cancel().catch(() => {});
       throw new UltraTonHttpError(statusCode, response);
     },
-  };
+  } as UltraTonStreamResponse, IDLE_TIMEOUT);
   return response;
 }

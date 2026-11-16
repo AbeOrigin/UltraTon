@@ -1,5 +1,8 @@
-import { eventStreamIdle, eventTooLarge } from '../errors.ts';
+import { Readable } from 'node:stream';
+import { eventStreamIdle, eventTooLarge, notEventStream } from '../errors.ts';
+import { maxEventSizeOption } from './request-options.ts';
 import type { UltraTonEvent, UltraTonEventStream, UltraTonStreamResponse } from '../types/request-response.ts';
+import type { UltraTonEventsOptions } from '../types/request-options.types.ts';
 
 const LF = 0x0a;
 const CR = 0x0d;
@@ -229,4 +232,42 @@ export function createEventStream(res: UltraTonStreamResponse, limits: EventStre
             await events.return(undefined);
         })()),
     });
+}
+
+/**
+ * Gives a stream response its `events()`: the body read as an event stream, `idleMs` allowed between complete lines.
+ * Only a 200 `text/event-stream` is read (anything else is cancelled, so its connection is not held), and only once:
+ * a body locked or already read from is refused, and a second call returns the first call's stream (asking it for
+ * another `maxEventSize` is refused: the first one is the one in force).
+ */
+export function withEvents<R extends UltraTonStreamResponse>(res: R, idleMs: number): R {
+    let opened: { stream: UltraTonEventStream; maxEventSize: number } | undefined;
+    const events = (options?: Pick<UltraTonEventsOptions, 'maxEventSize'>): UltraTonEventStream => {
+        if (options !== undefined && (typeof options !== 'object' || options === null || Array.isArray(options))) {
+            throw new TypeError('UltraTon: the options of events() must be an object.');
+        }
+        // The other limits are the stream() call's: an option here that is not maxEventSize would be silently ignored.
+        const unknown = options && Object.keys(options).find(key => key !== 'maxEventSize');
+        if (unknown) throw new TypeError(`UltraTon: res.events() takes only maxEventSize, not '${unknown}'; set the other limits on the stream() call.`);
+        const maxEventSize = maxEventSizeOption(options && Object.hasOwn(options, 'maxEventSize') ? options.maxEventSize : undefined);
+        if (opened) {
+            if (options?.maxEventSize !== undefined && maxEventSize !== opened.maxEventSize) {
+                throw new TypeError(`UltraTon: these events were opened with maxEventSize ${opened.maxEventSize}; a second events() call cannot change it.`);
+            }
+            return opened.stream;
+        }
+        // Node's isDisturbed takes a web ReadableStream too; its typings name only Node's own streams. It is marked
+        // Experimental there: stream-events' "reads the body once" test pins it.
+        if (res.body.locked || Readable.isDisturbed(res.body as never)) {
+            throw new TypeError('UltraTon: events() reads a body nobody has read; this one is locked or already read from.');
+        }
+        if (res.statusCode !== 200 || !isEventStreamType(res.headers['content-type'])) {
+            // Nobody will read it: cancelled so the connection is not held (its failure is irrelevant).
+            void res.body.cancel().catch(() => {});
+            throw notEventStream();
+        }
+        opened = { stream: createEventStream(res, { maxEventSize, idleMs }), maxEventSize };
+        return opened.stream;
+    };
+    return Object.assign(res, { events });
 }

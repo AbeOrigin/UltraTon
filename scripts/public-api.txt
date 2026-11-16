@@ -99,7 +99,7 @@ export interface UltraTonEvent {
 }
 
 ## UltraTonEventsOptions (types/request-options.types.d.ts)
-export interface UltraTonEventsOptions extends Omit<UltraTonStreamOptions, 'method' | 'json' | 'form' | 'body'> {
+export interface UltraTonEventsOptions extends UltraTonStreamOptions {
     readonly maxEventSize?: number;
 }
 
@@ -306,6 +306,7 @@ export interface UltraTonStreamResponse {
     readonly body: ReadableStream<Uint8Array>;
     readonly timings?: UltraTonTimings;
     assertOk(): UltraTonStreamResponse;
+    events(options?: Pick<UltraTonEventsOptions, 'maxEventSize'>): UltraTonEventStream;
 }
 
 ## UltraTonTimings (helpers/diagnostics.d.ts)

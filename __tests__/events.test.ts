@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createServer as createH2Server } from 'node:http2';
 import type { AddressInfo, Socket } from 'node:net';
+import { Readable } from 'node:stream';
 import { UltraTonClient } from '../src/http-client.ts';
 import { UltraTonHttpError, UltraTonMemoryError, UltraTonNetworkTimeoutError } from '../src/errors.ts';
 import type { UltraTonEvent } from '../src/types/request-response.ts';
@@ -37,6 +38,26 @@ async function server(t: TestContext, http2: boolean) {
             case '/redirect':
                 res.writeHead(302, { location: '/finite' });
                 return res.end();
+            case '/echo': {
+                // What came: the method, the content type and accept, and the body ('-' for none).
+                let body = '';
+                req.setEncoding('utf8');
+                req.on('data', (chunk: string) => { body += chunk; });
+                return req.on('end', () => {
+                    res.writeHead(200, SSE);
+                    res.end(`data: ${req.method} ${req.headers['content-type'] ?? '-'} ${req.headers.accept} ${body || '-'}\n\n`);
+                });
+            }
+            case '/see-other':
+                res.writeHead(303, { location: '/echo' });
+                return res.end();
+            case '/temporary':
+                res.writeHead(307, { location: '/echo' });
+                return res.end();
+            case '/unauthorized':
+                // Not ended: the stream closes only when the client lets it go.
+                res.writeHead(401, SSE);
+                return void res.write('data: no\n\n');
             case '/missing':
                 res.writeHead(404, SSE);
                 return res.end('data: no\n\n');
@@ -157,6 +178,36 @@ for (const http2 of [false, true]) {
             assert.equal(own[0].data, 'text/event-stream; q=1|no-cache');
         });
 
+        it('sends a method and a body as stream() does, and still asks for an event stream', async t => {
+            const { base } = await server(t, http2);
+            const client = clientOf(t, http2);
+            const data = async (options: object) => (await all(await client.events(`${base}/echo`, options))).map(e => e.data);
+            assert.deepEqual(await data({ method: 'POST', json: { query: '{ a }' } }), ['POST application/json text/event-stream {"query":"{ a }"}']);
+            assert.deepEqual(await data({ method: 'POST', body: 'x' }), ['POST - text/event-stream x']);
+            assert.deepEqual(await data({ method: 'POST', form: { a: '1' } }), ['POST application/x-www-form-urlencoded;charset=UTF-8 text/event-stream a=1']);
+            await assert.rejects(client.events(`${base}/echo`, { method: 'GET', body: 'x' }), TypeError);
+            await assert.rejects(client.events(`${base}/echo`, { body: 'x' }), TypeError, 'GET by default');
+            await assert.rejects(client.events(`${base}/echo`, { method: 'HEAD', json: {} }), TypeError);
+        });
+
+        it('a 303 drops the body and turns into a GET, only with maxRedirects; a 307 keeps it', async t => {
+            const { base } = await server(t, http2);
+            const client = clientOf(t, http2);
+            const post = { method: 'POST', json: { a: 1 } };
+            await assert.rejects(client.events(`${base}/see-other`, post), (err: unknown) => err instanceof UltraTonHttpError && err.statusCode === 303);
+            const after303 = await all(await client.events(`${base}/see-other`, { ...post, maxRedirects: 1 }));
+            assert.deepEqual(after303.map(e => e.data), ['GET - text/event-stream -']);
+            const after307 = await all(await client.events(`${base}/temporary`, { ...post, maxRedirects: 1 }));
+            assert.deepEqual(after307.map(e => e.data), ['POST application/json text/event-stream {"a":1}']);
+        });
+
+        it('a POST answered 401 rejects with UltraTonHttpError', async t => {
+            const { base, closed } = await server(t, http2);
+            const client = clientOf(t, http2);
+            await assert.rejects(client.events(`${base}/unauthorized`, { method: 'POST', json: {} }), (err: unknown) => err instanceof UltraTonHttpError && err.statusCode === 401);
+            assert.ok(await waitFor(() => closed.includes('/unauthorized')));
+        });
+
         it('follows redirects only when asked, and lists them', async t => {
             const { base } = await server(t, http2);
             const client = clientOf(t, http2);
@@ -227,14 +278,19 @@ for (const http2 of [false, true]) {
 }
 
 describe('client.events() options', () => {
-    it('refuses a method, a body and a bad maxEventSize', async t => {
+    it('refuses a bad maxEventSize, and releases a stream body first', async t => {
         const client = new UltraTonClient({ permitReservedIps: true });
         t.after(() => client.close());
-        for (const options of [{ method: 'POST' }, { json: {} }, { body: 'x' }, { form: {} }]) {
-            await assert.rejects(client.events('http://127.0.0.1:1/', options as never), TypeError, JSON.stringify(options));
-        }
         for (const maxEventSize of [0, -1, 1.5, 'x']) {
             await assert.rejects(client.events('http://127.0.0.1:1/', { maxEventSize } as never), TypeError, String(maxEventSize));
+        }
+        for (const bad of [{ maxEventSize: 0 }, { method: 'post' }, { maxBodySize: -1 }, { discardBody: true }]) {
+            for (const call of ['events', 'stream'] as const) {
+                if (call === 'stream' && 'maxEventSize' in bad) continue;
+                const body = Readable.from(['x']);
+                await assert.rejects(client[call]('http://127.0.0.1:1/', { method: 'POST', body, ...bad } as never), TypeError, `${call} ${JSON.stringify(bad)}`);
+                assert.ok(body.destroyed, `${call} ${JSON.stringify(bad)}: the stream body was released`);
+            }
         }
     });
 });
@@ -251,6 +307,7 @@ describe('client.events() keeps the SSRF checks', () => {
         await assert.rejects(strict.events('https://169.254.169.254/'), { code: 'ERR_ULTRATON_RESERVED_IP' });
         await assert.rejects(strict.events('http://10.0.0.1/'), { code: 'ERR_ULTRATON_PLAIN_HTTP' });
         await assert.rejects(loopbackOnly.events(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/`, { maxRedirects: 2 }), { code: 'ERR_ULTRATON_RESERVED_IP' });
-        assert.equal(hits, 1, 'only the loopback server was reached');
+        await assert.rejects(loopbackOnly.events(`http://127.0.0.1:${(srv.address() as AddressInfo).port}/`, { method: 'POST', json: {}, maxRedirects: 2 }), { code: 'ERR_ULTRATON_RESERVED_IP' });
+        assert.equal(hits, 2, 'only the loopback server was reached');
     });
 });

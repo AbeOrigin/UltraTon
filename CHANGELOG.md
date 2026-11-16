@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.12.0] - 2026-11-16
+
+Server-Sent Events from a POST, and from a response that may be either a JSON document or an event stream. Opt-in: a new method and options `events()` used to refuse; no default moved.
+
+### Added
+
+- **`res.events()`: read a `stream()` response as Server-Sent Events.** For an API that answers the same request with either a JSON document or an event stream (MCP's Streamable HTTP, chat-completion APIs that answer errors as JSON): `stream()` first, look at `headers['content-type']`, then read `body` yourself or call `res.events()`. It reads with the limits `events()` has: `maxEventSize` per line and event (default 64 KiB, settable per call), the `socketTimeoutMs` of the `stream()` call (else the client's) between complete lines, its `maxBodySize` on the whole body. Only a 200 `text/event-stream` is read; anything else is cancelled (the connection is released) and throws `ERR_ULTRATON_EVENT_STREAM`. A body locked or already read from is refused with a `TypeError`; a second call returns the same stream. `UltraTonStreamResponse` gains the method: a type of your own built to match it (a mock) needs it too.
+- **`events()` takes `method` and a body.** `json`, `form` or `body`, exactly as `stream()` takes them, for SSE streams that start from a POST (graphql-sse, chat-completion APIs). GET and HEAD with a body are still refused, and a stream body is now released when `stream()` or `events()` refuses its options; `accept: text/event-stream` and `cache-control: no-cache` are still added unless the call sets them. Redirects behave as in `stream()`: followed only with `maxRedirects`, a 301, 302 or 303 turns a POST into a GET without its body, a 307 or 308 keeps it (a streamed body cannot be sent twice: the 307 or 308 is returned, not followed), and every hop is checked against the SSRF policy. `UltraTonEventsOptions` now extends `UltraTonStreamOptions` whole.
+
 ## [2.11.0] - 2026-11-04
 
 The last of what the first application built on UltraTon asked for: WebSocket to endpoints chosen by someone else, with the same SSRF protection as every other request. Opt-in, a new method; no default moved.

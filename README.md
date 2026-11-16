@@ -199,8 +199,8 @@ Every error the library raises is a `SecureHttpError`, apart from the `TypeError
 | `SecureHttpError` | `createSecureAgents()`: a library passed a host that is an IPv4 in a non-canonical form (`127.1`, `0x7f.0.0.1`, `2130706433`) | `ERR_ULTRATON_NON_CANONICAL_IP` |
 | `SecureHttpError` | `createSecureAgents()`, on a Node.js release without the keep-alive fix (see [SECURITY.md](SECURITY.md)): `keepAlive`, `maxSockets` or `maxTotalSockets` set on an agent. Thrown by the assignment. | `ERR_ULTRATON_AGENT_KEEP_ALIVE` |
 | `SecureHttpError` | A request on a closed client | — |
-| `SecureHttpError` | `events()`: the response is a 2xx but not a 200 with `content-type: text/event-stream` (a status that is not 2xx is an `UltraTonHttpError`) | `ERR_ULTRATON_EVENT_STREAM` |
-| `UltraTonMemoryError` | `events()`: a line, or one event's `data`, went past `maxEventSize` | `ERR_ULTRATON_EVENT_TOO_LARGE` |
+| `SecureHttpError` | `events()`, `res.events()`: the response is a 2xx but not a 200 with `content-type: text/event-stream` (a status that is not 2xx is an `UltraTonHttpError`) | `ERR_ULTRATON_EVENT_STREAM` |
+| `UltraTonMemoryError` | `events()`, `res.events()`: a line, or one event's `data`, went past `maxEventSize` | `ERR_ULTRATON_EVENT_TOO_LARGE` |
 | `SecureHttpError` | `websocket()`: the server answered the upgrade with a 2xx, or with a 101 that is not a valid WebSocket handshake (a status that is neither is an `UltraTonHttpError`) | `ERR_ULTRATON_WS_HANDSHAKE` |
 | `SecureHttpError` | `websocket()`: the server broke RFC 6455 (a masked frame, a reserved bit or opcode, invalid UTF-8, an invalid close code, ...). The connection is failed with close code 1002 or 1007. | `ERR_ULTRATON_WS_PROTOCOL` |
 | `UltraTonMemoryError` | `websocket()`: a received message (or one frame of it) went past `maxMessageSize`. The connection is failed with close code 1009. | `ERR_ULTRATON_WS_MESSAGE_TOO_LARGE` |
@@ -252,8 +252,8 @@ Every code UltraTon raises, what happened, and what to change. A test keeps this
 | `ERR_ULTRATON_OPTION_RANGE` | A number option is not an integer within its range: on a `TypeError`, with `err.option` (`'timeoutMs'`, `'retry.limit'`, ...), `err.min` and `err.max`. The millisecond options and `maxBodySize` stop at 2147483647. | Bring the value within `err.min`..`err.max`; `timeoutMs: 0` and `socketTimeoutMs: 0` mean no limit. For a download beyond 2 GiB use `stream()`, whose `maxBodySize` goes to `Number.MAX_SAFE_INTEGER`. |
 | `ERR_ULTRATON_TIMEOUT` | `timeoutMs` ran out: the whole budget, retries included. | Raise `timeoutMs` for that request, or `0` for none. |
 | `ERR_ULTRATON_SOCKET_TIMEOUT` | No bytes arrived for `socketTimeoutMs`: the server or the network stalled. On `events()`, no complete line (an event or a keep-alive comment) for `socketTimeoutMs`; on `websocket()`, no frame for `socketTimeoutMs` while a message is awaited (with `pingIntervalMs`, after a ping), or a `send()` that made no progress. | Raise `socketTimeoutMs`, or `retry` it (it is retried by default when retries are on). On `events()` and `websocket()` the connection had already started, so nothing retries it: open a new one (`pingIntervalMs` keeps a quiet WebSocket alive). |
-| `ERR_ULTRATON_EVENT_STREAM` | `events()`: the response is not a 200 with `content-type: text/event-stream`. | Check the URL and the `accept` the endpoint wants; `stream()` reads any response. |
-| `ERR_ULTRATON_EVENT_TOO_LARGE` | `events()`: one event (or one line) went past `maxEventSize`. | Raise `maxEventSize` for that call. |
+| `ERR_ULTRATON_EVENT_STREAM` | `events()`, `res.events()`: the response is not a 200 with `content-type: text/event-stream`. | Check the URL and the `accept` the endpoint wants; `stream()` reads any response. |
+| `ERR_ULTRATON_EVENT_TOO_LARGE` | `events()`, `res.events()`: one event (or one line) went past `maxEventSize`. | Raise `maxEventSize` for that call. |
 | `ERR_ULTRATON_WS_HANDSHAKE` | `websocket()`: the server answered the upgrade without upgrading (a 2xx), or its 101 is not a valid handshake: a wrong `Sec-WebSocket-Accept`, an extension, a subprotocol you did not offer. | Check the URL is a WebSocket endpoint, and the `protocols` it expects. UltraTon offers no extension (no compression). |
 | `ERR_ULTRATON_WS_PROTOCOL` | `websocket()`: the server sent a frame or a message RFC 6455 does not allow. | Nothing on your side: the server is broken or hostile. |
 | `ERR_ULTRATON_WS_MESSAGE_TOO_LARGE` | `websocket()`: a message went past `maxMessageSize`. | Raise `maxMessageSize` for that connection. |
@@ -473,7 +473,7 @@ const pages = api.paginate<{ items: Item[]; cursor?: string }>('items', {
 
 ### Server-Sent Events
 
-`client.events(url, options)` opens a Server-Sent Events stream (notifications, progress, model output) with a GET request and resolves once the headers arrive; read the events with `for await`. It goes the way of `stream()`: every check (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`) applies, on both engines.
+`client.events(url, options)` opens a Server-Sent Events stream (notifications, progress, model output) and resolves once the headers arrive; read the events with `for await`. It goes the way of `stream()`: every check (SSRF, TLS, redirects only with `maxRedirects`, `maxConcurrency`) applies, on both engines. It sends a GET unless `method` says otherwise, and takes a body (`json`, `form` or `body`) as `stream()` does, for a stream that starts from a POST (graphql-sse, chat-completion APIs); a 303 turns it into a GET without the body, a 307 keeps it (a streamed body cannot be sent twice: the 307 is returned, not followed).
 
 ```ts
 const stream = await client.events('https://api.example.com/v1/updates', {
@@ -490,6 +490,17 @@ for await (const { event, data, id } of stream) {
 - **Events** are `{ event, data, id, retry }`: `event` is `'message'` unless the server names one, `data` its lines joined with `\n`, `id` the last event ID the server set (`''` until it sets one), `retry` the server's last reconnection hint in ms. Parsing follows the WHATWG standard: comments are skipped, a leading BOM dropped, CR, LF and CRLF all end a line, an event the stream ends in the middle of is dropped.
 - **Limits:** `maxBodySize` bounds the whole stream (the client's default is 2 MiB, so a long stream needs more), `maxEventSize` (default 64 KiB) one line or one event's `data`, and `socketTimeoutMs` the time without a complete line: a keep-alive comment keeps a quiet stream open, bytes that never end a line do not. There is no limit on how long a stream may last unless you set one with `signal`.
 - **Responses:** a status that is not 2xx rejects with `UltraTonHttpError`; any other response that is not a 200 with `content-type: text/event-stream` with `ERR_ULTRATON_EVENT_STREAM`. Either way the connection is released.
+- **A JSON document or an event stream:** some APIs answer the same POST either way (MCP's Streamable HTTP; chat-completion APIs that answer errors as JSON). Send it with `stream()`, look at the content type, then read the body yourself or call `res.events()`, which reads it with the same limits as `events()` (`maxEventSize`, the `socketTimeoutMs` of the `stream()` call, else the client's, between lines, its `maxBodySize` on the whole body). `res.events()` reads only a 200 `text/event-stream` (anything else is cancelled and throws `ERR_ULTRATON_EVENT_STREAM`) and only a body nobody has read; a second call returns the same stream.
+
+```ts
+const res = await client.stream(url, { method: 'POST', json: request, headers: { accept: 'application/json, text/event-stream' } });
+res.assertOk();
+if (res.headers['content-type']?.toLowerCase().startsWith('text/event-stream')) {
+  for await (const { data } of res.events({ maxEventSize: 1024 * 1024 })) handle(JSON.parse(data));
+} else {
+  handle(JSON.parse(await new Response(res.body).text())); // still bounded by maxBodySize
+}
+```
 - **No automatic reconnection**, on purpose: a server that ends the stream, or answers `retry: 0`, cannot make the client loop. To resume, open a new stream with the last `id` and a wait of your own:
 
 ```ts
