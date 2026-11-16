@@ -339,8 +339,9 @@ export class UltraTonClient {
     }
 
     /**
-     * Opens a Server-Sent Events stream with a GET request and resolves once the headers arrive; read its events with
-     * `for await`. It goes the way of `stream()`, with every check (SSRF, redirects only with `maxRedirects`, TLS,
+     * Opens a Server-Sent Events stream and resolves once the headers arrive; read its events with `for await`. It sends
+     * a GET unless `method` says otherwise, with a body (`json`, `form` or `body`) as `stream()` takes one, for a stream
+     * that starts from a POST. It goes the way of `stream()`, with every check (SSRF, redirects only with `maxRedirects`, TLS,
      * `maxConcurrency`) and limit: `maxBodySize` bounds the whole stream (raise it for a long one), `maxEventSize` one
      * event, and `socketTimeoutMs` the time without a complete line, so a keep-alive comment keeps a quiet stream open
      * but bytes that never end a line do not. How long the stream may last is yours to bound, with `signal`. It sends
@@ -349,7 +350,7 @@ export class UltraTonClient {
      * choosing (the server's `retry` is on each event, as a hint).
      * @throws {UltraTonHttpError} For a status that is not 2xx (the body is cancelled first).
      * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` for anything but a 200 with `content-type: text/event-stream`.
-     * @throws {TypeError} As `stream()`, and for `method`, a body, or a `maxEventSize` that is not an integer from 1.
+     * @throws {TypeError} As `stream()`, and for a `maxEventSize` that is not an integer from 1.
      */
     public async events(url: string, options?: UltraTonEventsOptions): Promise<UltraTonEventStream> {
         const { maxEventSize, rest } = splitEventsOptions(options);

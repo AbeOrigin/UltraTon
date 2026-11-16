@@ -445,20 +445,19 @@ export function maxEventSizeOption(value: unknown): number {
  * Takes `maxEventSize` out of the options of `client.events()`, validated, and adds `accept: text/event-stream` and
  * `cache-control: no-cache` unless the call sets them (a client default `accept` is replaced: an event stream is what
  * this call asks for). The rest goes to `stream()`, which checks it.
- * @throws {TypeError} If `maxEventSize` is not an integer from 1, or `method`, `json`, `form` or `body` is set (it is a
- *   GET). A stream body is released first.
+ * @throws {TypeError} If `maxEventSize` is not an integer from 1. A stream body is released first.
  */
 export function splitEventsOptions(options: unknown): { maxEventSize: number; rest: unknown } {
     if (options === undefined) options = {};
     // Not an object: left for withMethod to reject with its usual message.
     if (typeof options !== 'object' || options === null || Array.isArray(options)) return { maxEventSize: DEFAULT_MAX_EVENT_SIZE, rest: options };
     const { maxEventSize = DEFAULT_MAX_EVENT_SIZE, ...rest } = ownOptions(options as Record<string, unknown>);
-    for (const key of ['method', 'json', 'form', 'body']) {
-        if (rest[key] === undefined) continue;
+    try {
+        maxEventSizeOption(maxEventSize);
+    } catch (err) {
         discardBody(rest.body);
-        throw new TypeError(`UltraTon: events() sends a GET request; '${key}' is not accepted.`);
+        throw err;
     }
-    maxEventSizeOption(maxEventSize);
     const headers: unknown = rest.headers;
     // Not a plain object: left for stream() to reject with its usual message.
     if (headers === undefined || isPlainObject(headers)) {
