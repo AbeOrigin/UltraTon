@@ -1,5 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import type { UltraTonTimings } from '../helpers/diagnostics.ts';
+import type { UltraTonEventsOptions } from './request-options.types.ts';
 
 /** One redirect that was followed: the URL that answered with it and its status. See {@link UltraTonResponse.redirects}. */
 export interface UltraTonRedirect {
@@ -169,13 +170,14 @@ export interface UltraTonStreamResponse {
      * per line and event, the idle time between complete lines (the `socketTimeoutMs` of the `stream()` call, else the
      * client's), and the call's `maxBodySize` on the whole body. For an API that may answer the same request with a
      * JSON document or an event stream: look at `headers['content-type']` first, and read `body` yourself when it is
-     * not an event stream. The body is read once: a second call returns the same event stream.
+     * not an event stream. The body is read once: a second call returns the same event stream, and cannot change its
+     * `maxEventSize`.
      * @throws {SecureHttpError} `ERR_ULTRATON_EVENT_STREAM` (the body cancelled first) unless the status is 200 and the
      *   content type `text/event-stream`.
      * @throws {TypeError} When the body is locked or already read from, `maxEventSize` is not an integer from 1, or an
      *   option other than `maxEventSize` is given (the other limits are set on the `stream()` call).
      */
-    events(options?: { readonly maxEventSize?: number }): UltraTonEventStream;
+    events(options?: Pick<UltraTonEventsOptions, 'maxEventSize'>): UltraTonEventStream;
 }
 
 /** One address a host resolved to, as the client's policy judges it. See {@link UltraTonExplanation}. */

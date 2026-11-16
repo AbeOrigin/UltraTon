@@ -167,6 +167,8 @@ for (const http2 of [false, true]) {
             const res = await client.stream(`${base}/endless`);
             const first = res.events();
             assert.equal(res.events(), first);
+            assert.equal(res.events({ maxEventSize: 65536 }), first, 'the same limit, the default');
+            assert.throws(() => res.events({ maxEventSize: 16 }), TypeError, 'another limit');
             await first.cancel();
         });
 
@@ -181,6 +183,15 @@ for (const http2 of [false, true]) {
             }
             assert.equal(res.body.locked, false);
             await res.body.cancel();
+        });
+
+        it('a refused response gives back its maxConcurrency slot', { timeout: 5000 }, async t => {
+            const { base } = await server(t, http2);
+            const client = clientOf(t, http2, { maxConcurrency: 1 });
+            const json = await client.stream(`${base}/json-open`);
+            assert.throws(() => json.events(), { code: 'ERR_ULTRATON_EVENT_STREAM' });
+            const next = await client.stream(`${base}/endless`);
+            await next.body.cancel();
         });
 
         it("maxBodySize of the stream() call bounds the whole stream", async t => {

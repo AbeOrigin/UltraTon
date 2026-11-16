@@ -306,9 +306,7 @@ export interface UltraTonStreamResponse {
     readonly body: ReadableStream<Uint8Array>;
     readonly timings?: UltraTonTimings;
     assertOk(): UltraTonStreamResponse;
-    events(options?: {
-        readonly maxEventSize?: number;
-    }): UltraTonEventStream;
+    events(options?: Pick<UltraTonEventsOptions, 'maxEventSize'>): UltraTonEventStream;
 }
 
 ## UltraTonTimings (helpers/diagnostics.d.ts)
